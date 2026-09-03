@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер оновлено: додано прямий детектор потужних імпульсів свічки!**")
+send_discord_alert("🟢 **Сканер успішно оновлено та запущено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -41,7 +41,7 @@ def get_bingx_symbols():
         response = requests.get(url, timeout=10)
         data = response.json()
         if data.get("code") == 0:
-            symbols = [item["symbol"] for item in data["data"] if item.get("status"] == 1 and item["symbol"].endswith("-USDT")]
+            symbols = [item["symbol"] for item in data["data"] if item.get("status") == 1 and item["symbol"].endswith("-USDT")]
             return symbols[:500]
     except Exception as e:
         print(f"Помилка отримання списку пар: {e}")
@@ -82,7 +82,6 @@ def analyze_market():
         current_high = highs[-1]
         current_low = lows[-1]
 
-        # Визначаємо межі короткого діапазону (останні 15 свічок)
         lookback = min(15, len(closes) - 2)
         prev_highs = highs[-(lookback+1):-1]
         prev_lows = lows[-(lookback+1):-1]
@@ -92,19 +91,16 @@ def analyze_market():
 
         alerts = []
 
-        # 1. Повноцінний пробій рівнів боковика
         if prev_close <= resistance and current_close > resistance:
             alerts.append(f"🚀 **{symbol}**: Пробій опору ({resistance}) тілом! Ціна: {current_close}")
         elif prev_close >= support and current_close < support:
             alerts.append(f"⚠️ **{symbol}**: Пробій підтримки ({support}) тілом! Ціна: {current_close}")
         
-        # 2. Зняття ліквідності (шпилька за рівень з поверненням всередину)
         elif current_high > resistance and current_close <= resistance:
             alerts.append(f"🎣 **{symbol}**: Зняття ліквідності зверху (шпилька вище {resistance}, закрились у діапазоні)")
         elif current_low < support and current_close >= support:
             alerts.append(f"🎣 **{symbol}**: Зняття ліквідності знизу (шпилька нижче {support}, закрились у діапазоні)")
 
-        # 3. Прямий детектор волатильності: якщо свічка летить більш ніж на 4% за 15 хвилин
         candle_change = (current_close - prev_close) / prev_close * 100
         if candle_change >= 4.0:
             alerts.append(f"🔥 **{symbol}**: Потужний імпульс свічки +{candle_change:.2f}%! Ціна: {current_close}")
@@ -131,4 +127,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                      
+    
