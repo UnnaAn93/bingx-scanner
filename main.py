@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер оновлено: додано детектор зняття ліквідності (шпильоk за рівні)!**")
+send_discord_alert("🟢 **Сканер оновлено: додано прямий детектор потужних імпульсів свічки!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -41,13 +41,13 @@ def get_bingx_symbols():
         response = requests.get(url, timeout=10)
         data = response.json()
         if data.get("code") == 0:
-            symbols = [item["symbol"] for item in data["data"] if item.get("status") == 1 and item["symbol"].endswith("-USDT")]
+            symbols = [item["symbol"] for item in data["data"] if item.get("status"] == 1 and item["symbol"].endswith("-USDT")]
             return symbols[:500]
     except Exception as e:
         print(f"Помилка отримання списку пар: {e}")
     return []
 
-def get_klines(symbol, interval="15m", limit=50):
+def get_klines(symbol, interval="15m", limit=30):
     try:
         url = f"https://open-api.bingx.com/openApi/swap/v1/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
         response = requests.get(url, timeout=5)
@@ -62,7 +62,7 @@ def get_klines(symbol, interval="15m", limit=50):
     return None, None, None
 
 def analyze_market():
-    print("--- Початок сканування ринку (з урахуванням ліквідності) ---")
+    print("--- Початок сканування ринку (з імпульсним фільтром) ---")
     symbols = get_bingx_symbols()
     print(f"Отримано активних пар для перевірки: {len(symbols)}")
 
@@ -73,8 +73,8 @@ def analyze_market():
     signals_sent = 0
 
     for symbol in symbols:
-        closes, highs, lows = get_klines(symbol, "15m", 50)
-        if not closes or len(closes) < 30:
+        closes, highs, lows = get_klines(symbol, "15m", 30)
+        if not closes or len(closes) < 10:
             continue
 
         current_close = closes[-1]
@@ -82,38 +82,34 @@ def analyze_market():
         current_high = highs[-1]
         current_low = lows[-1]
 
-        # Визначаємо рівні боковика за попередні 20 свічок (без урахування поточної)
-        prev_highs = highs[-21:-1]
-        prev_lows = lows[-21:-1]
+        # Визначаємо межі короткого діапазону (останні 15 свічок)
+        lookback = min(15, len(closes) - 2)
+        prev_highs = highs[-(lookback+1):-1]
+        prev_lows = lows[-(lookback+1):-1]
         
         resistance = max(prev_highs)
         support = min(prev_lows)
 
         alerts = []
 
-        # 1. Повноцінний пробій тілом свічки
+        # 1. Повноцінний пробій рівнів боковика
         if prev_close <= resistance and current_close > resistance:
-            alerts.append(f"🚀 **{symbol}**: Пробій опору тілом свічки (вище {resistance})! Ціна: {current_close}")
+            alerts.append(f"🚀 **{symbol}**: Пробій опору ({resistance}) тілом! Ціна: {current_close}")
         elif prev_close >= support and current_close < support:
-            alerts.append(f"⚠️ **{symbol}**: Пробій підтримки тілом свічки (нижче {support})! Ціна: {current_close}")
+            alerts.append(f"⚠️ **{symbol}**: Пробій підтримки ({support}) тілом! Ціна: {current_close}")
         
-        # 2. Зняття ліквідності (шпилька вище/нижче рівня, але закриття всередині)
+        # 2. Зняття ліквідності (шпилька за рівень з поверненням всередину)
         elif current_high > resistance and current_close <= resistance:
-            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності зверху (шпилька пробила опір {resistance}, але закрились всередині)!")
+            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності зверху (шпилька вище {resistance}, закрились у діапазоні)")
         elif current_low < support and current_close >= support:
-            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності знизу (шпилька пробила підтримку {support}, але закрились всередині)!")
+            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності знизу (шпилька нижче {support}, закрились у діапазоні)")
 
-        # 3. Тести рівнів та імпульси
-        elif abs(current_close - resistance) / resistance <= 0.005:
-            alerts.append(f"🔴 **{symbol}**: Ціна тестує опір ({resistance})!")
-        elif abs(current_close - support) / support <= 0.005:
-            alerts.append(f"🟢 **{symbol}**: Ціна тестує підтримку ({support})!")
-
-        change_3c = (current_close - closes[-4]) / closes[-4] * 100
-        if change_3c > 3.0:
-            alerts.append(f"📈 **{symbol}**: Сильний бичачий імпульс (+{change_3c:.2f}%) за годину!")
-        elif change_3c < -3.0:
-            alerts.append(f"📉 **{symbol}**: Сильний ведмежий імпульс ({change_3c:.2f}%) за годину!")
+        # 3. Прямий детектор волатильності: якщо свічка летить більш ніж на 4% за 15 хвилин
+        candle_change = (current_close - prev_close) / prev_close * 100
+        if candle_change >= 4.0:
+            alerts.append(f"🔥 **{symbol}**: Потужний імпульс свічки +{candle_change:.2f}%! Ціна: {current_close}")
+        elif candle_change <= -4.0:
+            alerts.append(f"🩸 **{symbol}**: Різкий дамп свічки {candle_change:.2f}%! Ціна: {current_close}")
 
         for alert in alerts:
             print(f"Надсилаю сигнал: {alert}")
@@ -135,4 +131,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                      
