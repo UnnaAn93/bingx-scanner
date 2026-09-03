@@ -13,7 +13,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **BingX Scanner успішно оновлено (додано контроль дотиків до меж боковика)!**")
+send_discord_alert("🟢 **BingX Scanner оновлено: знято обмеження ширини каналів та покращено детекцію трендів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -37,7 +37,7 @@ def get_bingx_symbols():
         response = requests.get(url, timeout=10)
         data = response.json()
         if data.get("code") == 0:
-            symbols = [item["symbol"] for item in data["data"] if item.get("status") == 1 and item["symbol"].endswith("-USDT")]
+            symbols = [item["symbol"] for item in data["data"] if item.get("status"] == 1 and item["symbol"].endswith("-USDT")]
             return symbols[:500]
     except Exception as e:
         print(f"Помилка отримання пар: {e}")
@@ -58,7 +58,7 @@ def get_klines(symbol, interval="15m", limit=100):
     return None, None, None
 
 def analyze_market():
-    print("Запуск розширеного сканування...")
+    print("Запуск гнучкого сканування ринку...")
     symbols = get_bingx_symbols()
     print(f"Знайдено активних пар: {len(symbols)}")
 
@@ -70,44 +70,43 @@ def analyze_market():
         current_price = closes[-1]
         prev_price = closes[-2]
 
-        box_high = max(highs[-25:-2])
-        box_low = min(lows[-25:-2])
-        box_range = (box_high - box_low) / current_price * 100
+        # Визначаємо межі за останніми свічками без жорстких обмежень на % ширини
+        box_high = max(highs[-30:-2])
+        box_low = min(lows[-30:-2])
 
         alerts = []
 
-        if box_range < 2.0:
-            # 1. Пробої боковика
-            if prev_price <= box_high and current_price > box_high:
-                alerts.append(f"🚀 **{symbol}**: Пробій верхньої межі боковика!")
-            elif prev_price >= box_low and current_price < box_low:
-                alerts.append(f"⚠️ **{symbol}**: Пробій нижньої межі боковика!")
-            
-            # 2. Дотик до меж боковика (для пошуку відскоку)
-            elif abs(current_price - box_low) / current_price < 0.005:
-                alerts.append(f"🟢 **{symbol}**: Ціна тестує нижню межу боковика (Підтримка)!")
-            elif abs(current_price - box_high) / current_price < 0.005:
-                alerts.append(f"🔴 **{symbol}**: Ціна тестує верхню межу боковика (Опір)!")
+        # 1. Доторкання до меж боковика (підтримка / опір у межах 1%)
+        if abs(current_price - box_low) / current_price < 0.01:
+            alerts.append(f"🟢 **{symbol}**: Ціна тестує нижню межу боковика (Підтримка)!")
+        elif abs(current_price - box_high) / current_price < 0.01:
+            alerts.append(f"🔴 **{symbol}**: Ціна тестує верхню межу боковика (Опір)!")
 
+        # 2. Пробої меж
+        if prev_price <= box_high and current_price > box_high:
+            alerts.append(f"🚀 **{symbol}**: Пробій верхньої межі боковика вгору!")
+        elif prev_price >= box_low and current_price < box_low:
+            alerts.append(f"⚠️ **{symbol}**: Пробій нижньої межі боковика вниз!")
+
+        # 3. Звуження волатильності / Трикутник
         recent_range = (max(highs[-10:]) - min(lows[-10:])) / current_price * 100
         earlier_range = (max(highs[-40:-20]) - min(lows[-40:-20])) / closes[-30] * 100
-        if recent_range < 1.2 and earlier_range > recent_range * 2:
-            alerts.append(f"📐 **{symbol}**: Формування трикутника / звуження волатильності ({recent_range:.2f}%)!")
+        if recent_range < 1.5 and earlier_range > recent_range * 1.8:
+            alerts.append(f"📐 **{symbol}**: Звуження волатильності / Трикутник ({recent_range:.2f}%)!")
 
-        sma_fast = sum(closes[-10:]) / 10
-        sma_slow = sum(closes[-40:]) / 40
-        prev_sma_fast = sum(closes[-11:-1]) / 10
-        prev_sma_slow = sum(closes[-41:-1]) / 40
+        # 4. Трендовий рух (швидка та повільна SMA з урахуванням напрямку)
+        sma_fast = sum(closes[-8:]) / 8
+        sma_slow = sum(closes[-30:]) / 30
 
-        if prev_sma_fast <= prev_sma_slow and sma_fast > sma_slow:
-            alerts.append(f"📈 **{symbol}**: Зміна тренду вгору (Бичачий сигнал)!")
-        elif prev_sma_fast >= prev_sma_slow and sma_fast < sma_slow:
-            alerts.append(f"📉 **{symbol}**: Зміна тренду вниз (Ведмежий сигнал)!")
+        if sma_fast > sma_slow and current_price > closes[-3]:
+            alerts.append(f"📈 **{symbol}**: Активний висхідний тренд / Імпульс!")
+        elif sma_fast < sma_slow and current_price < closes[-3]:
+            alerts.append(f"📉 **{symbol}**: Активний низхідний тренд / Спад!")
 
         for alert in alerts:
             send_discord_alert(alert)
             
-        time.sleep(0.1)
+        time.sleep(0.05)
 
 def main():
     print("Сканер запущено у головному циклі.")
