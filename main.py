@@ -13,8 +13,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-# Надсилаємо тест одразу при стартові, щоб перевірити зв'язок
-send_discord_alert("🟢 **BingX Scanner успішно запущено і підключено до Discord!** Моніторинг ринку розпочався.")
+send_discord_alert("🟢 **BingX Scanner успішно оновлено (додано контроль дотиків до меж боковика)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -30,7 +29,6 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# Запускаємо вебсервер у фоновому потоці
 threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_bingx_symbols():
@@ -79,10 +77,17 @@ def analyze_market():
         alerts = []
 
         if box_range < 2.0:
+            # 1. Пробої боковика
             if prev_price <= box_high and current_price > box_high:
                 alerts.append(f"🚀 **{symbol}**: Пробій верхньої межі боковика!")
             elif prev_price >= box_low and current_price < box_low:
                 alerts.append(f"⚠️ **{symbol}**: Пробій нижньої межі боковика!")
+            
+            # 2. Дотик до меж боковика (для пошуку відскоку)
+            elif abs(current_price - box_low) / current_price < 0.005:
+                alerts.append(f"🟢 **{symbol}**: Ціна тестує нижню межу боковика (Підтримка)!")
+            elif abs(current_price - box_high) / current_price < 0.005:
+                alerts.append(f"🔴 **{symbol}**: Ціна тестує верхню межу боковика (Опір)!")
 
         recent_range = (max(highs[-10:]) - min(lows[-10:])) / current_price * 100
         earlier_range = (max(highs[-40:-20]) - min(lows[-40:-20])) / closes[-30] * 100
