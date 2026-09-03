@@ -6,13 +6,12 @@ import threading
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1544732288263389284/y-TPXfbXNQBOF9tAshOib_UlqwyvClHln50VTx08wZTeWtzGNETLJW8UXERU4lkmWWYl"
 
-# Мікро-сервер для того, щоб Render був задоволений вебсервісом
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"BingX Scanner is active 24/7!")
+        self.wfile.write(b"BingX Advanced Scanner is active 24/7!")
     def log_message(self, format, *args):
         pass
 
@@ -21,7 +20,6 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# Запускаємо вебсервер у фоновому потоці
 threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_bingx_symbols():
@@ -58,7 +56,7 @@ def send_discord_alert(message):
         print(f"Помилка відправки у Discord: {e}")
 
 def analyze_market():
-    print("Запуск сканування ринку (500 пар, 15m)...")
+    print("Запуск розширеного сканування (500 пар, боковики/тренди/трикутники)...")
     symbols = get_bingx_symbols()
     print(f"Знайдено активних пар: {len(symbols)}")
 
@@ -67,24 +65,46 @@ def analyze_market():
         if not closes or len(closes) < 50:
             continue
 
-        sma_50 = sum(closes[-50:]) / 50
         current_price = closes[-1]
+        prev_price = closes[-2]
 
-        recent_highs = max(highs[-20:])
-        recent_lows = min(lows[-20:])
-        range_percent = (recent_highs - recent_lows) / current_price * 100
-
-        earlier_range = (max(highs[-50:-20]) - min(lows[-50:-20])) / closes[-30] * 100
+        # 1. Боковик та пробій боковика
+        # Визначаємо рівні за попередніми 20 свічками (не беручи до уваги поточну)
+        box_high = max(highs[-25:-2])
+        box_low = min(lows[-25:-2])
+        box_range = (box_high - box_low) / current_price * 100
 
         alerts = []
 
-        if closes[-2] < sma_50 and current_price >= sma_50:
-            alerts.append(f"🟢 **{symbol}**: Перетин SMA 50 знизу вгору!")
-        elif closes[-2] > sma_50 and current_price <= sma_50:
-            alerts.append(f"🔴 **{symbol}**: Перетин SMA 50 зверху вниз!")
+        # Якщо коридор вузький (< 2%) — це боковик/консолідація
+        if box_range < 2.0:
+            # Перевірка на пробій боковика
+            if prev_price <= box_high and current_price > box_high:
+                alerts.append(f"🚀 **{symbol}**: Пробій верхньої межі боковика (Вихід з флєту вгору)!")
+            elif prev_price >= box_low and current_price < box_low:
+                alerts.append(f"⚠️ **{symbol}**: Пробій нижньої межі боковика (Вихід з флєту вниз)!")
+            else:
+                # Опціонально можна фіксувати сам факт утримання в боковику, але краще ловити пробої та патерни
+                pass
 
-        if range_percent < 1.5 and earlier_range > range_percent * 1.5:
-            alerts.append(f"📐 **{symbol}**: Звуження діапазону (можливий пробій / трикутник)! Коридор: {range_percent:.2f}%")
+        # 2. Трикутник / Звуження волатильності
+        recent_range = (max(highs[-10:]) - min(lows[-10:])) / current_price * 100
+        earlier_range = (max(highs[-40:-20]) - min(lows[-40:-20])) / closes[-30] * 100
+        if recent_range < 1.2 and earlier_range > recent_range * 2:
+            alerts.append(f"📐 **{symbol}**: Формування трикутника / звуження волатильності (Корридор: {recent_range:.2f}%)!")
+
+        # 3. Локальна трендова та пробій трендової (порівняння ковзних / нахилу)
+        # Простий розрахунок нахилу тренду через середні за різні періоди
+        sma_fast = sum(closes[-10:]) / 10
+        sma_slow = sum(closes[-40:]) / 40
+        prev_sma_fast = sum(closes[-11:-1]) / 10
+        prev_sma_slow = sum(closes[-41:-1]) / 40
+
+        # Перетин швидкої і повільної SMA як заміна пробою трендового нахилу
+        if prev_sma_fast <= prev_sma_slow and sma_fast > sma_slow:
+            alerts.append(f"📈 **{symbol}**: Пробій / Зміна трендовою лінії знизу вгору (Бичачий сигнал)!")
+        elif prev_sma_fast >= prev_sma_slow and sma_fast < sma_slow:
+            alerts.append(f"📉 **{symbol}**: Пробій / Зміна трендовою лінії зверху вниз (Ведмежий сигнал)!")
 
         for alert in alerts:
             send_discord_alert(alert)
@@ -92,7 +112,7 @@ def analyze_market():
         time.sleep(0.1)
 
 def main():
-    print("Сканер запущено 24/7.")
+    print("Розширений сканер запущено 24/7.")
     while True:
         try:
             analyze_market()
@@ -102,4 +122,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+    
