@@ -4,16 +4,20 @@ import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1544732288263389284/y-TPXfbXNQBOF9tAshOib_UlqwyvClHln50VTx08wZTeWtzGNETLJW8UXERU4lkmWWYl"
+# Безпечне зчитування вебхука з налаштувань Render
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def send_discord_alert(message):
+    if not DISCORD_WEBHOOK_URL:
+        print("Помилка: не задано DISCORD_WEBHOOK_URL у змінних середовища!")
+        return
     try:
         payload = {"content": message}
         requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер перезапущено у відлагодженому режимі!**")
+send_discord_alert("🟢 **Сканер успішно оновлено та переведено на безпечний режим!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
