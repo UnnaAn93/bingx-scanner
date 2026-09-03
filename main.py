@@ -13,7 +13,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **BingX Scanner оновлено: знято обмеження ширини каналів та покращено детекцію трендів!**")
+send_discord_alert("🟢 **BingX Scanner успішно перезапущено (виправлено синтаксис)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -37,7 +37,7 @@ def get_bingx_symbols():
         response = requests.get(url, timeout=10)
         data = response.json()
         if data.get("code") == 0:
-            symbols = [item["symbol"] for item in data["data"] if item.get("status"] == 1 and item["symbol"].endswith("-USDT")]
+            symbols = [item["symbol"] for item in data["data"] if item.get("status") == 1 and item["symbol"].endswith("-USDT")]
             return symbols[:500]
     except Exception as e:
         print(f"Помилка отримання пар: {e}")
@@ -70,31 +70,26 @@ def analyze_market():
         current_price = closes[-1]
         prev_price = closes[-2]
 
-        # Визначаємо межі за останніми свічками без жорстких обмежень на % ширини
         box_high = max(highs[-30:-2])
         box_low = min(lows[-30:-2])
 
         alerts = []
 
-        # 1. Доторкання до меж боковика (підтримка / опір у межах 1%)
         if abs(current_price - box_low) / current_price < 0.01:
             alerts.append(f"🟢 **{symbol}**: Ціна тестує нижню межу боковика (Підтримка)!")
         elif abs(current_price - box_high) / current_price < 0.01:
             alerts.append(f"🔴 **{symbol}**: Ціна тестує верхню межу боковика (Опір)!")
 
-        # 2. Пробої меж
         if prev_price <= box_high and current_price > box_high:
             alerts.append(f"🚀 **{symbol}**: Пробій верхньої межі боковика вгору!")
         elif prev_price >= box_low and current_price < box_low:
             alerts.append(f"⚠️ **{symbol}**: Пробій нижньої межі боковика вниз!")
 
-        # 3. Звуження волатильності / Трикутник
         recent_range = (max(highs[-10:]) - min(lows[-10:])) / current_price * 100
         earlier_range = (max(highs[-40:-20]) - min(lows[-40:-20])) / closes[-30] * 100
         if recent_range < 1.5 and earlier_range > recent_range * 1.8:
             alerts.append(f"📐 **{symbol}**: Звуження волатильності / Трикутник ({recent_range:.2f}%)!")
 
-        # 4. Трендовий рух (швидка та повільна SMA з урахуванням напрямку)
         sma_fast = sum(closes[-8:]) / 8
         sma_slow = sum(closes[-30:]) / 30
 
