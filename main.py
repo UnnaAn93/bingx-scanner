@@ -1,7 +1,28 @@
 import time
 import requests
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1544732288263389284/y-TPXfbXNQBOF9tAshOib_UlqwyvClHln50VTx08wZTeWtzGNETLJW8UXERU4lkmWWYl"
+
+# Мікро-сервер для того, щоб Render був задоволений вебсервісом
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"BingX Scanner is active 24/7!")
+    def log_message(self, format, *args):
+        pass
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
+# Запускаємо вебсервер у фоновому потоці
+threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_bingx_symbols():
     try:
@@ -10,7 +31,7 @@ def get_bingx_symbols():
         data = response.json()
         if data.get("code") == 0:
             symbols = [item["symbol"] for item in data["data"] if item.get("status") == 1 and item["symbol"].endswith("-USDT")]
-            return symbols[:500]  # Обмежуємо до 500 пар
+            return symbols[:500]
     except Exception as e:
         print(f"Помилка отримання пар: {e}")
     return []
@@ -46,16 +67,13 @@ def analyze_market():
         if not closes or len(closes) < 50:
             continue
 
-        # 1. Розрахунок SMA 50
         sma_50 = sum(closes[-50:]) / 50
         current_price = closes[-1]
 
-        # 2. Перевірка Range-bound
         recent_highs = max(highs[-20:])
         recent_lows = min(lows[-20:])
         range_percent = (recent_highs - recent_lows) / current_price * 100
 
-        # 3. Перевірка звуження волатильності / трикутника
         earlier_range = (max(highs[-50:-20]) - min(lows[-50:-20])) / closes[-30] * 100
 
         alerts = []
@@ -84,4 +102,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-      
+        
