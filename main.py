@@ -76,7 +76,6 @@ def analyze_market():
         current_price = closes[-1]
         prev_price = closes[-2]
 
-        # Визначаємо локальний діапазон за попередні 20 свічок (без урахування поточної)
         prev_highs = highs[-21:-1]
         prev_lows = lows[-21:-1]
         
@@ -85,21 +84,15 @@ def analyze_market():
 
         alerts = []
 
-        # 1. Пробій опору вгору
         if prev_price <= resistance and current_price > resistance:
             alerts.append(f"🚀 **{symbol}**: Пробій опору (вище {resistance})! Ціна: {current_price}")
-
-        # 2. Пробій підтримки вниз
         elif prev_price >= support and current_price < support:
             alerts.append(f"⚠️ **{symbol}**: Пробій підтримки (нижче {support})! Ціна: {current_price}")
-
-        # 3. Тест / дотик до опору або підтримки (в межах 0.5%)
         elif abs(current_price - resistance) / resistance <= 0.005:
             alerts.append(f"🔴 **{symbol}**: Ціна тестує опір ({resistance})!")
         elif abs(current_price - support) / support <= 0.005:
             alerts.append(f"🟢 **{symbol}**: Ціна тестує підтримку ({support})!")
 
-        # 4. Імпульсний рух (різка зміна ціни за останні 3 свічки більш ніж на 3%)
         change_3c = (current_price - closes[-4]) / closes[-4] * 100
         if change_3c > 3.0:
             alerts.append(f"📈 **{symbol}**: Сильний бичачий імпульс (+{change_3c:.2f}%) за годину!")
@@ -122,9 +115,8 @@ def main():
             analyze_market()
         except Exception as e:
             print(f"Помилка в основному циклі: {e}")
-        # Пауза між скануваннями (наприклад, 5 хвилин для швидшої реакції)
         time.sleep(300)
 
 if __name__ == "__main__":
-    main>
+    main()
     
