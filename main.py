@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер успішно оновлено та переведено на безпечний режим!**")
+send_discord_alert("🟢 **Сканер оновлено: додано детектор зняття ліквідності (шпильоk за рівні)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -62,7 +62,7 @@ def get_klines(symbol, interval="15m", limit=50):
     return None, None, None
 
 def analyze_market():
-    print("--- Початок сканування ринку ---")
+    print("--- Початок сканування ринку (з урахуванням ліквідності) ---")
     symbols = get_bingx_symbols()
     print(f"Отримано активних пар для перевірки: {len(symbols)}")
 
@@ -77,9 +77,12 @@ def analyze_market():
         if not closes or len(closes) < 30:
             continue
 
-        current_price = closes[-1]
-        prev_price = closes[-2]
+        current_close = closes[-1]
+        prev_close = closes[-2]
+        current_high = highs[-1]
+        current_low = lows[-1]
 
+        # Визначаємо рівні боковика за попередні 20 свічок (без урахування поточної)
         prev_highs = highs[-21:-1]
         prev_lows = lows[-21:-1]
         
@@ -88,16 +91,25 @@ def analyze_market():
 
         alerts = []
 
-        if prev_price <= resistance and current_price > resistance:
-            alerts.append(f"🚀 **{symbol}**: Пробій опору (вище {resistance})! Ціна: {current_price}")
-        elif prev_price >= support and current_price < support:
-            alerts.append(f"⚠️ **{symbol}**: Пробій підтримки (нижче {support})! Ціна: {current_price}")
-        elif abs(current_price - resistance) / resistance <= 0.005:
+        # 1. Повноцінний пробій тілом свічки
+        if prev_close <= resistance and current_close > resistance:
+            alerts.append(f"🚀 **{symbol}**: Пробій опору тілом свічки (вище {resistance})! Ціна: {current_close}")
+        elif prev_close >= support and current_close < support:
+            alerts.append(f"⚠️ **{symbol}**: Пробій підтримки тілом свічки (нижче {support})! Ціна: {current_close}")
+        
+        # 2. Зняття ліквідності (шпилька вище/нижче рівня, але закриття всередині)
+        elif current_high > resistance and current_close <= resistance:
+            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності зверху (шпилька пробила опір {resistance}, але закрились всередині)!")
+        elif current_low < support and current_close >= support:
+            alerts.append(f"🎣 **{symbol}**: Зняття ліквідності знизу (шпилька пробила підтримку {support}, але закрились всередині)!")
+
+        # 3. Тести рівнів та імпульси
+        elif abs(current_close - resistance) / resistance <= 0.005:
             alerts.append(f"🔴 **{symbol}**: Ціна тестує опір ({resistance})!")
-        elif abs(current_price - support) / support <= 0.005:
+        elif abs(current_close - support) / support <= 0.005:
             alerts.append(f"🟢 **{symbol}**: Ціна тестує підтримку ({support})!")
 
-        change_3c = (current_price - closes[-4]) / closes[-4] * 100
+        change_3c = (current_close - closes[-4]) / closes[-4] * 100
         if change_3c > 3.0:
             alerts.append(f"📈 **{symbol}**: Сильний бичачий імпульс (+{change_3c:.2f}%) за годину!")
         elif change_3c < -3.0:
