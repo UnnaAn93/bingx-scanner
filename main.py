@@ -8,7 +8,7 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
-        print("Помилка: не задано DISCORD_WEBHOOK_URL у змінних середовища!")
+        print("Помилка: не задано DISCORD_WEBHOOK_URL!")
         return
     try:
         payload = {"content": message}
@@ -16,14 +16,14 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер налаштовано на 5m таймфрейм із чутливістю 2%!**")
+send_discord_alert("🟢 **Сканер активний: ультрачутливий режим (1%) із підсумковими звітами циклу задіяно!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"BingX Volatility Scanner is active 24/7!")
+        self.wfile.write(b"BingX Scanner is active 24/7!")
     def log_message(self, format, *args):
         pass
 
@@ -42,18 +42,15 @@ def get_top_volatile_symbols(top_n=35):
         if data.get("code") == 0 and data.get("data"):
             tickers = data["data"]
             usdt_tickers = [t for t in tickers if t.get("symbol", "").endswith("-USDT")]
-            
             for t in usdt_tickers:
                 try:
                     t["abs_change"] = abs(float(t.get("priceChangePercent", 0)))
                 except:
                     t["abs_change"] = 0.0
-                    
             usdt_tickers.sort(key=lambda x: x["abs_change"], reverse=True)
-            symbols = [t["symbol"] for t in usdt_tickers[:top_n]]
-            return symbols
+            return [t["symbol"] for t in usdt_tickers[:top_n]]
     except Exception as e:
-        print(f"Помилка отримання топ волатильних пар: {e}")
+        print(f"Помилка отримання топ пар: {e}")
     return []
 
 def get_klines(symbol, interval="5m", limit=30):
@@ -72,14 +69,11 @@ def get_klines(symbol, interval="5m", limit=30):
     return None, None, None, None
 
 def analyze_market():
-    print("--- Початок швидкого сканування (5m таймфрейм) ---")
     symbols = get_top_volatile_symbols(35)
-    print(f"Відібрано топ гарячих пар для перевірки: {len(symbols)}")
-
     if not symbols:
         return
 
-    signals_sent = 0
+    signals_found = 0
 
     for symbol in symbols:
         closes, opens, highs, lows = get_klines(symbol, "5m", 30)
@@ -99,15 +93,12 @@ def analyze_market():
         prev_low = lows[-2]
 
         lookback = min(15, len(closes) - 2)
-        prev_highs = highs[-(lookback+1):-1]
-        prev_lows = lows[-(lookback+1):-1]
-        
-        resistance = max(prev_highs)
-        support = min(prev_lows)
+        resistance = max(highs[-(lookback+1):-1])
+        support = min(lows[-(lookback+1):-1])
 
         alerts = []
 
-        # 1. Пробій опору / підтримки тілом
+        # 1. Пробій рівня
         if prev_close <= resistance and current_close > resistance:
             alerts.append(f"🚀 **{symbol} (5m)**: Пробій опору ({resistance})! Ціна: {current_close}")
         elif prev_close >= support and current_close < support:
@@ -119,44 +110,41 @@ def analyze_market():
         elif current_low < support and current_close >= support:
             alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності знизу (нижче {support})")
 
-        # 3. Імпульс по свічці (знижено до 2%)
+        # 3. Імпульс свічки (1%)
         body_change = (current_close - current_open) / current_open * 100
         step_change = (current_close - prev_close) / prev_close * 100
 
-        if body_change >= 2.0 or step_change >= 2.0:
+        if body_change >= 1.0 or step_change >= 1.0:
             alerts.append(f"🔥 **{symbol} (5m)**: Імпульс росту +{max(body_change, step_change):.2f}%! Ціна: {current_close}")
-        elif body_change <= -2.0 or step_change <= -2.0:
+        elif body_change <= -1.0 or step_change <= -1.0:
             alerts.append(f"🩸 **{symbol} (5m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
 
-        # 4. Трендовий детектор HH/HL (знижено до 1.5% сумарно)
+        # 4. Тренд HH/HL (0.8%)
         if (current_close > prev_close and prev_close > prev2_close) and \
            (current_high > prev_high and prev_high > prev2_high) and \
            (current_low > prev_low):
             trend_change = (current_close - prev2_close) / prev2_close * 100
-            if trend_change >= 1.5:
+            if trend_change >= 0.8:
                 alerts.append(f"📈 **{symbol} (5m)**: Тренд HH/HL +{trend_change:.2f}%! Ціна: {current_close}")
 
         for alert in alerts:
-            print(f"Надсилаю сигнал: {alert}")
             send_discord_alert(alert)
-            signals_sent += 1
+            signals_found += 1
+            time.sleep(0.4)
             
         time.sleep(0.02)
 
-    # Звіт про завершення циклу (прийде в Discord, щоб ти бачила роботу скрипта)
-    print(f"--- Сканування завершено. Надіслано сигналів: {signals_sent} ---")
-    if signals_sent == 0:
-        send_discord_alert(f"🔄 Скрінер активний: перевірено топ-35 пар (5m). Сигналів у цьому циклі немає.")
+    # Підсумковий звіт після завершення кола по всіх 35 парах
+    send_discord_alert(f"🔄 **Цикл завершено**: перевірено топ-35 пар (5m). Знайдено сигналів: {signals_found}")
 
 def main():
-    print("Головний цикл запущено.")
     while True:
         try:
             analyze_market()
         except Exception as e:
-            print(f"Помилка в основному циклі: {e}")
-        time.sleep(60) # Перевіряємо кожну хвилину
+            print(f"Помилка в циклі: {e}")
+        time.sleep(90) # Інтервал 1.5 хвилини між повними колами
 
 if __name__ == "__main__":
     main()
-            
+    
