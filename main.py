@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер оновлено: активовано захищений цикл з обробкою виключень!**")
+send_discord_alert("🟢 **Сканер запущено: додано таймаути та діагностику кроків!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -37,7 +37,7 @@ threading.Thread(target=run_web_server, daemon=True).start()
 def get_top_volatile_symbols(top_n=35):
     try:
         url = "https://open-api.bingx.com/openApi/swap/v1/quote/ticker"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=5)
         data = response.json()
         if data.get("code") == 0 and data.get("data"):
             tickers = data["data"]
@@ -56,7 +56,7 @@ def get_top_volatile_symbols(top_n=35):
 def get_klines(symbol, interval="5m", limit=30):
     try:
         url = f"https://open-api.bingx.com/openApi/swap/v1/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        response = requests.get(url, timeout=4)
+        response = requests.get(url, timeout=3)
         data = response.json()
         if data.get("code") == 0 and data.get("data"):
             closes = [float(c["close"]) for c in data["data"]]
@@ -69,9 +69,11 @@ def get_klines(symbol, interval="5m", limit=30):
     return None, None, None, None
 
 def analyze_market():
+    send_discord_alert("🔍 Починаю сканування топ-35 волатильних пар...")
     symbols = get_top_volatile_symbols(35)
+    
     if not symbols:
-        print("Список пар порожній.")
+        send_discord_alert("⚠️ Не вдалося отримати список пар від BingX API!")
         return
 
     signals_found = 0
@@ -106,7 +108,7 @@ def analyze_market():
             elif prev_close >= support and current_close < support:
                 alerts.append(f"⚠️ **{symbol} (5m)**: Пробій підтримки ({support})! Ціна: {current_close}")
             
-            # 2. Зняття ліквідності (шпилька)
+            # 2. Зняття ліквідності
             elif current_high > resistance and current_close <= resistance:
                 alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності зверху (вище {resistance})")
             elif current_low < support and current_close >= support:
@@ -135,12 +137,11 @@ def analyze_market():
                 time.sleep(0.4)
                 
         except Exception as e:
-            print(f"Помилка при аналізі пари {symbol}: {e}")
+            pass
             
         time.sleep(0.02)
 
-    # Гарантований підсумковий звіт циклу
-    send_discord_alert(f"🔄 **Цикл завершено**: перевірено топ-35 пар (5m). Знайдено сигналів: {signals_found}")
+    send_discord_alert(f"🔄 **Цикл завершено**: перевірено топ-35 пар. Знайдено сигналів: {signals_found}")
 
 def main():
     while True:
@@ -152,4 +153,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
