@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер BingX переведено на 15m таймфрейм + акцент на боковики!**")
+send_discord_alert("🟢 **Сканер BingX оновлено: тепер пари з цифрами (як 4USDT) скануються коректно!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -57,6 +57,10 @@ def get_top_volatile_symbols(top_n=60):
         for t in tickers:
             sym = t.get("symbol", "")
             if sym.endswith("-USDT"):
+                base_part = sym.split("-")[0]
+                # Відсіюємо лише індексне сміття з "2USD" у назві, але залишаємо 4USDT, 1000PEPE тощо
+                if "2USD" in base_part:
+                    continue
                 try:
                     change = abs(float(t.get("priceChangePercent", 0)))
                     valid_tickers.append((sym, change))
@@ -115,19 +119,16 @@ def analyze_market():
 
             alerts = []
 
-            # Пробої рівнів на 15m
             if prev_close <= resistance and current_close > resistance:
                 alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору ({resistance})! Ціна: {current_close}")
             elif prev_close >= support and current_close < support:
                 alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support})! Ціна: {current_close}")
             
-            # Зняття ліквідності
             elif current_high > resistance and current_close <= resistance:
                 alerts.append(f"🎣 **{symbol} (15m)**: Зняття ліквідності зверху (вище {resistance})")
             elif current_low < support and current_close >= support:
                 alerts.append(f"🎣 **{symbol} (15m)**: Зняття ліквідності знизу (нижче {support})")
 
-            # Імпульси від 3% на 15m
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -136,7 +137,6 @@ def analyze_market():
             elif body_change <= -3.0 or step_change <= -3.0:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
 
-            # Тренд
             if (current_close > prev_close and prev_close > prev2_close) and \
                (current_high > prev_high and prev_high > prev2_high) and \
                (current_low > prev_low):
@@ -144,11 +144,10 @@ def analyze_market():
                 if trend_change >= 2.0:
                     alerts.append(f"📈 **{symbol} (15m)**: Тренд HH/HL +{trend_change:.2f}%! Ціна: {current_close}")
 
-            # Боковик / Консолідація (аналіз останніх 6 свічок на 15m)
             flat_highs = highs[-6:]
             flat_lows = lows[-6:]
             channel_range = (max(flat_highs) - min(flat_lows)) / current_close * 100
-            if channel_range <= 0.8:  # вузький коридор для 15m
+            if channel_range <= 0.8:
                 alerts.append(f"🛏️ **{symbol} (15m)**: Боковик / Консолідація в коридорі {channel_range:.2f}%")
 
             for alert in alerts:
@@ -170,8 +169,8 @@ def main():
             analyze_market()
         except Exception as e:
             print(f"Помилка в головному циклі: {e}")
-        time.sleep(120)  # інтервал 2 хвилини між колами для 15m
+        time.sleep(120)
 
 if __name__ == "__main__":
     main()
-            
+    
