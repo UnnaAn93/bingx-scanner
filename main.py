@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер оновлено: додано детектор флету та консолідації!**")
+send_discord_alert("🟢 **Розширений сканер (60 пар) запущено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,6 +34,19 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
+def self_ping():
+    port = int(os.environ.get("PORT", 10000))
+    url = f"http://127.0.0.1:{port}"
+    while True:
+        try:
+            requests.get(url, timeout=3)
+        except:
+            pass
+        time.sleep(300)
+
+threading.Thread(target=self_ping, daemon=True).start()
+
+# Розширений список із 60 волатильних та ліквідних пар
 TOP_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", 
     "ADAUSDT", "AVAXUSDT", "SUIUSDT", "NEARUSDT", "LINKUSDT", 
@@ -41,7 +54,12 @@ TOP_SYMBOLS = [
     "ARBUSDT", "OPUSDT", "INJUSDT", "TIAUSDT", "FTMUSDT", 
     "MATICUSDT", "ATOMUSDT", "ETCUSDT", "BCHUSDT", "LTCUSDT", 
     "WIFUSDT", "FLOKIUSDT", "BONKUSDT", "JUPUSDT", "PYTHUSDT", 
-    "SEIUSDT", "TONUSDT", "ICPUSDT", "RUNEUSDT", "POLUSDT"
+    "SEIUSDT", "TONUSDT", "ICPUSDT", "RUNEUSDT", "POLUSDT",
+    "ENAUSDT", "WLDUSDT", "PENDLEUSDT", "STRKUSDT", "DYDXUSDT",
+    "HBARUSDT", "ALGOUSDT", "GALAUSDT", "SANDUSDT", "MANAUSDT",
+    "AXSUSDT", "CRVUSDT", "MKRUSDT", "AAVEUSDT", "SNXUSDT",
+    "ORDIUSDT", "1000SATSUSDT", "MEMEUSDT", "BOMEUSDT", "PORTALUSDT",
+    "BBUSDT", "REZUSDT", "OMUSDT", "IOUSDT", "ZKUSDT"
 ]
 
 def get_klines(symbol, interval="5m", limit=30):
@@ -61,7 +79,7 @@ def get_klines(symbol, interval="5m", limit=30):
     return None, None, None, None
 
 def analyze_market():
-    send_discord_alert("🔍 Починаю сканування топ-35 пар...")
+    send_discord_alert(f"🔍 Починаю сканування топ-{len(TOP_SYMBOLS)} пар...")
     signals_found = 0
 
     for symbol in TOP_SYMBOLS:
@@ -88,19 +106,16 @@ def analyze_market():
 
             alerts = []
 
-            # 1. Пробій рівня
             if prev_close <= resistance and current_close > resistance:
                 alerts.append(f"🚀 **{symbol} (5m)**: Пробій опору ({resistance})! Ціна: {current_close}")
             elif prev_close >= support and current_close < support:
                 alerts.append(f"⚠️ **{symbol} (5m)**: Пробій підтримки ({support})! Ціна: {current_close}")
             
-            # 2. Зняття ліквідності
             elif current_high > resistance and current_close <= resistance:
                 alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності зверху (вище {resistance})")
             elif current_low < support and current_close >= support:
                 alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності знизу (нижче {support})")
 
-            # 3. Імпульс свічки (1%)
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -109,7 +124,6 @@ def analyze_market():
             elif body_change <= -1.0 or step_change <= -1.0:
                 alerts.append(f"🩸 **{symbol} (5m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
 
-            # 4. Тренд HH/HL (0.8%)
             if (current_close > prev_close and prev_close > prev2_close) and \
                (current_high > prev_high and prev_high > prev2_high) and \
                (current_low > prev_low):
@@ -117,24 +131,23 @@ def analyze_market():
                 if trend_change >= 0.8:
                     alerts.append(f"📈 **{symbol} (5m)**: Тренд HH/HL +{trend_change:.2f}%! Ціна: {current_close}")
 
-            # 5. Флет / Консолідація (вузький діапазон за останні 7 свічок)
             flat_highs = highs[-7:]
             flat_lows = lows[-7:]
             channel_range = (max(flat_highs) - min(flat_lows)) / current_close * 100
-            if channel_range <= 0.45:  # якщо весь коридор менше 0.45%
+            if channel_range <= 0.45:
                 alerts.append(f"🛏️ **{symbol} (5m)**: Флет / Консолідація в коридорі {channel_range:.2f}%")
 
             for alert in alerts:
                 send_discord_alert(alert)
                 signals_found += 1
-                time.sleep(0.4)
+                time.sleep(0.3)
                 
         except Exception as e:
             pass
             
-        time.sleep(0.02)
+        time.sleep(0.01)
 
-    send_discord_alert(f"🔄 **Цикл завершено**: перевірено топ-35 пар. Знайдено сигналів: {signals_found}")
+    send_discord_alert(f"🔄 **Цикл завершено**: перевірено {len(TOP_SYMBOLS)} пар. Знайдено сигналів: {signals_found}")
 
 def main():
     while True:
