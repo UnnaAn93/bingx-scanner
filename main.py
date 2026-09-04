@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Свіжий білд: сканер запущено через Binance API!**")
+send_discord_alert("🟢 **Бот підключено до стабільного шлюзу даних!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -35,36 +35,47 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_top_volatile_symbols(top_n=35):
-    try:
-        url = "https://api.binance.com/api/v3/ticker/24hr"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if isinstance(data, list):
-            usdt_tickers = [t for t in data if t.get("symbol", "").endswith("USDT")]
-            for t in usdt_tickers:
-                try:
-                    t["abs_change"] = abs(float(t.get("priceChangePercent", 0)))
-                except:
-                    t["abs_change"] = 0.0
-            usdt_tickers.sort(key=lambda x: x["abs_change"], reverse=True)
-            return [t["symbol"] for t in usdt_tickers[:top_n]]
-    except Exception as e:
-        print(f"Помилка отримання топ пар: {e}")
+    # Використовуємо альтернативний публічний шлюз DEX/CEX об'єднаних даних
+    urls = [
+        "https://api.binance.com/api/v3/ticker/24hr",
+        "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    ]
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=5)
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                usdt_tickers = [t for t in data if t.get("symbol", "").endswith("USDT")]
+                for t in usdt_tickers:
+                    try:
+                        t["abs_change"] = abs(float(t.get("priceChangePercent", 0)))
+                    except:
+                        t["abs_change"] = 0.0
+                usdt_tickers.sort(key=lambda x: x["abs_change"], reverse=True)
+                symbols = [t["symbol"] for t in usdt_tickers[:top_n]]
+                if symbols:
+                    return symbols
+        except Exception as e:
+            continue
     return []
 
 def get_klines(symbol, interval="5m", limit=30):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        response = requests.get(url, timeout=3)
-        data = response.json()
-        if isinstance(data, list) and len(data) > 0:
-            closes = [float(c[4]) for c in data]
-            opens = [float(c[1]) for c in data]
-            highs = [float(c[2]) for c in data]
-            lows = [float(c[3]) for c in data]
-            return closes, opens, highs, lows
-    except Exception as e:
-        pass
+    urls = [
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=3)
+            data = response.json()
+            if isinstance(data, list) and len(data) > 0:
+                closes = [float(c[4]) for c in data]
+                opens = [float(c[1]) for c in data]
+                highs = [float(c[2]) for c in data]
+                lows = [float(c[3]) for c in data]
+                return closes, opens, highs, lows
+        except:
+            continue
     return None, None, None, None
 
 def analyze_market():
@@ -72,7 +83,7 @@ def analyze_market():
     symbols = get_top_volatile_symbols(35)
     
     if not symbols:
-        send_discord_alert("⚠️ Помилка: не вдалося завантажити список пар з Binance API!")
+        send_discord_alert("⚠️ Помилка: шлюзи недоступні!")
         return
 
     signals_found = 0
@@ -148,4 +159,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
