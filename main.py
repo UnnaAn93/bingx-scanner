@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер запущено: додано таймаути та діагностику кроків!**")
+send_discord_alert("🟢 **Сканер повністю оновлено: додано User-Agent та стабільний захищений цикл!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -37,7 +37,8 @@ threading.Thread(target=run_web_server, daemon=True).start()
 def get_top_volatile_symbols(top_n=35):
     try:
         url = "https://open-api.bingx.com/openApi/swap/v1/quote/ticker"
-        response = requests.get(url, timeout=5)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
         if data.get("code") == 0 and data.get("data"):
             tickers = data["data"]
@@ -56,7 +57,8 @@ def get_top_volatile_symbols(top_n=35):
 def get_klines(symbol, interval="5m", limit=30):
     try:
         url = f"https://open-api.bingx.com/openApi/swap/v1/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        response = requests.get(url, timeout=3)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers, timeout=3)
         data = response.json()
         if data.get("code") == 0 and data.get("data"):
             closes = [float(c["close"]) for c in data["data"]]
@@ -153,3 +155,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
