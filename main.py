@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер активовано через альтернативний публічний шлюз!**")
+send_discord_alert("🟢 **Сканер на базі стабільного списку топ-пар запущено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,33 +34,19 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-def get_top_volatile_symbols(top_n=35):
-    # Використовуємо публічний шлюз Coincap, який повністю відкритий для будь-яких сервісів і хмар
-    try:
-        url = "https://api.coincap.io/v2/assets?limit=100"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if "data" in data:
-            assets = data["data"]
-            # Сортуємо за зміною ціни за 24 години (changePercent24Hr)
-            valid_assets = []
-            for asset in assets:
-                try:
-                    change = float(asset.get("changePercent24Hr") or 0)
-                    symbol = asset.get("symbol") + "USDT"
-                    valid_assets.append({"symbol": symbol, "abs_change": abs(change)})
-                except:
-                    continue
-            valid_assets.sort(key=lambda x: x["abs_change"], reverse=True)
-            return [item["symbol"] for item in valid_assets[:top_n]]
-    except Exception as e:
-        print(f"Помилка шлюзу: {e}")
-    return []
+# Залізобетонний список із 35 найпопулярніших та волатильних криптопар
+TOP_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", 
+    "ADAUSDT", "AVAXUSDT", "SUIUSDT", "NEARUSDT", "LINKUSDT", 
+    "PEPEUSDT", "SHIBUSDT", "RENDERUSDT", "FETUSDT", "APTUSDT", 
+    "ARBUSDT", "OPUSDT", "INJUSDT", "TIAUSDT", "FTMUSDT", 
+    "MATICUSDT", "ATOMUSDT", "ETCUSDT", "BCHUSDT", "LTCUSDT", 
+    "WIFUSDT", "FLOKIUSDT", "BONKUSDT", "JUPUSDT", "PYTHUSDT", 
+    "SEIUSDT", "TONUSDT", "ICPUSDT", "RUNEUSDT", "POLUSDT"
+]
 
 def get_klines(symbol, interval="5m", limit=30):
-    # Оскільки беремо пари з прив'язкою до USDT, тягнемо свічки через загальнодоступний бэкап Binance з заголовками браузера
-    clean_symbol = symbol.replace("USDT", "USDT")
-    url = f"https://api1.binance.com/api/v3/klines?symbol={clean_symbol}&interval={interval}&limit={limit}"
+    url = f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         response = requests.get(url, headers=headers, timeout=3)
@@ -76,16 +62,10 @@ def get_klines(symbol, interval="5m", limit=30):
     return None, None, None, None
 
 def analyze_market():
-    send_discord_alert("🔍 Починаю сканування топ-35 волатильних пар...")
-    symbols = get_top_volatile_symbols(35)
-    
-    if not symbols:
-        send_discord_alert("⚠️ Помилка: не вдалося завантажити список через шлюз!")
-        return
-
+    send_discord_alert("🔍 Починаю сканування топ-35 пар...")
     signals_found = 0
 
-    for symbol in symbols:
+    for symbol in TOP_SYMBOLS:
         try:
             closes, opens, highs, lows = get_klines(symbol, "5m", 30)
             if not closes or len(closes) < 10:
