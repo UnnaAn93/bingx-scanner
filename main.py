@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Бот підключено до стабільного шлюзу даних!**")
+send_discord_alert("🟢 **Сканер активовано через альтернативний публічний шлюз!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -35,47 +35,44 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_top_volatile_symbols(top_n=35):
-    # Використовуємо альтернативний публічний шлюз DEX/CEX об'єднаних даних
-    urls = [
-        "https://api.binance.com/api/v3/ticker/24hr",
-        "https://fapi.binance.com/fapi/v1/ticker/24hr"
-    ]
-    for url in urls:
-        try:
-            response = requests.get(url, timeout=5)
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
-                usdt_tickers = [t for t in data if t.get("symbol", "").endswith("USDT")]
-                for t in usdt_tickers:
-                    try:
-                        t["abs_change"] = abs(float(t.get("priceChangePercent", 0)))
-                    except:
-                        t["abs_change"] = 0.0
-                usdt_tickers.sort(key=lambda x: x["abs_change"], reverse=True)
-                symbols = [t["symbol"] for t in usdt_tickers[:top_n]]
-                if symbols:
-                    return symbols
-        except Exception as e:
-            continue
+    # Використовуємо публічний шлюз Coincap, який повністю відкритий для будь-яких сервісів і хмар
+    try:
+        url = "https://api.coincap.io/v2/assets?limit=100"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if "data" in data:
+            assets = data["data"]
+            # Сортуємо за зміною ціни за 24 години (changePercent24Hr)
+            valid_assets = []
+            for asset in assets:
+                try:
+                    change = float(asset.get("changePercent24Hr") or 0)
+                    symbol = asset.get("symbol") + "USDT"
+                    valid_assets.append({"symbol": symbol, "abs_change": abs(change)})
+                except:
+                    continue
+            valid_assets.sort(key=lambda x: x["abs_change"], reverse=True)
+            return [item["symbol"] for item in valid_assets[:top_n]]
+    except Exception as e:
+        print(f"Помилка шлюзу: {e}")
     return []
 
 def get_klines(symbol, interval="5m", limit=30):
-    urls = [
-        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    ]
-    for url in urls:
-        try:
-            response = requests.get(url, timeout=3)
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
-                closes = [float(c[4]) for c in data]
-                opens = [float(c[1]) for c in data]
-                highs = [float(c[2]) for c in data]
-                lows = [float(c[3]) for c in data]
-                return closes, opens, highs, lows
-        except:
-            continue
+    # Оскільки беремо пари з прив'язкою до USDT, тягнемо свічки через загальнодоступний бэкап Binance з заголовками браузера
+    clean_symbol = symbol.replace("USDT", "USDT")
+    url = f"https://api1.binance.com/api/v3/klines?symbol={clean_symbol}&interval={interval}&limit={limit}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    try:
+        response = requests.get(url, headers=headers, timeout=3)
+        data = response.json()
+        if isinstance(data, list) and len(data) > 0:
+            closes = [float(c[4]) for c in data]
+            opens = [float(c[1]) for c in data]
+            highs = [float(c[2]) for c in data]
+            lows = [float(c[3]) for c in data]
+            return closes, opens, highs, lows
+    except:
+        pass
     return None, None, None, None
 
 def analyze_market():
@@ -83,7 +80,7 @@ def analyze_market():
     symbols = get_top_volatile_symbols(35)
     
     if not symbols:
-        send_discord_alert("⚠️ Помилка: шлюзи недоступні!")
+        send_discord_alert("⚠️ Помилка: не вдалося завантажити список через шлюз!")
         return
 
     signals_found = 0
@@ -159,4 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
