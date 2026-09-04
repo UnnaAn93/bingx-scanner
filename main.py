@@ -16,14 +16,14 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер повністю оновлено: додано User-Agent та стабільний захищений цикл!**")
+send_discord_alert("🟢 **Свіжий білд: сканер запущено через Binance API!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"BingX Scanner is active 24/7!")
+        self.wfile.write(b"Scanner is active 24/7!")
     def log_message(self, format, *args):
         pass
 
@@ -36,13 +36,11 @@ threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_top_volatile_symbols(top_n=35):
     try:
-        url = "https://open-api.bingx.com/openApi/swap/v1/quote/ticker"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=5)
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = requests.get(url, timeout=5)
         data = response.json()
-        if data.get("code") == 0 and data.get("data"):
-            tickers = data["data"]
-            usdt_tickers = [t for t in tickers if t.get("symbol", "").endswith("-USDT")]
+        if isinstance(data, list):
+            usdt_tickers = [t for t in data if t.get("symbol", "").endswith("USDT")]
             for t in usdt_tickers:
                 try:
                     t["abs_change"] = abs(float(t.get("priceChangePercent", 0)))
@@ -56,15 +54,14 @@ def get_top_volatile_symbols(top_n=35):
 
 def get_klines(symbol, interval="5m", limit=30):
     try:
-        url = f"https://open-api.bingx.com/openApi/swap/v1/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=3)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        response = requests.get(url, timeout=3)
         data = response.json()
-        if data.get("code") == 0 and data.get("data"):
-            closes = [float(c["close"]) for c in data["data"]]
-            opens = [float(c["open"]) for c in data["data"]]
-            highs = [float(c["high"]) for c in data["data"]]
-            lows = [float(c["low"]) for c in data["data"]]
+        if isinstance(data, list) and len(data) > 0:
+            closes = [float(c[4]) for c in data]
+            opens = [float(c[1]) for c in data]
+            highs = [float(c[2]) for c in data]
+            lows = [float(c[3]) for c in data]
             return closes, opens, highs, lows
     except Exception as e:
         pass
@@ -75,7 +72,7 @@ def analyze_market():
     symbols = get_top_volatile_symbols(35)
     
     if not symbols:
-        send_discord_alert("⚠️ Не вдалося отримати список пар від BingX API!")
+        send_discord_alert("⚠️ Помилка: не вдалося завантажити список пар з Binance API!")
         return
 
     signals_found = 0
@@ -104,19 +101,16 @@ def analyze_market():
 
             alerts = []
 
-            # 1. Пробій рівня
             if prev_close <= resistance and current_close > resistance:
                 alerts.append(f"🚀 **{symbol} (5m)**: Пробій опору ({resistance})! Ціна: {current_close}")
             elif prev_close >= support and current_close < support:
                 alerts.append(f"⚠️ **{symbol} (5m)**: Пробій підтримки ({support})! Ціна: {current_close}")
             
-            # 2. Зняття ліквідності
             elif current_high > resistance and current_close <= resistance:
                 alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності зверху (вище {resistance})")
             elif current_low < support and current_close >= support:
                 alerts.append(f"🎣 **{symbol} (5m)**: Зняття ліквідності знизу (нижче {support})")
 
-            # 3. Імпульс свічки (1%)
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -125,7 +119,6 @@ def analyze_market():
             elif body_change <= -1.0 or step_change <= -1.0:
                 alerts.append(f"🩸 **{symbol} (5m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
 
-            # 4. Тренд HH/HL (0.8%)
             if (current_close > prev_close and prev_close > prev2_close) and \
                (current_high > prev_high and prev_high > prev2_high) and \
                (current_low > prev_low):
