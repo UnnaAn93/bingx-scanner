@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Розширений сканер (60 пар) запущено!**")
+send_discord_alert("🟢 **Сканер BingX (топ-60 за волатильністю) запущено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -46,43 +46,56 @@ def self_ping():
 
 threading.Thread(target=self_ping, daemon=True).start()
 
-# Розширений список із 60 волатильних та ліквідних пар
-TOP_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", 
-    "ADAUSDT", "AVAXUSDT", "SUIUSDT", "NEARUSDT", "LINKUSDT", 
-    "PEPEUSDT", "SHIBUSDT", "RENDERUSDT", "FETUSDT", "APTUSDT", 
-    "ARBUSDT", "OPUSDT", "INJUSDT", "TIAUSDT", "FTMUSDT", 
-    "MATICUSDT", "ATOMUSDT", "ETCUSDT", "BCHUSDT", "LTCUSDT", 
-    "WIFUSDT", "FLOKIUSDT", "BONKUSDT", "JUPUSDT", "PYTHUSDT", 
-    "SEIUSDT", "TONUSDT", "ICPUSDT", "RUNEUSDT", "POLUSDT",
-    "ENAUSDT", "WLDUSDT", "PENDLEUSDT", "STRKUSDT", "DYDXUSDT",
-    "HBARUSDT", "ALGOUSDT", "GALAUSDT", "SANDUSDT", "MANAUSDT",
-    "AXSUSDT", "CRVUSDT", "MKRUSDT", "AAVEUSDT", "SNXUSDT",
-    "ORDIUSDT", "1000SATSUSDT", "MEMEUSDT", "BOMEUSDT", "PORTALUSDT",
-    "BBUSDT", "REZUSDT", "OMUSDT", "IOUSDT", "ZKUSDT"
-]
+# Автоматичне отримання топ-60 найволатильніших пар з BingX за 24 години
+def get_top_volatile_symbols(top_n=60):
+    url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        tickers = data.get("data", [])
+        
+        valid_tickers = []
+        for t in tickers:
+            sym = t.get("symbol", "")
+            if sym.endswith("-USDT"):
+                try:
+                    # Беремо абсолютне значення зміни за 24г для визначення волатильності
+                    change = abs(float(t.get("priceChangePercent", 0)))
+                    valid_tickers.append((sym, change))
+                except:
+                    pass
+        
+        # Сортуємо від найволатильніших до найспокійніших
+        valid_tickers.sort(key=lambda x: x[1], reverse=True)
+        symbols = [item[0] for item in valid_tickers[:top_n]]
+        return symbols
+    except Exception as e:
+        print(f"Помилка отримання волатильних пар з BingX: {e}")
+        return ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "PEPE-USDT", "SUI-USDT"]
 
 def get_klines(symbol, interval="5m", limit=30):
-    url = f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         response = requests.get(url, headers=headers, timeout=3)
-        data = response.json()
+        res_data = response.json()
+        data = res_data.get("data", [])
         if isinstance(data, list) and len(data) > 0:
-            closes = [float(c[4]) for c in data]
-            opens = [float(c[1]) for c in data]
-            highs = [float(c[2]) for c in data]
-            lows = [float(c[3]) for c in data]
+            closes = [float(c.get("close", 0)) for c in data]
+            opens = [float(c.get("open", 0)) for c in data]
+            highs = [float(c.get("high", 0)) for c in data]
+            lows = [float(c.get("low", 0)) for c in data]
             return closes, opens, highs, lows
     except:
         pass
     return None, None, None, None
 
 def analyze_market():
-    send_discord_alert(f"🔍 Починаю сканування топ-{len(TOP_SYMBOLS)} пар...")
+    symbols = get_top_volatile_symbols(60)
+    send_discord_alert(f"🔍 Отримано топ-60 найволатильніших пар з BingX. Сканую...")
     signals_found = 0
 
-    for symbol in TOP_SYMBOLS:
+    for symbol in symbols:
         try:
             closes, opens, highs, lows = get_klines(symbol, "5m", 30)
             if not closes or len(closes) < 10:
@@ -119,22 +132,22 @@ def analyze_market():
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
-            if body_change >= 1.0 or step_change >= 1.0:
+            if body_change >= 0.4 or step_change >= 0.4:
                 alerts.append(f"🔥 **{symbol} (5m)**: Імпульс росту +{max(body_change, step_change):.2f}%! Ціна: {current_close}")
-            elif body_change <= -1.0 or step_change <= -1.0:
+            elif body_change <= -0.4 or step_change <= -0.4:
                 alerts.append(f"🩸 **{symbol} (5m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
 
             if (current_close > prev_close and prev_close > prev2_close) and \
                (current_high > prev_high and prev_high > prev2_high) and \
                (current_low > prev_low):
                 trend_change = (current_close - prev2_close) / prev2_close * 100
-                if trend_change >= 0.8:
+                if trend_change >= 0.5:
                     alerts.append(f"📈 **{symbol} (5m)**: Тренд HH/HL +{trend_change:.2f}%! Ціна: {current_close}")
 
             flat_highs = highs[-7:]
             flat_lows = lows[-7:]
             channel_range = (max(flat_highs) - min(flat_lows)) / current_close * 100
-            if channel_range <= 0.45:
+            if channel_range <= 0.35:
                 alerts.append(f"🛏️ **{symbol} (5m)**: Флет / Консолідація в коридорі {channel_range:.2f}%")
 
             for alert in alerts:
@@ -147,7 +160,7 @@ def analyze_market():
             
         time.sleep(0.01)
 
-    send_discord_alert(f"🔄 **Цикл завершено**: перевірено {len(TOP_SYMBOLS)} пар. Знайдено сигналів: {signals_found}")
+    send_discord_alert(f"🔄 **Цикл завершено**: перевірено топ-60 волатильних пар BingX. Знайдено сигналів: {signals_found}")
 
 def main():
     while True:
@@ -155,8 +168,8 @@ def main():
             analyze_market()
         except Exception as e:
             print(f"Помилка в головному циклі: {e}")
-        time.sleep(90)
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()
-    
+            
