@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: виправлено чутливість боковиків та фільтрацію рівнів!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: рівні тільки по тілах свічок + фільтр об'ємів на пробій!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -110,18 +110,23 @@ def analyze_market():
             prev_close = closes[-2]
             current_volume = volumes[-1]
 
-            # Беремо чіткий діапазон останніх 10 свічок для локальних рівнів
-            lookback = 10
-            resistance = max(highs[-(lookback+1):-1])
-            support = min(lows[-(lookback+1):-1])
+            # Рахуємо середній об'єм за попередні свічки
+            avg_volume = sum(volumes[-20:-1]) / 19 if len(volumes) >= 20 else sum(volumes) / len(volumes)
+
+            # Визначаємо рівні за ТІЛАМИ свічок (max/min з open та close), виключаючи шпильки
+            body_highs = [max(o, c) for o, c in zip(opens[-(11):-1], closes[-(11):-1])]
+            body_lows = [min(o, c) for o, c in zip(opens[-(11):-1], closes[-(11):-1])]
+            
+            resistance = max(body_highs)
+            support = min(body_lows)
 
             alerts = []
 
-            # 1. Справжній пробій опору / підтримки (закриття тіла свічки вище/нижче рівня)
-            if prev_close <= resistance and current_close > resistance and current_close > current_open:
-                alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору ({resistance:.4f})! Ціна: {current_close}")
-            elif prev_close >= support and current_close < support and current_close < current_open:
-                alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support:.4f})! Ціна: {current_close}")
+            # 1. Пробій опору / підтримки (тільки по тілах + підтвердження об'ємом вище середнього)
+            if prev_close <= resistance and current_close > resistance and current_close > current_open and current_volume > avg_volume * 1.3:
+                alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору тілом ({resistance:.4f}) на об'ємі! Ціна: {current_close}")
+            elif prev_close >= support and current_close < support and current_close < current_open and current_volume > avg_volume * 1.3:
+                alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки тілом ({support:.4f}) на об'ємі! Ціна: {current_close}")
 
             # 2. Імпульси від 3.5%
             body_change = (current_close - current_open) / current_open * 100
@@ -132,17 +137,13 @@ def analyze_market():
             elif body_change <= -3.5 or step_change <= -3.5:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
 
-            # 3. Виправлена зона консолідації (боковик)
-            recent_highs = highs[-6:]
-            recent_lows = lows[-6:]
+            # 3. Стабільна зона консолідації (боковик) по останніх 5 свічках
+            recent_highs = highs[-5:]
+            recent_lows = lows[-5:]
             channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
-            
-            avg_volume_past = sum(volumes[-20:-6]) / 14 if len(volumes) >= 20 else sum(volumes) / len(volumes)
-            avg_volume_recent = sum(volumes[-5:]) / 5
 
-            # Розширили діапазон боковика до 1.2%, щоб він не пропускав вузькі цінові канали
-            if channel_range <= 1.2 and avg_volume_recent < avg_volume_past * 0.7:
-                alerts.append(f"🛏️ **{symbol} (15m)**: Зона консолідації (боковик на знижених об'ємах {channel_range:.2f}%)")
+            if channel_range <= 1.0 and current_volume < avg_volume * 0.8:
+                alerts.append(f"🛏️ **{symbol} (15m)**: Зона консолідації (боковик {channel_range:.2f}% на падінні об'ємів)")
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -167,4 +168,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+    
