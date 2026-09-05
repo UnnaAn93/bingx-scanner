@@ -5,6 +5,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") # Автоматично підтягується на Render, або можна вписати вручну
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
@@ -16,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m перезапущено у стабільному режимі (Session + Rate Limit Protection)!**")
+send_discord_alert("🟢 **Сканер 15m запущено із захистом від засинання (Self-Ping активний)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -32,9 +33,27 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
+# Запускаємо вебсервер у фоновому потоці
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# Створюємо сесію для переиспользования з'єднань (запобігає зависанню)
+# Механізм самопінгу, щоб хостинг не вмикав сплячий режим
+def self_ping_worker():
+    time.sleep(10) # Чекаємо поки сервер підніметься
+    # Якщо ви знаєте точну адресу вашого сайту, можете прописати її тут замість None:
+    # app_url = "https://your-app-name.onrender.com"
+    app_url = RENDER_EXTERNAL_URL 
+    
+    while True:
+        try:
+            if app_url:
+                requests.get(app_url, timeout=5)
+                print("Self-ping успішний.")
+        except Exception as e:
+            print(f"Помилка self-ping: {e}")
+        time.sleep(300) # Пінг кожні 5 хвилин
+
+threading.Thread(target=self_ping_worker, daemon=True).start()
+
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0"})
 
@@ -132,12 +151,12 @@ def analyze_market():
             for alert in alerts:
                 send_discord_alert(alert)
                 signals_found += 1
-                time.sleep(0.4) # Захист від спам-блокування Discord webhook
+                time.sleep(0.4)
                 
         except Exception as e:
             print(f"Помилка обробки {symbol}: {e}")
             
-        time.sleep(0.1) # Невеликий пауза між монетами щоб не тригерити захист біржі
+        time.sleep(0.1)
 
     if signals_found > 0:
         send_discord_alert(f"🔄 **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
@@ -154,4 +173,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
