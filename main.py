@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: інтегровано розрахунок проторгованих об'ємів (Volume Profile / POC)!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: додано детектор продовження тренду, зміни тренду та Volume Profile!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -95,7 +95,6 @@ def get_klines(symbol, interval="15m", limit=35):
     return None, None, None, None, None
 
 def calculate_volume_profile(highs, lows, volumes, bins=15):
-    """Будує примітивний профіль об'ємів для знаходження POC та границь зони інтересу"""
     if not highs or not lows or not volumes:
         return None, None, None
     
@@ -108,29 +107,24 @@ def calculate_volume_profile(highs, lows, volumes, bins=15):
     price_bins = [min_price + i * step for i in range(bins + 1)]
     bin_volumes = [0.0] * bins
 
-    # Розподіляємо об'єм кожної свічки по цінових бінах
     for h, l, v in zip(highs, lows, volumes):
         if h == l:
             continue
         for i in range(bins):
             b_low = price_bins[i]
             b_high = price_bins[i+1]
-            # Перетин свічки з ціновим діапазоном біна
             overlap_low = max(l, b_low)
             overlap_high = min(h, b_high)
             if overlap_low < overlap_high:
                 fraction = (overlap_high - overlap_low) / (h - l)
                 bin_volumes[i] += v * fraction
 
-    # Знаходимо POC (бін з максимальним об'ємом)
     max_vol_idx = bin_volumes.index(max(bin_volumes))
     poc_price = (price_bins[max_vol_idx] + price_bins[max_vol_idx+1]) / 2
 
-    # Визначаємо межі активного торгової зони (Value Area / Рендж по об'ємах)
     box_low = price_bins[0]
     box_high = price_bins[-1]
     
-    # Шукаємо реально заторговану зону (відкидаємо крайні пусті хвости)
     active_bins = [i for i, vol in enumerate(bin_volumes) if vol > (max(bin_volumes) * 0.15)]
     if active_bins:
         box_low = price_bins[min(active_bins)]
@@ -145,7 +139,7 @@ def analyze_market():
     for symbol in symbols:
         try:
             closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 35)
-            if not closes or len(closes) < 20:
+            if not closes or len(closes) < 25:
                 time.sleep(0.05)
                 continue
 
@@ -156,7 +150,6 @@ def analyze_market():
 
             avg_volume = sum(volumes[-25:-1]) / 24 if len(volumes) >= 25 else sum(volumes) / len(volumes)
 
-            # Беремо останні 20 свічок для побудови профілю об'ємів боковика
             p_highs = highs[-21:-1]
             p_lows = lows[-21:-1]
             p_vols = volumes[-21:-1]
@@ -168,22 +161,33 @@ def analyze_market():
             box_width_pct = (box_top - box_bottom) / current_close * 100
             alerts = []
 
-            # Перевіряємо, чи є це сформованим діапазоном (боковиком) за об'ємами
+            # 1. Перевірка боковиків та виходів з них за об'ємами
             is_consolidation = box_width_pct <= 4.0
-
             if is_consolidation:
-                # Зона консолідації навколо POC
                 recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
                 if recent_channel <= 1.8 and current_volume < avg_volume * 0.9:
-                    alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f} (ширина {box_width_pct:.2f}%)")
-                
-                # Вихід з наторгованого боковика ВГОРУ
+                    alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f}")
                 elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.3:
-                    alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ вище об'ємів ({box_top:.4f})! Ціна: {current_close}")
-
-                # Вихід з наторгованого боковика ВНИЗ 
+                    alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f})! Ціна: {current_close}")
                 elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.3:
-                    alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ нижче об'ємів ({box_bottom:.4f})! Ціна: {current_close}")
+                    alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f})! Ціна: {current_close}")
+
+            # 2. Детектор зміни тренду (Злам структури / CHOCH)
+            local_support = min(lows[-6:-2])
+            local_resistance = max(highs[-6:-2])
+            
+            if current_close < local_support and current_volume > avg_volume * 1.4:
+                alerts.append(f"🔄 **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вниз)**! Пробито підтримку {local_support:.4f}")
+
+            # 3. Детектор продовження тренду (Trend Continuation)
+            # Якщо попередні свічки задавали загальний ріст (наприклад за останні 6 свічок ціна виросла на > 3%),
+            # і зараз ціна пробиває локальний опір на об'ємі вище середнього — це чисте продовження висхідного тренду.
+            trend_prior_growth = (closes[-6] - closes[-12]) / closes[-12] * 100 if len(closes) >= 12 else 0
+            
+            if trend_prior_growth >= 3.0 and current_close > local_resistance and current_volume > avg_volume * 1.2:
+                alerts.append(f"📈 **{symbol} (15m)**: **Продовження висхідного тренду**! Пробій опору {local_resistance:.4f} на об'ємі.")
+            elif trend_prior_growth <= -3.0 and current_close < local_support and current_volume > avg_volume * 1.2:
+                alerts.append(f"📉 **{symbol} (15m)**: **Продовження низхідного тренду**! Пробій підтримки {local_support:.4f} на об'ємі.")
 
             # Імпульси від 3.5%
             body_change = (current_close - current_open) / current_open * 100
@@ -217,4 +221,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
