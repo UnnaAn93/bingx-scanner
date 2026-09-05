@@ -5,7 +5,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") # Автоматично підтягується на Render, або можна вписати вручну
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 def send_discord_alert(message):
     if not DISCORD_WEBHOOK_URL:
@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m запущено із захистом від засинання (Self-Ping активний)!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: виправлено чутливість боковиків та фільтрацію рівнів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -33,24 +33,18 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# Запускаємо вебсервер у фоновому потоці
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# Механізм самопінгу, щоб хостинг не вмикав сплячий режим
 def self_ping_worker():
-    time.sleep(10) # Чекаємо поки сервер підніметься
-    # Якщо ви знаєте точну адресу вашого сайту, можете прописати її тут замість None:
-    # app_url = "https://your-app-name.onrender.com"
+    time.sleep(10)
     app_url = RENDER_EXTERNAL_URL 
-    
     while True:
         try:
             if app_url:
                 requests.get(app_url, timeout=5)
-                print("Self-ping успішний.")
-        except Exception as e:
-            print(f"Помилка self-ping: {e}")
-        time.sleep(300) # Пінг кожні 5 хвилин
+        except:
+            pass
+        time.sleep(300)
 
 threading.Thread(target=self_ping_worker, daemon=True).start()
 
@@ -78,8 +72,7 @@ def get_top_volatile_symbols(top_n=50):
                     pass
         
         valid_tickers.sort(key=lambda x: x[1], reverse=True)
-        symbols = [item[0] for item in valid_tickers[:top_n]]
-        return symbols
+        return [item[0] for item in valid_tickers[:top_n]]
     except Exception as e:
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
@@ -97,7 +90,7 @@ def get_klines(symbol, interval="15m", limit=35):
             lows = [float(c.get("low", 0)) for c in data]
             volumes = [float(c.get("volume", 0)) for c in data]
             return closes, opens, highs, lows, volumes
-    except Exception as e:
+    except:
         pass
     return None, None, None, None, None
 
@@ -115,29 +108,31 @@ def analyze_market():
             current_close = closes[-1]
             current_open = opens[-1]
             prev_close = closes[-2]
-            
-            lookback = 15
-            resistance = max(highs[-(lookback+2):-2])
-            support = min(lows[-(lookback+2):-2])
+            current_volume = volumes[-1]
+
+            # Беремо чіткий діапазон останніх 10 свічок для локальних рівнів
+            lookback = 10
+            resistance = max(highs[-(lookback+1):-1])
+            support = min(lows[-(lookback+1):-1])
 
             alerts = []
 
-            # 1. Пробій опору / підтримки
-            if prev_close <= resistance and current_close > resistance:
+            # 1. Справжній пробій опору / підтримки (закриття тіла свічки вище/нижче рівня)
+            if prev_close <= resistance and current_close > resistance and current_close > current_open:
                 alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору ({resistance:.4f})! Ціна: {current_close}")
-            elif prev_close >= support and current_close < support:
+            elif prev_close >= support and current_close < support and current_close < current_open:
                 alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support:.4f})! Ціна: {current_close}")
 
-            # 2. Імпульси від 3%
+            # 2. Імпульси від 3.5%
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
-            if body_change >= 3.0 or step_change >= 3.0:
+            if body_change >= 3.5 or step_change >= 3.5:
                 alerts.append(f"🔥 **{symbol} (15m)**: Імпульс росту +{max(body_change, step_change):.2f}%!")
-            elif body_change <= -3.0 or step_change <= -3.0:
+            elif body_change <= -3.5 or step_change <= -3.5:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
 
-            # 3. Боковик за об'ємом
+            # 3. Виправлена зона консолідації (боковик)
             recent_highs = highs[-6:]
             recent_lows = lows[-6:]
             channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
@@ -145,7 +140,8 @@ def analyze_market():
             avg_volume_past = sum(volumes[-20:-6]) / 14 if len(volumes) >= 20 else sum(volumes) / len(volumes)
             avg_volume_recent = sum(volumes[-5:]) / 5
 
-            if channel_range <= 0.7 and avg_volume_recent < avg_volume_past * 0.5:
+            # Розширили діапазон боковика до 1.2%, щоб він не пропускав вузькі цінові канали
+            if channel_range <= 1.2 and avg_volume_recent < avg_volume_past * 0.7:
                 alerts.append(f"🛏️ **{symbol} (15m)**: Зона консолідації (боковик на знижених об'ємах {channel_range:.2f}%)")
 
             for alert in alerts:
@@ -154,23 +150,21 @@ def analyze_market():
                 time.sleep(0.4)
                 
         except Exception as e:
-            print(f"Помилка обробки {symbol}: {e}")
+            pass
             
         time.sleep(0.1)
 
     if signals_found > 0:
         send_discord_alert(f"🔄 **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
-    else:
-        print("Цикл завершено, нових сигналів немає.")
 
 def main():
     while True:
         try:
             analyze_market()
         except Exception as e:
-            print(f"Критична помилка в головному циклі: {e}")
+            print(f"Помилка: {e}")
         time.sleep(120)
 
 if __name__ == "__main__":
     main()
-    
+        
