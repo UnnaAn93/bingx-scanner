@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m (об'єми + ретести) успішно запущено!**")
+send_discord_alert("🟢 **Сканер оновлено: виправлено точність ретестів та фільтрацію!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -32,7 +32,6 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# Запуск вебсервера у фоновому потоці для підтримки активності Render
 threading.Thread(target=run_web_server, daemon=True).start()
 
 def get_top_volatile_symbols(top_n=60):
@@ -97,6 +96,7 @@ def analyze_market():
             current_high = highs[-1]
             current_low = lows[-1]
 
+            # Визначаємо свіжі рівні підтримки/опору на основі останніх 15 свічок (без зайвої історії)
             lookback = 15
             resistance = max(highs[-(lookback+2):-2])
             support = min(lows[-(lookback+2):-2])
@@ -109,10 +109,12 @@ def analyze_market():
             elif prev_close >= support and current_close < support:
                 alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support:.4f})! Ціна: {current_close}")
 
-            # 2. Ретест пробитого рівня
-            old_resistance = max(highs[-(lookback+5):-3])
-            if current_low <= old_resistance * 1.002 and current_low >= old_resistance * 0.995 and current_close > old_resistance:
-                alerts.append(f"🎯 **{symbol} (15m)**: Ретест пробитого опору ({old_resistance:.4f}) та відскік!")
+            # 2. Жорсткий точний ретест (перевіряємо попередню свічку як пробій, а поточну як точний відкат до цього рівня)
+            recent_resistance = max(highs[-8:-2]) # свіжий локальний хай
+            # Якщо 2 свічки тому був пробій, а зараз ціна опустилася до цього рівня (у межах 0.3%) і відскочила вгору
+            if closes[-3] < recent_resistance and closes[-2] >= recent_resistance:
+                if current_low <= recent_resistance * 1.003 and current_low >= recent_resistance * 0.995 and current_close > recent_resistance:
+                    alerts.append(f"🎯 **{symbol} (15m)**: Ретест свіжого опору ({recent_resistance:.4f}) та відскік!")
 
             # 3. Імпульси від 3%
             body_change = (current_close - current_open) / current_open * 100
@@ -123,7 +125,7 @@ def analyze_market():
             elif body_change <= -3.0 or step_change <= -3.0:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
 
-            # 4. Боковик за об'ємом (вузький діапазон + падіння об'ємів нижче середнього)
+            # 4. Боковик за об'ємом
             recent_highs = highs[-6:]
             recent_lows = lows[-6:]
             channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
@@ -157,4 +159,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
