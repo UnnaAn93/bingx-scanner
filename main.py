@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: прибрано хибні ретести, тільки пробої, імпульси та боковики!**")
+send_discord_alert("🟢 **Сканер 15m перезапущено у стабільному режимі (Session + Rate Limit Protection)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,10 +34,14 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-def get_top_volatile_symbols(top_n=60):
+# Створюємо сесію для переиспользования з'єднань (запобігає зависанню)
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+def get_top_volatile_symbols(top_n=50):
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
     try:
-        response = requests.get(url, timeout=5)
+        response = session.get(url, timeout=5)
         data = response.json()
         tickers = data.get("data", [])
         
@@ -58,14 +62,13 @@ def get_top_volatile_symbols(top_n=60):
         symbols = [item[0] for item in valid_tickers[:top_n]]
         return symbols
     except Exception as e:
-        print(f"Помилка отримання волатильних пар з BingX: {e}")
+        print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
 def get_klines(symbol, interval="15m", limit=35):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=3)
+        response = session.get(url, timeout=4)
         res_data = response.json()
         data = res_data.get("data", [])
         if isinstance(data, list) and len(data) > 0:
@@ -75,25 +78,25 @@ def get_klines(symbol, interval="15m", limit=35):
             lows = [float(c.get("low", 0)) for c in data]
             volumes = [float(c.get("volume", 0)) for c in data]
             return closes, opens, highs, lows, volumes
-    except:
+    except Exception as e:
         pass
     return None, None, None, None, None
 
 def analyze_market():
-    symbols = get_top_volatile_symbols(60)
+    symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
     for symbol in symbols:
         try:
             closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 35)
             if not closes or len(closes) < 15:
+                time.sleep(0.05)
                 continue
 
             current_close = closes[-1]
             current_open = opens[-1]
             prev_close = closes[-2]
             
-            # Визначаємо рівні підтримки/опору на основі останніх 15 свічок
             lookback = 15
             resistance = max(highs[-(lookback+2):-2])
             support = min(lows[-(lookback+2):-2])
@@ -115,7 +118,7 @@ def analyze_market():
             elif body_change <= -3.0 or step_change <= -3.0:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
 
-            # 3. Боковик за об'ємом (вузький діапазон + падіння об'ємів нижче середнього)
+            # 3. Боковик за об'ємом
             recent_highs = highs[-6:]
             recent_lows = lows[-6:]
             channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
@@ -129,24 +132,26 @@ def analyze_market():
             for alert in alerts:
                 send_discord_alert(alert)
                 signals_found += 1
-                time.sleep(0.3)
+                time.sleep(0.4) # Захист від спам-блокування Discord webhook
                 
         except Exception as e:
-            pass
+            print(f"Помилка обробки {symbol}: {e}")
             
-        time.sleep(0.01)
+        time.sleep(0.1) # Невеликий пауза між монетами щоб не тригерити захист біржі
 
     if signals_found > 0:
         send_discord_alert(f"🔄 **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
+    else:
+        print("Цикл завершено, нових сигналів немає.")
 
 def main():
     while True:
         try:
             analyze_market()
         except Exception as e:
-            print(f"Помилка в головному циклі: {e}")
+            print(f"Критична помилка в головному циклі: {e}")
         time.sleep(120)
 
 if __name__ == "__main__":
     main()
-    
+            
