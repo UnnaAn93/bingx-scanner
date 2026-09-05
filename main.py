@@ -16,7 +16,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер BingX оновлено: тепер пари з цифрами (як 4USDT) скануються коректно!**")
+send_discord_alert("🟢 **Сканер 15m (об'єми + ретести) успішно запущено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -32,19 +32,8 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
+# Запуск вебсервера у фоновому потоці для підтримки активності Render
 threading.Thread(target=run_web_server, daemon=True).start()
-
-def self_ping():
-    port = int(os.environ.get("PORT", 10000))
-    url = f"http://127.0.0.1:{port}"
-    while True:
-        try:
-            requests.get(url, timeout=3)
-        except:
-            pass
-        time.sleep(300)
-
-threading.Thread(target=self_ping, daemon=True).start()
 
 def get_top_volatile_symbols(top_n=60):
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
@@ -58,7 +47,6 @@ def get_top_volatile_symbols(top_n=60):
             sym = t.get("symbol", "")
             if sym.endswith("-USDT"):
                 base_part = sym.split("-")[0]
-                # Відсіюємо лише індексне сміття з "2USD" у назві, але залишаємо 4USDT, 1000PEPE тощо
                 if "2USD" in base_part:
                     continue
                 try:
@@ -74,7 +62,7 @@ def get_top_volatile_symbols(top_n=60):
         print(f"Помилка отримання волатильних пар з BingX: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=30):
+def get_klines(symbol, interval="15m", limit=35):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -86,10 +74,11 @@ def get_klines(symbol, interval="15m", limit=30):
             opens = [float(c.get("open", 0)) for c in data]
             highs = [float(c.get("high", 0)) for c in data]
             lows = [float(c.get("low", 0)) for c in data]
-            return closes, opens, highs, lows
+            volumes = [float(c.get("volume", 0)) for c in data]
+            return closes, opens, highs, lows, volumes
     except:
         pass
-    return None, None, None, None
+    return None, None, None, None, None
 
 def analyze_market():
     symbols = get_top_volatile_symbols(60)
@@ -97,58 +86,53 @@ def analyze_market():
 
     for symbol in symbols:
         try:
-            closes, opens, highs, lows = get_klines(symbol, "15m", 30)
-            if not closes or len(closes) < 10:
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 35)
+            if not closes or len(closes) < 15:
                 continue
 
             current_close = closes[-1]
             current_open = opens[-1]
             prev_close = closes[-2]
-            prev2_close = closes[-3]
             
             current_high = highs[-1]
-            prev_high = highs[-2]
-            prev2_high = highs[-3]
-            
             current_low = lows[-1]
-            prev_low = lows[-2]
 
-            lookback = min(15, len(closes) - 2)
-            resistance = max(highs[-(lookback+1):-1])
-            support = min(lows[-(lookback+1):-1])
+            lookback = 15
+            resistance = max(highs[-(lookback+2):-2])
+            support = min(lows[-(lookback+2):-2])
 
             alerts = []
 
+            # 1. Пробій опору / підтримки
             if prev_close <= resistance and current_close > resistance:
-                alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору ({resistance})! Ціна: {current_close}")
+                alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору ({resistance:.4f})! Ціна: {current_close}")
             elif prev_close >= support and current_close < support:
-                alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support})! Ціна: {current_close}")
-            
-            elif current_high > resistance and current_close <= resistance:
-                alerts.append(f"🎣 **{symbol} (15m)**: Зняття ліквідності зверху (вище {resistance})")
-            elif current_low < support and current_close >= support:
-                alerts.append(f"🎣 **{symbol} (15m)**: Зняття ліквідності знизу (нижче {support})")
+                alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки ({support:.4f})! Ціна: {current_close}")
 
+            # 2. Ретест пробитого рівня
+            old_resistance = max(highs[-(lookback+5):-3])
+            if current_low <= old_resistance * 1.002 and current_low >= old_resistance * 0.995 and current_close > old_resistance:
+                alerts.append(f"🎯 **{symbol} (15m)**: Ретест пробитого опору ({old_resistance:.4f}) та відскік!")
+
+            # 3. Імпульси від 3%
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
             if body_change >= 3.0 or step_change >= 3.0:
-                alerts.append(f"🔥 **{symbol} (15m)**: Імпульс росту +{max(body_change, step_change):.2f}%! Ціна: {current_close}")
+                alerts.append(f"🔥 **{symbol} (15m)**: Імпульс росту +{max(body_change, step_change):.2f}%!")
             elif body_change <= -3.0 or step_change <= -3.0:
-                alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%! Ціна: {current_close}")
+                alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
 
-            if (current_close > prev_close and prev_close > prev2_close) and \
-               (current_high > prev_high and prev_high > prev2_high) and \
-               (current_low > prev_low):
-                trend_change = (current_close - prev2_close) / prev2_close * 100
-                if trend_change >= 2.0:
-                    alerts.append(f"📈 **{symbol} (15m)**: Тренд HH/HL +{trend_change:.2f}%! Ціна: {current_close}")
+            # 4. Боковик за об'ємом (вузький діапазон + падіння об'ємів нижче середнього)
+            recent_highs = highs[-6:]
+            recent_lows = lows[-6:]
+            channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
+            
+            avg_volume_past = sum(volumes[-20:-6]) / 14 if len(volumes) >= 20 else sum(volumes) / len(volumes)
+            avg_volume_recent = sum(volumes[-5:]) / 5
 
-            flat_highs = highs[-6:]
-            flat_lows = lows[-6:]
-            channel_range = (max(flat_highs) - min(flat_lows)) / current_close * 100
-            if channel_range <= 0.8:
-                alerts.append(f"🛏️ **{symbol} (15m)**: Боковик / Консолідація в коридорі {channel_range:.2f}%")
+            if channel_range <= 0.7 and avg_volume_recent < avg_volume_past * 0.5:
+                alerts.append(f"🛏️ **{symbol} (15m)**: Зона консолідації (боковик на знижених об'ємах {channel_range:.2f}%)")
 
             for alert in alerts:
                 send_discord_alert(alert)
