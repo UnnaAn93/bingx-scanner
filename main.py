@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: рівні тільки по тілах свічок + фільтр об'ємів на пробій!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: інтегровано розрахунок проторгованих об'ємів (Volume Profile / POC)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -94,6 +94,50 @@ def get_klines(symbol, interval="15m", limit=35):
         pass
     return None, None, None, None, None
 
+def calculate_volume_profile(highs, lows, volumes, bins=15):
+    """Будує примітивний профіль об'ємів для знаходження POC та границь зони інтересу"""
+    if not highs or not lows or not volumes:
+        return None, None, None
+    
+    min_price = min(lows)
+    max_price = max(highs)
+    if min_price == max_price:
+        return min_price, min_price, max_price
+
+    step = (max_price - min_price) / bins
+    price_bins = [min_price + i * step for i in range(bins + 1)]
+    bin_volumes = [0.0] * bins
+
+    # Розподіляємо об'єм кожної свічки по цінових бінах
+    for h, l, v in zip(highs, lows, volumes):
+        if h == l:
+            continue
+        for i in range(bins):
+            b_low = price_bins[i]
+            b_high = price_bins[i+1]
+            # Перетин свічки з ціновим діапазоном біна
+            overlap_low = max(l, b_low)
+            overlap_high = min(h, b_high)
+            if overlap_low < overlap_high:
+                fraction = (overlap_high - overlap_low) / (h - l)
+                bin_volumes[i] += v * fraction
+
+    # Знаходимо POC (бін з максимальним об'ємом)
+    max_vol_idx = bin_volumes.index(max(bin_volumes))
+    poc_price = (price_bins[max_vol_idx] + price_bins[max_vol_idx+1]) / 2
+
+    # Визначаємо межі активного торгової зони (Value Area / Рендж по об'ємах)
+    box_low = price_bins[0]
+    box_high = price_bins[-1]
+    
+    # Шукаємо реально заторговану зону (відкидаємо крайні пусті хвости)
+    active_bins = [i for i, vol in enumerate(bin_volumes) if vol > (max(bin_volumes) * 0.15)]
+    if active_bins:
+        box_low = price_bins[min(active_bins)]
+        box_high = price_bins[max(active_bins) + 1]
+
+    return poc_price, box_low, box_high
+
 def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
@@ -101,7 +145,7 @@ def analyze_market():
     for symbol in symbols:
         try:
             closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 35)
-            if not closes or len(closes) < 15:
+            if not closes or len(closes) < 20:
                 time.sleep(0.05)
                 continue
 
@@ -110,25 +154,38 @@ def analyze_market():
             prev_close = closes[-2]
             current_volume = volumes[-1]
 
-            # Рахуємо середній об'єм за попередні свічки
-            avg_volume = sum(volumes[-20:-1]) / 19 if len(volumes) >= 20 else sum(volumes) / len(volumes)
+            avg_volume = sum(volumes[-25:-1]) / 24 if len(volumes) >= 25 else sum(volumes) / len(volumes)
 
-            # Визначаємо рівні за ТІЛАМИ свічок (max/min з open та close), виключаючи шпильки
-            body_highs = [max(o, c) for o, c in zip(opens[-(11):-1], closes[-(11):-1])]
-            body_lows = [min(o, c) for o, c in zip(opens[-(11):-1], closes[-(11):-1])]
-            
-            resistance = max(body_highs)
-            support = min(body_lows)
+            # Беремо останні 20 свічок для побудови профілю об'ємів боковика
+            p_highs = highs[-21:-1]
+            p_lows = lows[-21:-1]
+            p_vols = volumes[-21:-1]
 
+            poc, box_bottom, box_top = calculate_volume_profile(p_highs, p_lows, p_vols)
+            if not poc:
+                continue
+
+            box_width_pct = (box_top - box_bottom) / current_close * 100
             alerts = []
 
-            # 1. Пробій опору / підтримки (тільки по тілах + підтвердження об'ємом вище середнього)
-            if prev_close <= resistance and current_close > resistance and current_close > current_open and current_volume > avg_volume * 1.3:
-                alerts.append(f"🚀 **{symbol} (15m)**: Пробій опору тілом ({resistance:.4f}) на об'ємі! Ціна: {current_close}")
-            elif prev_close >= support and current_close < support and current_close < current_open and current_volume > avg_volume * 1.3:
-                alerts.append(f"⚠️ **{symbol} (15m)**: Пробій підтримки тілом ({support:.4f}) на об'ємі! Ціна: {current_close}")
+            # Перевіряємо, чи є це сформованим діапазоном (боковиком) за об'ємами
+            is_consolidation = box_width_pct <= 4.0
 
-            # 2. Імпульси від 3.5%
+            if is_consolidation:
+                # Зона консолідації навколо POC
+                recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
+                if recent_channel <= 1.8 and current_volume < avg_volume * 0.9:
+                    alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f} (ширина {box_width_pct:.2f}%)")
+                
+                # Вихід з наторгованого боковика ВГОРУ
+                elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.3:
+                    alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ вище об'ємів ({box_top:.4f})! Ціна: {current_close}")
+
+                # Вихід з наторгованого боковика ВНИЗ 
+                elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.3:
+                    alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ нижче об'ємів ({box_bottom:.4f})! Ціна: {current_close}")
+
+            # Імпульси від 3.5%
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -136,14 +193,6 @@ def analyze_market():
                 alerts.append(f"🔥 **{symbol} (15m)**: Імпульс росту +{max(body_change, step_change):.2f}%!")
             elif body_change <= -3.5 or step_change <= -3.5:
                 alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
-
-            # 3. Стабільна зона консолідації (боковик) по останніх 5 свічках
-            recent_highs = highs[-5:]
-            recent_lows = lows[-5:]
-            channel_range = (max(recent_highs) - min(recent_lows)) / current_close * 100
-
-            if channel_range <= 1.0 and current_volume < avg_volume * 0.8:
-                alerts.append(f"🛏️ **{symbol} (15m)**: Зона консолідації (боковик {channel_range:.2f}% на падінні об'ємів)")
 
             for alert in alerts:
                 send_discord_alert(alert)
