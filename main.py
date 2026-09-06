@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: перейшли на чітке закріплення тілом за попереднім максимумом/мінімумом!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: розширено вікна боковиків до 40 свічок із суворим контролем ширини!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -77,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=40):
+def get_klines(symbol, interval="15m", limit=50):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -98,13 +98,14 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
-    # Довгі вікна залишаємо виключно для пошуку боковиків
-    BOX_LENGTHS = [21, 25, 30, 35]
+    # Розширений діапазон вікон для пошуку боковиків (включно з довгими базами)
+    BOX_LENGTHS = [15, 20, 25, 30, 40]
 
     for symbol in symbols:
         try:
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 45)
-            if not closes or len(closes) < 15:
+            # Завантажуємо більше історії (50 свічок), щоб вистачило на вікно 40
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 50)
+            if not closes or len(closes) < 45:
                 time.sleep(0.05)
                 continue
 
@@ -116,63 +117,46 @@ def analyze_market():
             alerts = []
             signal_triggered = False
 
-            # 1. Перевірка закріплення тілом вище/нижче попереднього локального максимуму/мінімуму (беремо діапазон 6 свічок назад)
-            recent_highs = highs[-7:-1] # максимуми попередніх свічок
-            recent_lows = lows[-7:-1]   # мінімуми попередніх свічок
-            prev_max = max(recent_highs)
-            prev_min = min(recent_lows)
+            # Шукаємо чіткий вихід (пробій) із боковика різної довжини
+            for L in BOX_LENGTHS:
+                if len(closes) < L + 2:
+                    continue
 
-            recent_vols = volumes[-7:-1]
-            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
+                window_highs = highs[-(L+1):-1]
+                window_lows = lows[-(L+1):-1]
+                window_vols = volumes[-(L+1):-1]
 
-            # Закріплення тілом вище попереднього максимуму (пробій вгору)
-            if current_close > prev_max and prev_close <= prev_max and current_volume >= avg_vol * 1.1:
-                alerts.append(f"📈 **{symbol} (15m)**: **Закріплення вище максимуму** ({prev_max:.4f})!")
-                signal_triggered = True
+                box_top = max(window_highs)
+                box_bottom = min(window_lows)
+                box_width_pct = (box_top - box_bottom) / current_close * 100
+                avg_box_vol = sum(window_vols) / len(window_vols)
 
-            # Закріплення тілом нижче попереднього мінімуму (пробій вниз)
-            elif current_close < prev_min and prev_close >= prev_min and current_volume >= avg_vol * 1.1:
-                alerts.append(f"📉 **{symbol} (15m)**: **Закріплення нижче мінімуму** ({prev_min:.4f})!")
-                signal_triggered = True
+                # Жорстка умова: боковик має бути вузьким (до 5.5% ширини)
+                if box_width_pct <= 5.5:
+                    # Пробій межі боковика ВГОРУ тілом свічки на об'ємі
+                    if prev_close <= box_top and current_close > box_top and current_volume >= avg_box_vol * 1.2:
+                        alerts.append(f"🚀 **{symbol} (15m)**: **Вихід з боковика ВГОРУ** (вікно {L}, межа {box_top:.4f})! Об'єм підтверджено.")
+                        signal_triggered = True
+                        break
+                    # Пробій межі боковика ВНИЗ тілом свічки на об'ємі
+                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume >= avg_box_vol * 1.2:
+                        alerts.append(f"⚠️ **{symbol} (15m)**: **Вихід з боковика ВНИЗ** (вікно {L}, межа {box_bottom:.4f})! Об'єм підтверджено.")
+                        signal_triggered = True
+                        break
 
-            # 2. Пошук боковиків на старших вікнах (тільки якщо не спрацював пробій)
-            if not signal_triggered:
-                for L in BOX_LENGTHS:
-                    if len(closes) < L + 2:
-                        continue
+            # Чіткий трендовий пробій локального максимуму/мінімуму (попередні 6 свічок) без боковика
+            if not signal_triggered and len(highs) >= 8:
+                local_max = max(highs[-7:-1])
+                local_min = min(lows[-7:-1])
+                recent_vols = volumes[-7:-1]
+                avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
-                    window_highs = highs[-(L+1):-1]
-                    window_lows = lows[-(L+1):-1]
-                    window_vols = volumes[-(L+1):-1]
-
-                    box_top = max(window_highs)
-                    box_bottom = min(window_lows)
-                    box_width_pct = (box_top - box_bottom) / current_close * 100
-                    avg_box_vol = sum(window_vols) / len(window_vols)
-
-                    if box_width_pct <= 7.0:
-                        recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
-                        if recent_channel <= 2.5:
-                            alerts.append(f"🛏️ **{symbol} (15m)**: Формування боковика (вікно {L}), межі [{box_bottom:.4f} - {box_top:.4f}]")
-                            signal_triggered = True
-                            break
-                        elif prev_close <= box_top and current_close > box_top and current_volume >= avg_box_vol * 1.15:
-                            alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f}) [вікно {L}]!")
-                            signal_triggered = True
-                            break
-                        elif prev_close >= box_bottom and current_close < box_bottom and current_volume >= avg_box_vol * 1.15:
-                            alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f}) [вікно {L}]!")
-                            signal_triggered = True
-                            break
-
-            # Загальні імпульси
-            body_change = (current_close - current_open) / current_open * 100
-            step_change = (current_close - prev_close) / prev_close * 100
-
-            if body_change >= 3.5 or step_change >= 3.5:
-                alerts.append(f"🔥 **{symbol} (15m)**: Імпульс росту +{max(body_change, step_change):.2f}%!")
-            elif body_change <= -3.5 or step_change <= -3.5:
-                alerts.append(f"🩸 **{symbol} (15m)**: Дамп {min(body_change, step_change):.2f}%!")
+                if current_close > local_max and prev_close <= local_max and current_volume >= avg_vol * 1.25:
+                    alerts.append(f"📈 **{symbol} (15m)**: **Пробій локального тренду вгору** (опір {local_max:.4f})!")
+                    signal_triggered = True
+                elif current_close < local_min and prev_close >= local_min and current_volume >= avg_vol * 1.25:
+                    alerts.append(f"📉 **{symbol} (15m)**: **Пробій локального тренду вниз** (підтримка {local_min:.4f})!")
+                    signal_triggered = True
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -197,4 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+            
