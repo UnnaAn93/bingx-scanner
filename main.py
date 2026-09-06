@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: розширено вікна боковиків до 40 свічок із суворим контролем ширини!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: переключено на пошук зламу структури (BOS) та ретесту рівнів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -77,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=50):
+def get_klines(symbol, interval="15m", limit=40):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -98,65 +98,37 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
-    # Розширений діапазон вікон для пошуку боковиків (включно з довгими базами)
-    BOX_LENGTHS = [15, 20, 25, 30, 40]
-
     for symbol in symbols:
         try:
-            # Завантажуємо більше історії (50 свічок), щоб вистачило на вікно 40
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 50)
-            if not closes or len(closes) < 45:
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 40)
+            if not closes or len(closes) < 30:
                 time.sleep(0.05)
                 continue
 
             current_close = closes[-1]
-            current_open = opens[-1]
             prev_close = closes[-2]
             current_volume = volumes[-1]
 
+            # Визначаємо ключовий структурний максимум і мінімум попереднього діапазону (наприклад, останні 20 свічок до останніх двох)
+            structure_highs = highs[p: -2] if len(highs) > 22 else highs[:-2]
+            structure_lows = lows[:-2]
+
+            struct_resistance = max(highs[-25:-2])
+            struct_support = min(lows[-25:-2])
+
+            recent_vols = volumes[-25:-2]
+            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
+
             alerts = []
-            signal_triggered = False
 
-            # Шукаємо чіткий вихід (пробій) із боковика різної довжини
-            for L in BOX_LENGTHS:
-                if len(closes) < L + 2:
-                    continue
-
-                window_highs = highs[-(L+1):-1]
-                window_lows = lows[-(L+1):-1]
-                window_vols = volumes[-(L+1):-1]
-
-                box_top = max(window_highs)
-                box_bottom = min(window_lows)
-                box_width_pct = (box_top - box_bottom) / current_close * 100
-                avg_box_vol = sum(window_vols) / len(window_vols)
-
-                # Жорстка умова: боковик має бути вузьким (до 5.5% ширини)
-                if box_width_pct <= 5.5:
-                    # Пробій межі боковика ВГОРУ тілом свічки на об'ємі
-                    if prev_close <= box_top and current_close > box_top and current_volume >= avg_box_vol * 1.2:
-                        alerts.append(f"🚀 **{symbol} (15m)**: **Вихід з боковика ВГОРУ** (вікно {L}, межа {box_top:.4f})! Об'єм підтверджено.")
-                        signal_triggered = True
-                        break
-                    # Пробій межі боковика ВНИЗ тілом свічки на об'ємі
-                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume >= avg_box_vol * 1.2:
-                        alerts.append(f"⚠️ **{symbol} (15m)**: **Вихід з боковика ВНИЗ** (вікно {L}, межа {box_bottom:.4f})! Об'єм підтверджено.")
-                        signal_triggered = True
-                        break
-
-            # Чіткий трендовий пробій локального максимуму/мінімуму (попередні 6 свічок) без боковика
-            if not signal_triggered and len(highs) >= 8:
-                local_max = max(highs[-7:-1])
-                local_min = min(lows[-7:-1])
-                recent_vols = volumes[-7:-1]
-                avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
-
-                if current_close > local_max and prev_close <= local_max and current_volume >= avg_vol * 1.25:
-                    alerts.append(f"📈 **{symbol} (15m)**: **Пробій локального тренду вгору** (опір {local_max:.4f})!")
-                    signal_triggered = True
-                elif current_close < local_min and prev_close >= local_min and current_volume >= avg_vol * 1.25:
-                    alerts.append(f"📉 **{symbol} (15m)**: **Пробій локального тренду вниз** (підтримка {local_min:.4f})!")
-                    signal_triggered = True
+            # 1. Злам структури вгору (Break of Structure / Зміна тренду на лонг):
+            # Ціна пробила попередній ключовий опір тілом і закріпилася вище нього або робить аккуратний ретест
+            if prev_close > struct_resistance and current_close >= struct_resistance and current_volume >= avg_vol * 1.2:
+                alerts.append(f"🚀 **{symbol} (15m)**: **Злам структури ВГОРУ (BOS)** (рівень {struct_resistance:.4f})! Закріплення та ретест.")
+            
+            # 2. Злам структури вниз (Зміна тренду на шорт):
+            elif prev_close < struct_support and current_close <= struct_support and current_volume >= avg_vol * 1.2:
+                alerts.append(f"⚠️ **{symbol} (15m)**: **Злам структури ВНИЗ (BOS)** (рівень {struct_support:.4f})! Пробій підтримки.")
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -169,7 +141,7 @@ def analyze_market():
         time.sleep(0.1)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено структурних сигналів: {signals_found}")
 
 def main():
     while True:
@@ -181,4 +153,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
