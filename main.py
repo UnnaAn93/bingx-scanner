@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: переключено на пошук зламу структури (BOS) та ретесту рівнів!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: переключено на торгову логіку по ковзній середній (EMA 20) + об'єм!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -94,6 +94,15 @@ def get_klines(symbol, interval="15m", limit=40):
         pass
     return None, None, None, None, None
 
+def calculate_ema(data, period=20):
+    if len(data) < period:
+        return []
+    multiplier = 2 / (period + 1)
+    ema = [sum(data[:period]) / period]
+    for price in data[period:]:
+        ema.append((price - ema[-1]) * multiplier + ema[-1])
+    return [None] * (period - 1) + ema
+
 def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
@@ -105,30 +114,28 @@ def analyze_market():
                 time.sleep(0.05)
                 continue
 
+            ema20 = calculate_ema(closes, 20)
+            if not ema20 or len(ema20) < 3 or ema20[-1] is None or ema20[-2] is None:
+                continue
+
             current_close = closes[-1]
             prev_close = closes[-2]
+            current_ema = ema20[-1]
+            prev_ema = ema20[-2]
+            
             current_volume = volumes[-1]
-
-            # Визначаємо ключовий структурний максимум і мінімум попереднього діапазону (наприклад, останні 20 свічок до останніх двох)
-            structure_highs = highs[p: -2] if len(highs) > 22 else highs[:-2]
-            structure_lows = lows[:-2]
-
-            struct_resistance = max(highs[-25:-2])
-            struct_support = min(lows[-25:-2])
-
-            recent_vols = volumes[-25:-2]
+            recent_vols = volumes[-15:-1]
             avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
             alerts = []
 
-            # 1. Злам структури вгору (Break of Structure / Зміна тренду на лонг):
-            # Ціна пробила попередній ключовий опір тілом і закріпилася вище нього або робить аккуратний ретест
-            if prev_close > struct_resistance and current_close >= struct_resistance and current_volume >= avg_vol * 1.2:
-                alerts.append(f"🚀 **{symbol} (15m)**: **Злам структури ВГОРУ (BOS)** (рівень {struct_resistance:.4f})! Закріплення та ретест.")
-            
-            # 2. Злам структури вниз (Зміна тренду на шорт):
-            elif prev_close < struct_support and current_close <= struct_support and current_volume >= avg_vol * 1.2:
-                alerts.append(f"⚠️ **{symbol} (15m)**: **Злам структури ВНИЗ (BOS)** (рівень {struct_support:.4f})! Пробій підтримки.")
+            # 1. Перетин EMA 20 знизу вгору (Сигнал на лонг) на об'ємі
+            if prev_close <= prev_ema and current_close > current_ema and current_volume >= avg_vol * 1.25:
+                alerts.append(f"🚀 **{symbol} (15m)**: **Пробій EMA 20 ВГОРУ** (ціна {current_close:.4f}, EMA {current_ema:.4f})! Імпульс на об'ємі.")
+
+            # 2. Перетин EMA 20 зверху вниз (Сигнал на шорт) на об'ємі
+            elif prev_close >= prev_ema and current_close < current_ema and current_volume >= avg_vol * 1.25:
+                alerts.append(f"⚠️ **{symbol} (15m)**: **Пробій EMA 20 ВНИЗ** (ціна {current_close:.4f}, EMA {current_ema:.4f})! Шортовий імпульс.")
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -141,7 +148,7 @@ def analyze_market():
         time.sleep(0.1)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено структурних сигналів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено EMA-сигналів: {signals_found}")
 
 def main():
     while True:
