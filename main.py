@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: покращено детекцію боковиків та рівних об'ємів!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: додано фільтр контексту (ігнорування боковиків після різких дампів/падінь)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -193,10 +193,9 @@ def analyze_market():
                     signal_triggered = True
                     break
 
-                # 3. Боковики та виходи з них (покращена умова для стабільних об'ємів)
-                elif box_width_pct <= 4.0:
+                # 3. Боковики та виходи з них (тільки якщо НЕ було різкого імпульсу/дампу перед цим)
+                elif box_width_pct <= 4.0 and abs(trend_prior_growth) < 2.5:
                     recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
-                    # Фіксуємо боковик навіть при рівних/стабільних об'ємах у діапазоні
                     if recent_channel <= 2.0:
                         alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f} (вікно {L})")
                         signal_triggered = True
@@ -242,4 +241,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+                    
