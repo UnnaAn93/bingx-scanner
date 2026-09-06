@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: динамічний аналіз історії від 21 свічки і вище!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: покращено детекцію боковиків та рівних об'ємів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -136,12 +136,10 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
-    # Набір варіантів глибини історії від 21 і вище
     SCAN_LENGTHS = [21, 25, 30, 35]
 
     for symbol in symbols:
         try:
-            # Завантажуємо максимум свічок для найдовшого періоду
             max_len = max(SCAN_LENGTHS) + 15
             closes, opens, highs, lows, volumes = get_klines(symbol, "15m", max_len)
             if not closes or len(closes) < min(SCAN_LENGTHS) + 5:
@@ -156,7 +154,6 @@ def analyze_market():
             alerts = []
             signal_triggered = False
 
-            # Перебираємо різні варіанти глибини історії (від 21 і вище)
             for L in SCAN_LENGTHS:
                 if len(closes) < L + 5:
                     continue
@@ -196,23 +193,24 @@ def analyze_market():
                     signal_triggered = True
                     break
 
-                # 3. Боковики та виходи з них
-                elif box_width_pct <= 3.5:
+                # 3. Боковики та виходи з них (покращена умова для стабільних об'ємів)
+                elif box_width_pct <= 4.0:
                     recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
-                    if recent_channel <= 1.5 and current_volume < avg_volume * 0.85:
+                    # Фіксуємо боковик навіть при рівних/стабільних об'ємах у діапазоні
+                    if recent_channel <= 2.0:
                         alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f} (вікно {L})")
                         signal_triggered = True
                         break
-                    elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.3:
+                    elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.2:
                         alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f}) [вікно {L}]!")
                         signal_triggered = True
                         break
-                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.3:
+                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.2:
                         alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f}) [вікно {L}]!")
                         signal_triggered = True
                         break
 
-            # Загальні імпульси (не залежать від історії профілю)
+            # Загальні імпульси
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -244,4 +242,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                
