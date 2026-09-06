@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: виправлено логіку трендів та іконки!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: перейшли на чітке закріплення тілом за попереднім максимумом/мінімумом!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -77,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=50):
+def get_klines(symbol, interval="15m", limit=40):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -98,13 +98,13 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
-    SCAN_LENGTHS = [21, 25, 30, 35]
+    # Довгі вікна залишаємо виключно для пошуку боковиків
+    BOX_LENGTHS = [21, 25, 30, 35]
 
     for symbol in symbols:
         try:
-            max_len = max(SCAN_LENGTHS) + 15
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", max_len)
-            if not closes or len(closes) < min(SCAN_LENGTHS) + 5:
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 45)
+            if not closes or len(closes) < 15:
                 time.sleep(0.05)
                 continue
 
@@ -116,64 +116,54 @@ def analyze_market():
             alerts = []
             signal_triggered = False
 
-            for L in SCAN_LENGTHS:
-                if len(closes) < L + 5:
-                    continue
+            # 1. Перевірка закріплення тілом вище/нижче попереднього локального максимуму/мінімуму (беремо діапазон 6 свічок назад)
+            recent_highs = highs[-7:-1] # максимуми попередніх свічок
+            recent_lows = lows[-7:-1]   # мінімуми попередніх свічок
+            prev_max = max(recent_highs)
+            prev_min = min(recent_lows)
 
-                window_closes = closes[-(L+1):-1]
-                window_highs = highs[-(L+1):-1]
-                window_lows = lows[-(L+1):-1]
-                window_vols = volumes[-(L+1):-1]
+            recent_vols = volumes[-7:-1]
+            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
-                avg_volume = sum(window_vols) / len(window_vols)
+            # Закріплення тілом вище попереднього максимуму (пробій вгору)
+            if current_close > prev_max and prev_close <= prev_max and current_volume >= avg_vol * 1.1:
+                alerts.append(f"📈 **{symbol} (15m)**: **Закріплення вище максимуму** ({prev_max:.4f})!")
+                signal_triggered = True
 
-                half_l = L // 2
-                first_half_avg = sum(window_closes[:half_l]) / half_l
-                second_half_avg = sum(window_closes[half_l:]) / (len(window_closes) - half_l)
-                trend_shift_pct = (second_half_avg - first_half_avg) / first_half_avg * 100
+            # Закріплення тілом нижче попереднього мінімуму (пробій вниз)
+            elif current_close < prev_min and prev_close >= prev_min and current_volume >= avg_vol * 1.1:
+                alerts.append(f"📉 **{symbol} (15m)**: **Закріплення нижче мінімуму** ({prev_min:.4f})!")
+                signal_triggered = True
 
-                box_top = max(window_highs)
-                box_bottom = min(window_lows)
-                box_width_pct = (box_top - box_bottom) / current_close * 100
+            # 2. Пошук боковиків на старших вікнах (тільки якщо не спрацював пробій)
+            if not signal_triggered:
+                for L in BOX_LENGTHS:
+                    if len(closes) < L + 2:
+                        continue
 
-                local_resistance = max(window_highs[-8:])
-                local_support = min(window_lows[-8:])
+                    window_highs = highs[-(L+1):-1]
+                    window_lows = lows[-(L+1):-1]
+                    window_vols = volumes[-(L+1):-1]
 
-                # 1. Визначення продовження тренду
-                if trend_shift_pct >= 2.5 and current_close > local_resistance and current_volume >= avg_volume * 1.1:
-                    alerts.append(f"📈 **{symbol} (15m)**: **Продовження тренду вгору** (вікно {L})! Пробій {local_resistance:.4f}.")
-                    signal_triggered = True
-                    break
-                elif trend_shift_pct <= -2.5 and current_close < local_support and current_volume >= avg_volume * 1.1:
-                    alerts.append(f"📉 **{symbol} (15m)**: **Продовження тренду вниз** (вікно {L})! Пробій {local_support:.4f}.")
-                    signal_triggered = True
-                    break
+                    box_top = max(window_highs)
+                    box_bottom = min(window_lows)
+                    box_width_pct = (box_top - box_bottom) / current_close * 100
+                    avg_box_vol = sum(window_vols) / len(window_vols)
 
-                # 2. Визначення зміни тренду / розвороту (іконка ⚡)
-                elif trend_shift_pct <= -1.5 and current_close > local_resistance and current_volume >= avg_volume * 1.2:
-                    alerts.append(f"⚡ **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вгору)** (вікно {L}) через опір {local_resistance:.4f}.")
-                    signal_triggered = True
-                    break
-                elif trend_shift_pct >= 1.5 and current_close < local_support and current_volume >= avg_volume * 1.2:
-                    alerts.append(f"⚡ **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вниз)** (вікно {L}) через підтримку {local_support:.4f}.")
-                    signal_triggered = True
-                    break
-
-                # 3. Боковики та виходи з них
-                elif box_width_pct <= 7.0:
-                    recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
-                    if recent_channel <= 2.5 and abs(trend_shift_pct) < 3.0:
-                        alerts.append(f"🛏️ **{symbol} (15m)**: Формування боковика (вікно {L}), межі [{box_bottom:.4f} - {box_top:.4f}]")
-                        signal_triggered = True
-                        break
-                    elif prev_close <= box_top and current_close > box_top and current_volume >= avg_volume * 1.15:
-                        alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f}) [вікно {L}]!")
-                        signal_triggered = True
-                        break
-                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume >= avg_volume * 1.15:
-                        alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f}) [вікно {L}]!")
-                        signal_triggered = True
-                        break
+                    if box_width_pct <= 7.0:
+                        recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
+                        if recent_channel <= 2.5:
+                            alerts.append(f"🛏️ **{symbol} (15m)**: Формування боковика (вікно {L}), межі [{box_bottom:.4f} - {box_top:.4f}]")
+                            signal_triggered = True
+                            break
+                        elif prev_close <= box_top and current_close > box_top and current_volume >= avg_box_vol * 1.15:
+                            alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f}) [вікно {L}]!")
+                            signal_triggered = True
+                            break
+                        elif prev_close >= box_bottom and current_close < box_bottom and current_volume >= avg_box_vol * 1.15:
+                            alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f}) [вікно {L}]!")
+                            signal_triggered = True
+                            break
 
             # Загальні імпульси
             body_change = (current_close - current_open) / current_open * 100
@@ -207,4 +197,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-              
+                
