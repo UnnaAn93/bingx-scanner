@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: додано детектор продовження тренду, зміни тренду та Volume Profile!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: динамічний аналіз історії від 21 свічки і вище!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -77,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=35):
+def get_klines(symbol, interval="15m", limit=50):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -136,10 +136,15 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
+    # Набір варіантів глибини історії від 21 і вище
+    SCAN_LENGTHS = [21, 25, 30, 35]
+
     for symbol in symbols:
         try:
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 35)
-            if not closes or len(closes) < 25:
+            # Завантажуємо максимум свічок для найдовшого періоду
+            max_len = max(SCAN_LENGTHS) + 15
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", max_len)
+            if not closes or len(closes) < min(SCAN_LENGTHS) + 5:
                 time.sleep(0.05)
                 continue
 
@@ -148,48 +153,66 @@ def analyze_market():
             prev_close = closes[-2]
             current_volume = volumes[-1]
 
-            avg_volume = sum(volumes[-25:-1]) / 24 if len(volumes) >= 25 else sum(volumes) / len(volumes)
-
-            p_highs = highs[-21:-1]
-            p_lows = lows[-21:-1]
-            p_vols = volumes[-21:-1]
-
-            poc, box_bottom, box_top = calculate_volume_profile(p_highs, p_lows, p_vols)
-            if not poc:
-                continue
-
-            box_width_pct = (box_top - box_bottom) / current_close * 100
             alerts = []
+            signal_triggered = False
 
-            # 1. Перевірка боковиків та виходів з них за об'ємами
-            is_consolidation = box_width_pct <= 4.0
-            if is_consolidation:
-                recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
-                if recent_channel <= 1.8 and current_volume < avg_volume * 0.9:
-                    alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f}")
-                elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.3:
-                    alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f})! Ціна: {current_close}")
-                elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.3:
-                    alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f})! Ціна: {current_close}")
+            # Перебираємо різні варіанти глибини історії (від 21 і вище)
+            for L in SCAN_LENGTHS:
+                if len(closes) < L + 5:
+                    continue
 
-            # 2. Детектор зміни тренду (Злам структури / CHOCH)
-            local_support = min(lows[-6:-2])
-            local_resistance = max(highs[-6:-2])
-            
-            if current_close < local_support and current_volume > avg_volume * 1.4:
-                alerts.append(f"🔄 **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вниз)**! Пробито підтримку {local_support:.4f}")
+                avg_volume = sum(volumes[-(L+1):-1]) / L
+                p_highs = highs[-(L+1):-1]
+                p_lows = lows[-(L+1):-1]
+                p_vols = volumes[-(L+1):-1]
 
-            # 3. Детектор продовження тренду (Trend Continuation)
-            # Якщо попередні свічки задавали загальний ріст (наприклад за останні 6 свічок ціна виросла на > 3%),
-            # і зараз ціна пробиває локальний опір на об'ємі вище середнього — це чисте продовження висхідного тренду.
-            trend_prior_growth = (closes[-6] - closes[-12]) / closes[-12] * 100 if len(closes) >= 12 else 0
-            
-            if trend_prior_growth >= 3.0 and current_close > local_resistance and current_volume > avg_volume * 1.2:
-                alerts.append(f"📈 **{symbol} (15m)**: **Продовження висхідного тренду**! Пробій опору {local_resistance:.4f} на об'ємі.")
-            elif trend_prior_growth <= -3.0 and current_close < local_support and current_volume > avg_volume * 1.2:
-                alerts.append(f"📉 **{symbol} (15m)**: **Продовження низхідного тренду**! Пробій підтримки {local_support:.4f} на об'ємі.")
+                poc, box_bottom, box_top = calculate_volume_profile(p_highs, p_lows, p_vols)
+                if not poc:
+                    continue
 
-            # Імпульси від 3.5%
+                box_width_pct = (box_top - box_bottom) / current_close * 100
+
+                local_resistance = max(highs[-7:-2])
+                local_support = min(lows[-7:-2])
+                trend_prior_growth = (closes[-6] - closes[-14]) / closes[-14] * 100 if len(closes) >= 14 else 0
+
+                # 1. Детектор продовження тренду
+                if trend_prior_growth >= 3.5 and current_close > local_resistance and current_volume > avg_volume * 1.25:
+                    alerts.append(f"📈 **{symbol} (15m)**: **Продовження висхідного тренду** (вікно {L})! Пробій опору {local_resistance:.4f}.")
+                    signal_triggered = True
+                    break
+                elif trend_prior_growth <= -3.5 and current_close < local_support and current_volume > avg_volume * 1.25:
+                    alerts.append(f"📉 **{symbol} (15m)**: **Продовження низхідного тренду** (вікно {L})! Пробій підтримки {local_support:.4f}.")
+                    signal_triggered = True
+                    break
+
+                # 2. Детектор зміни тренду / Розвороту
+                elif trend_prior_growth <= -2.0 and current_close > local_resistance and current_volume > avg_volume * 1.3:
+                    alerts.append(f"🔄 **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вгору)** (вікно {L}) через опір {local_resistance:.4f}.")
+                    signal_triggered = True
+                    break
+                elif trend_prior_growth >= 2.0 and current_close < local_support and current_volume > avg_volume * 1.3:
+                    alerts.append(f"🔄 **{symbol} (15m)**: **ЗМІНА ТРЕНДУ (Розворот вниз)** (вікно {L}) через підтримку {local_support:.4f}.")
+                    signal_triggered = True
+                    break
+
+                # 3. Боковики та виходи з них
+                elif box_width_pct <= 3.5:
+                    recent_channel = (max(highs[-5:]) - min(lows[-5:])) / current_close * 100
+                    if recent_channel <= 1.5 and current_volume < avg_volume * 0.85:
+                        alerts.append(f"🛏️ **{symbol} (15m)**: Зона боковика / POC на {poc:.4f} (вікно {L})")
+                        signal_triggered = True
+                        break
+                    elif prev_close <= box_top and current_close > box_top and current_volume > avg_volume * 1.3:
+                        alerts.append(f"🚀 **{symbol} (15m)**: Вихід з боковика ВГОРУ ({box_top:.4f}) [вікно {L}]!")
+                        signal_triggered = True
+                        break
+                    elif prev_close >= box_bottom and current_close < box_bottom and current_volume > avg_volume * 1.3:
+                        alerts.append(f"⚠️ **{symbol} (15m)**: Вихід з боковика ВНИЗ ({box_bottom:.4f}) [вікно {L}]!")
+                        signal_triggered = True
+                        break
+
+            # Загальні імпульси (не залежать від історії профілю)
             body_change = (current_close - current_open) / current_open * 100
             step_change = (current_close - prev_close) / prev_close * 100
 
@@ -221,4 +244,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
+    
