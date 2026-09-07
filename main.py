@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: акцент на пошук рівних/каскадних рівнів!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: синтаксичну помилку деплою усунено!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -85,7 +85,6 @@ def get_klines(symbol, interval="15m", limit=60):
         data = res_data.get("data", [])
         if isinstance(data, list) and len(data) > 0:
             closes = [float(c.get("close", 0)) for c in data]
-            opens = [float(c.get("open", 0)) for c.get("open", 0) in data] # захист
             highs = [float(c.get("high", 0)) for c in data]
             lows = [float(c.get("low", 0)) for c in data]
             volumes = [float(c.get("volume", 0)) for c in data]
@@ -95,11 +94,9 @@ def get_klines(symbol, interval="15m", limit=60):
     return None, None, None, None
 
 def find_clustered_levels(highs, lows, tolerance=0.008):
-    """Шукає цінові зони, де максимуми або мінімуми повторюються (з похибкою tolerance, наприклад 0.8%)"""
     resistance_level = None
     support_level = None
     
-    # Шукаємо збитки/вершини (локальні піки)
     local_highs = []
     for i in range(2, len(highs) - 2):
         if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
@@ -110,14 +107,12 @@ def find_clustered_levels(highs, lows, tolerance=0.008):
         if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
             local_lows.append(lows[i])
 
-    # Шукаємо рівень опору з двома-трьома дотиками в одному діапазоні
     for h in local_highs:
         matches = [x for x in local_highs if abs(x - h) / h <= tolerance]
-        if len(matches) >= 2:  # якщо є щонайменше 2-3 дотики приблизно на одній ціні
+        if len(matches) >= 2:
             resistance_level = sum(matches) / len(matches)
             break
 
-    # Шукаємо підтримку з двома-трьома дотиками
     for l in local_lows:
         matches = [x for x in local_lows if abs(x - l) / l <= tolerance]
         if len(matches) >= 2:
@@ -147,11 +142,9 @@ def analyze_market():
             res_lvl, sup_lvl = find_clustered_levels(highs, lows)
             alerts = []
 
-            # Якщо знайшли чіткий багаторазовий опір і ціна його пробиває на об'ємі
             if res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.4:
                 alerts.append(f"🎯🚀 **{symbol} (15m)**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
 
-            # Якщо знайшли багаторазову підтримку і ціна її пробиває вниз
             elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.4:
                 alerts.append(f"🎯⚠️ **{symbol} (15m)**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
 
