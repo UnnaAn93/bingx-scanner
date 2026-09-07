@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: додано фільтр розміру свічки (до 3%), щоб відсікати вертикальні ракети!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: виправлено помилки, акцент на EMA 20 + фільтр свічок (до 3%)!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -128,18 +128,14 @@ def analyze_market():
             recent_vols = volumes[-15:-1]
             avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
-            # Розраховуємо розмір тіла поточної свічки у відсотках
             candle_body_pct = abs(current_close - current_open) / current_close * 100
 
             alerts = []
 
-            # Фільтруємо занадто великі свічки (більше 3.0%), щоб не ловити рух наприкінці
+            # Фільтруємо свічки, що вистрілили більше ніж на 3%, і перевіряємо перетин EMA 20 на об'ємі
             if candle_body_pct <= 3.0:
-                # 1. Перетин EMA 20 знизу вгору на об'ємі (Лонг)
                 if prev_close <= prev_ema and current_close > current_ema and current_volume >= avg_vol * 1.25:
                     alerts.append(f"🚀 **{symbol} (15m)**: **Пробій EMA 20 ВГОРУ** (ціна {current_close:.4f}, тіло {candle_body_pct:.2f}%)!")
-
-                # 2. Перетин EMA 20 зверху вниз на об'ємі (Шорт)
                 elif prev_close >= prev_ema and current_close < current_ema and current_volume >= avg_vol * 1.25:
                     alerts.append(f"⚠️ **{symbol} (15m)**: **Пробій EMA 20 ВНИЗ** (ціна {current_close:.4f}, тіло {candle_body_pct:.2f}%)!")
 
@@ -154,7 +150,7 @@ def analyze_market():
         time.sleep(0.1)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено відфільтрованих сигналів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
 
 def main():
     while True:
@@ -166,4 +162,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
