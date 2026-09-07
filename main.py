@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: синтаксичну помилку деплою усунено!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: розширено сканування до 150 пар + зона очікування біля рівнів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -51,7 +51,7 @@ threading.Thread(target=self_ping_worker, daemon=True).start()
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-def get_top_volatile_symbols(top_n=50):
+def get_top_volatile_symbols(top_n=150):
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
     try:
         response = session.get(url, timeout=5)
@@ -93,7 +93,7 @@ def get_klines(symbol, interval="15m", limit=60):
         pass
     return None, None, None, None
 
-def find_clustered_levels(highs, lows, tolerance=0.008):
+def find_clustered_levels(highs, lows, tolerance=0.01):
     resistance_level = None
     support_level = None
     
@@ -122,14 +122,14 @@ def find_clustered_levels(highs, lows, tolerance=0.008):
     return resistance_level, support_level
 
 def analyze_market():
-    symbols = get_top_volatile_symbols(50)
+    symbols = get_top_volatile_symbols(150)
     signals_found = 0
 
     for symbol in symbols:
         try:
             closes, highs, lows, volumes = get_klines(symbol, "15m", 60)
             if not closes or len(closes) < 50:
-                time.sleep(0.05)
+                time.sleep(0.03)
                 continue
 
             current_close = closes[-1]
@@ -142,24 +142,36 @@ def analyze_market():
             res_lvl, sup_lvl = find_clustered_levels(highs, lows)
             alerts = []
 
-            if res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.4:
+            # 1. Підхід / Наближення до опору (зона інтересу в межах 0.5%)
+            if res_lvl and (res_lvl - current_close) / res_lvl <= 0.005 and current_close <= res_lvl:
+                if current_volume >= avg_vol * 1.15:
+                    alerts.append(f"👀 **{symbol} (15m)**: **Ціна біля рівного опору** ({res_lvl:.4f}), готується пробій!")
+
+            # 2. Пробій опору
+            elif res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.15:
                 alerts.append(f"🎯🚀 **{symbol} (15m)**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
 
-            elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.4:
+            # 3. Підхід до підтримки
+            if sup_lvl and (current_close - sup_lvl) / sup_lvl <= 0.005 and current_close >= sup_lvl:
+                if current_volume >= avg_vol * 1.15:
+                    alerts.append(f"👀 **{symbol} (15m)**: **Ціна біля рівної підтримки** ({sup_lvl:.4f}), можливий пробій вниз!")
+
+            # 4. Пробій підтримки
+            elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.15:
                 alerts.append(f"🎯⚠️ **{symbol} (15m)**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
 
             for alert in alerts:
                 send_discord_alert(alert)
                 signals_found += 1
-                time.sleep(0.4)
+                time.sleep(0.3)
                 
         except Exception as e:
             pass
             
-        time.sleep(0.1)
+        time.sleep(0.05)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено рівних рівнів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено рівнів/зон: {signals_found}")
 
 def main():
     while True:
@@ -171,4 +183,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
