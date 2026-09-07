@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m запущено у чистому режимі без помилок!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: налаштовано фокус на пробій та закріплення тілом вище/нижче меж боковика!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -77,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=40):
+def get_klines(symbol, interval="15m", limit=50):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -98,29 +98,48 @@ def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
+    BOX_LENGTHS = [15, 20, 25, 30, 40]
+
     for symbol in symbols:
         try:
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 40)
-            if not closes or len(closes) < 30:
+            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 50)
+            if not closes or len(closes) < 45:
                 time.sleep(0.05)
                 continue
 
             current_close = closes[-1]
+            current_open = opens[-1]
             prev_close = closes[-2]
             current_volume = volumes[-1]
 
-            struct_resistance = max(highs[-25:-2])
-            struct_support = min(lows[-25:-2])
-
-            recent_vols = volumes[-25:-2]
-            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
-
             alerts = []
+            signal_triggered = False
 
-            if prev_close > struct_resistance and current_close >= struct_resistance and current_volume >= avg_vol * 1.2:
-                alerts.append(f"🚀 **{symbol} (15m)**: **Пробій рівня ВГОРУ** ({struct_resistance:.4f}) на об'ємі!")
-            elif prev_close < struct_support and current_close <= struct_support and current_volume >= avg_vol * 1.2:
-                alerts.append(f"⚠️ **{symbol} (15m)**: **Пробій рівня ВНИЗ** ({struct_support:.4f}) на об'ємі!")
+            # Шукаємо чіткий пробій та закріплення тілом свічки вище/нижче боковика
+            for L in BOX_LENGTHS:
+                if len(closes) < L + 2:
+                    continue
+
+                window_highs = highs[-(L+2):-2]
+                window_lows = lows[-(L+2):-2]
+                window_vols = volumes[-(L+2):-2]
+
+                box_top = max(window_highs)
+                box_bottom = min(window_lows)
+                box_width_pct = (box_top - box_bottom) / current_close * 100
+                avg_box_vol = sum(window_vols) / len(window_vols) if window_vols else current_volume
+
+                if box_width_pct <= 5.5:
+                    # Закріплення вище верхньої межі (пробій + утримання рівня)
+                    if prev_close > box_top and current_close >= box_top and current_volume >= avg_box_vol * 1.1:
+                        alerts.append(f"🎯 **{symbol} (15m)**: **Закріплення вище боковика ВГОРУ** (опір {box_top:.4f})! Готово до руху.")
+                        signal_triggered = True
+                        break
+                    # Закріплення нижче нижньої межі
+                    elif prev_close < box_bottom and current_close <= box_bottom and current_volume >= avg_box_vol * 1.1:
+                        alerts.append(f"⚠️ **{symbol} (15m)**: **Закріплення нижче боковика ВНИЗ** (підтримка {box_bottom:.4f})! Шлях вільний.")
+                        signal_triggered = True
+                        break
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -145,4 +164,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
