@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: виправлено помилки, акцент на EMA 20 + фільтр свічок (до 3%)!**")
+send_discord_alert("🟢 **Сканер 15m запущено у чистому режимі без помилок!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -94,15 +94,6 @@ def get_klines(symbol, interval="15m", limit=40):
         pass
     return None, None, None, None, None
 
-def calculate_ema(data, period=20):
-    if len(data) < period:
-        return []
-    multiplier = 2 / (period + 1)
-    ema = [sum(data[:period]) / period]
-    for price in data[period:]:
-        ema.append((price - ema[-1]) * multiplier + ema[-1])
-    return [None] * (period - 1) + ema
-
 def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
@@ -114,30 +105,22 @@ def analyze_market():
                 time.sleep(0.05)
                 continue
 
-            ema20 = calculate_ema(closes, 20)
-            if not ema20 or len(ema20) < 3 or ema20[-1] is None or ema20[-2] is None:
-                continue
-
             current_close = closes[-1]
-            current_open = opens[-1]
             prev_close = closes[-2]
-            current_ema = ema20[-1]
-            prev_ema = ema20[-2]
-            
             current_volume = volumes[-1]
-            recent_vols = volumes[-15:-1]
-            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
-            candle_body_pct = abs(current_close - current_open) / current_close * 100
+            struct_resistance = max(highs[-25:-2])
+            struct_support = min(lows[-25:-2])
+
+            recent_vols = volumes[-25:-2]
+            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
             alerts = []
 
-            # Фільтруємо свічки, що вистрілили більше ніж на 3%, і перевіряємо перетин EMA 20 на об'ємі
-            if candle_body_pct <= 3.0:
-                if prev_close <= prev_ema and current_close > current_ema and current_volume >= avg_vol * 1.25:
-                    alerts.append(f"🚀 **{symbol} (15m)**: **Пробій EMA 20 ВГОРУ** (ціна {current_close:.4f}, тіло {candle_body_pct:.2f}%)!")
-                elif prev_close >= prev_ema and current_close < current_ema and current_volume >= avg_vol * 1.25:
-                    alerts.append(f"⚠️ **{symbol} (15m)**: **Пробій EMA 20 ВНИЗ** (ціна {current_close:.4f}, тіло {candle_body_pct:.2f}%)!")
+            if prev_close > struct_resistance and current_close >= struct_resistance and current_volume >= avg_vol * 1.2:
+                alerts.append(f"🚀 **{symbol} (15m)**: **Пробій рівня ВГОРУ** ({struct_resistance:.4f}) на об'ємі!")
+            elif prev_close < struct_support and current_close <= struct_support and current_volume >= avg_vol * 1.2:
+                alerts.append(f"⚠️ **{symbol} (15m)**: **Пробій рівня ВНИЗ** ({struct_support:.4f}) на об'ємі!")
 
             for alert in alerts:
                 send_discord_alert(alert)
