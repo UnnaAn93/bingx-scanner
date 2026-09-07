@@ -3,6 +3,7 @@ import requests
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import math
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -17,7 +18,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: налаштовано фокус на пробій та закріплення тілом вище/нижче меж боковика!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: логіка Боковик/Тренд (Боллінджер + Об'єм) активована!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -94,52 +95,67 @@ def get_klines(symbol, interval="15m", limit=50):
         pass
     return None, None, None, None, None
 
+def calculate_bollinger_bands(data, period=20, num_std=2.0):
+    if len(data) < period:
+        return [], [], []
+    middle, upper, lower = [], [], []
+    for i in range(period - 1, len(data)):
+        window = data[i - period + 1 : i + 1]
+        m = sum(window) / period
+        variance = sum((x - m) ** 2 for x in window) / period
+        std = math.sqrt(variance)
+        middle.append(m)
+        upper.append(m + (num_std * std))
+        lower.append(m - (num_std * std))
+    return middle, upper, lower
+
 def analyze_market():
     symbols = get_top_volatile_symbols(50)
     signals_found = 0
 
-    BOX_LENGTHS = [15, 20, 25, 30, 40]
-
     for symbol in symbols:
         try:
             closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 50)
-            if not closes or len(closes) < 45:
+            if not closes or len(closes) < 40:
                 time.sleep(0.05)
                 continue
 
+            middle, upper, lower = calculate_bollinger_bands(closes, period=20, num_std=2.0)
+            if not upper or len(upper) < 3:
+                continue
+
             current_close = closes[-1]
-            current_open = opens[-1]
             prev_close = closes[-2]
+            current_open = opens[-1]
             current_volume = volumes[-1]
+            
+            recent_vols = volumes[-20:-1]
+            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
+            # Ширина каналу Боллінджера у відсотках (показує стиснення / боковик)
+            bb_width = (upper[-1] - lower[-1]) / middle[-1] * 100
+            prev_bb_width = (upper[-2] - lower[-2]) / middle[-2] * 100
+
+            # Визначаємо чи був боковик (вузькі смуги, наприклад ширина < 3.5%)
+            is_tight_range = prev_bb_width < 3.5
+
+            candle_body_pct = abs(current_close - current_open) / current_close * 100
             alerts = []
-            signal_triggered = False
 
-            # Шукаємо чіткий пробій та закріплення тілом свічки вище/нижче боковика
-            for L in BOX_LENGTHS:
-                if len(closes) < L + 2:
-                    continue
+            # 1. ВИХІД З БОВОВИКА (НАКОПИЧЕННЯ) ВГОРУ
+            if is_tight_range and prev_close <= upper[-2] and current_close > upper[-1] and current_volume >= avg_vol * 1.5:
+                alerts.append(f"📦🚀 **{symbol} (15m)**: **Вихід з боковика ВГОРУ**! Імпульс на об'ємі (ціна: {current_close:.4f}, ширина була: {prev_bb_width:.2f}%)")
 
-                window_highs = highs[-(L+2):-2]
-                window_lows = lows[-(L+2):-2]
-                window_vols = volumes[-(L+2):-2]
+            # 2. ВИХІД З БОВИКА ВНИЗ
+            elif is_tight_range and prev_close >= lower[-2] and current_close < lower[-1] and current_volume >= avg_vol * 1.5:
+                alerts.append(f"📦⚠️ **{symbol} (15m)**: **Вихід з боковика ВНИЗ**! Пробій підтримки (ціна: {current_close:.4f}, ширина була: {prev_bb_width:.2f}%)")
 
-                box_top = max(window_highs)
-                box_bottom = min(window_lows)
-                box_width_pct = (box_top - box_bottom) / current_close * 100
-                avg_box_vol = sum(window_vols) / len(window_vols) if window_vols else current_volume
+            # 3. СИЛЬНИЙ ТРЕНДОВИЙ РУХ (розширення каналу)
+            elif not is_tight_range and current_close > upper[-1] and candle_body_pct <= 3.0 and current_volume >= avg_vol * 1.3:
+                alerts.append(f"📈 **{symbol} (15m)**: **Тренд угору (Пробій стінки)** (ціна: {current_close:.4f})")
 
-                if box_width_pct <= 5.5:
-                    # Закріплення вище верхньої межі (пробій + утримання рівня)
-                    if prev_close > box_top and current_close >= box_top and current_volume >= avg_box_vol * 1.1:
-                        alerts.append(f"🎯 **{symbol} (15m)**: **Закріплення вище боковика ВГОРУ** (опір {box_top:.4f})! Готово до руху.")
-                        signal_triggered = True
-                        break
-                    # Закріплення нижче нижньої межі
-                    elif prev_close < box_bottom and current_close <= box_bottom and current_volume >= avg_box_vol * 1.1:
-                        alerts.append(f"⚠️ **{symbol} (15m)**: **Закріплення нижче боковика ВНИЗ** (підтримка {box_bottom:.4f})! Шлях вільний.")
-                        signal_triggered = True
-                        break
+            elif not is_tight_range and current_close < lower[-1] and candle_body_pct <= 3.0 and current_volume >= avg_vol * 1.3:
+                alerts.append(f"📉 **{symbol} (15m)**: **Тренд униз (Пробій стінки)** (ціна: {current_close:.4f})")
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -152,7 +168,7 @@ def analyze_market():
         time.sleep(0.1)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено сигналів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено структурних сигналів: {signals_found}")
 
 def main():
     while True:
@@ -164,4 +180,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+                
