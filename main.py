@@ -3,7 +3,6 @@ import requests
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-import math
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
@@ -18,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: логіка Боковик/Тренд (Боллінджер + Об'єм) активована!**")
+send_discord_alert("🟢 **Сканер 15m оновлено: акцент на пошук рівних/каскадних рівнів!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -78,7 +77,7 @@ def get_top_volatile_symbols(top_n=50):
         print(f"Помилка отримання волатильних пар: {e}")
         return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
 
-def get_klines(symbol, interval="15m", limit=50):
+def get_klines(symbol, interval="15m", limit=60):
     url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = session.get(url, timeout=4)
@@ -86,28 +85,46 @@ def get_klines(symbol, interval="15m", limit=50):
         data = res_data.get("data", [])
         if isinstance(data, list) and len(data) > 0:
             closes = [float(c.get("close", 0)) for c in data]
-            opens = [float(c.get("open", 0)) for c in data]
+            opens = [float(c.get("open", 0)) for c.get("open", 0) in data] # захист
             highs = [float(c.get("high", 0)) for c in data]
             lows = [float(c.get("low", 0)) for c in data]
             volumes = [float(c.get("volume", 0)) for c in data]
-            return closes, opens, highs, lows, volumes
+            return closes, highs, lows, volumes
     except:
         pass
-    return None, None, None, None, None
+    return None, None, None, None
 
-def calculate_bollinger_bands(data, period=20, num_std=2.0):
-    if len(data) < period:
-        return [], [], []
-    middle, upper, lower = [], [], []
-    for i in range(period - 1, len(data)):
-        window = data[i - period + 1 : i + 1]
-        m = sum(window) / period
-        variance = sum((x - m) ** 2 for x in window) / period
-        std = math.sqrt(variance)
-        middle.append(m)
-        upper.append(m + (num_std * std))
-        lower.append(m - (num_std * std))
-    return middle, upper, lower
+def find_clustered_levels(highs, lows, tolerance=0.008):
+    """Шукає цінові зони, де максимуми або мінімуми повторюються (з похибкою tolerance, наприклад 0.8%)"""
+    resistance_level = None
+    support_level = None
+    
+    # Шукаємо збитки/вершини (локальні піки)
+    local_highs = []
+    for i in range(2, len(highs) - 2):
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+            local_highs.append(highs[i])
+            
+    local_lows = []
+    for i in range(2, len(lows) - 2):
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+            local_lows.append(lows[i])
+
+    # Шукаємо рівень опору з двома-трьома дотиками в одному діапазоні
+    for h in local_highs:
+        matches = [x for x in local_highs if abs(x - h) / h <= tolerance]
+        if len(matches) >= 2:  # якщо є щонайменше 2-3 дотики приблизно на одній ціні
+            resistance_level = sum(matches) / len(matches)
+            break
+
+    # Шукаємо підтримку з двома-трьома дотиками
+    for l in local_lows:
+        matches = [x for x in local_lows if abs(x - l) / l <= tolerance]
+        if len(matches) >= 2:
+            support_level = sum(matches) / len(matches)
+            break
+
+    return resistance_level, support_level
 
 def analyze_market():
     symbols = get_top_volatile_symbols(50)
@@ -115,47 +132,28 @@ def analyze_market():
 
     for symbol in symbols:
         try:
-            closes, opens, highs, lows, volumes = get_klines(symbol, "15m", 50)
-            if not closes or len(closes) < 40:
+            closes, highs, lows, volumes = get_klines(symbol, "15m", 60)
+            if not closes or len(closes) < 50:
                 time.sleep(0.05)
-                continue
-
-            middle, upper, lower = calculate_bollinger_bands(closes, period=20, num_std=2.0)
-            if not upper or len(upper) < 3:
                 continue
 
             current_close = closes[-1]
             prev_close = closes[-2]
-            current_open = opens[-1]
             current_volume = volumes[-1]
             
             recent_vols = volumes[-20:-1]
             avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
 
-            # Ширина каналу Боллінджера у відсотках (показує стиснення / боковик)
-            bb_width = (upper[-1] - lower[-1]) / middle[-1] * 100
-            prev_bb_width = (upper[-2] - lower[-2]) / middle[-2] * 100
-
-            # Визначаємо чи був боковик (вузькі смуги, наприклад ширина < 3.5%)
-            is_tight_range = prev_bb_width < 3.5
-
-            candle_body_pct = abs(current_close - current_open) / current_close * 100
+            res_lvl, sup_lvl = find_clustered_levels(highs, lows)
             alerts = []
 
-            # 1. ВИХІД З БОВОВИКА (НАКОПИЧЕННЯ) ВГОРУ
-            if is_tight_range and prev_close <= upper[-2] and current_close > upper[-1] and current_volume >= avg_vol * 1.5:
-                alerts.append(f"📦🚀 **{symbol} (15m)**: **Вихід з боковика ВГОРУ**! Імпульс на об'ємі (ціна: {current_close:.4f}, ширина була: {prev_bb_width:.2f}%)")
+            # Якщо знайшли чіткий багаторазовий опір і ціна його пробиває на об'ємі
+            if res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.4:
+                alerts.append(f"🎯🚀 **{symbol} (15m)**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
 
-            # 2. ВИХІД З БОВИКА ВНИЗ
-            elif is_tight_range and prev_close >= lower[-2] and current_close < lower[-1] and current_volume >= avg_vol * 1.5:
-                alerts.append(f"📦⚠️ **{symbol} (15m)**: **Вихід з боковика ВНИЗ**! Пробій підтримки (ціна: {current_close:.4f}, ширина була: {prev_bb_width:.2f}%)")
-
-            # 3. СИЛЬНИЙ ТРЕНДОВИЙ РУХ (розширення каналу)
-            elif not is_tight_range and current_close > upper[-1] and candle_body_pct <= 3.0 and current_volume >= avg_vol * 1.3:
-                alerts.append(f"📈 **{symbol} (15m)**: **Тренд угору (Пробій стінки)** (ціна: {current_close:.4f})")
-
-            elif not is_tight_range and current_close < lower[-1] and candle_body_pct <= 3.0 and current_volume >= avg_vol * 1.3:
-                alerts.append(f"📉 **{symbol} (15m)**: **Тренд униз (Пробій стінки)** (ціна: {current_close:.4f})")
+            # Якщо знайшли багаторазову підтримку і ціна її пробиває вниз
+            elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.4:
+                alerts.append(f"🎯⚠️ **{symbol} (15m)**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
 
             for alert in alerts:
                 send_discord_alert(alert)
@@ -168,7 +166,7 @@ def analyze_market():
         time.sleep(0.1)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено структурних сигналів: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено рівних рівнів: {signals_found}")
 
 def main():
     while True:
@@ -180,4 +178,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+    
