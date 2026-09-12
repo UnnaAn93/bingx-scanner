@@ -17,7 +17,7 @@ def send_discord_alert(message):
     except Exception as e:
         print(f"Помилка відправки у Discord: {e}")
 
-send_discord_alert("🟢 **Сканер 15m оновлено: розширено сканування до 150 пар + зона очікування біля рівнів!**")
+send_discord_alert("🟢 **Сканер оновлено: додано паралельний пошук рівнів на 15m та 1h таймфреймах!**")
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -121,57 +121,62 @@ def find_clustered_levels(highs, lows, tolerance=0.01):
 
     return resistance_level, support_level
 
+def process_timeframe_data(symbol, interval):
+    closes, highs, lows, volumes = get_klines(symbol, interval, limit=60)
+    if not closes or len(closes) < 50:
+        return []
+
+    current_close = closes[-1]
+    prev_close = closes[-2]
+    current_volume = volumes[-1]
+    
+    recent_vols = volumes[-20:-1]
+    avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
+
+    res_lvl, sup_lvl = find_clustered_levels(highs, lows)
+    alerts = []
+
+    # 1. Підхід до опору
+    if res_lvl and (res_lvl - current_close) / res_lvl <= 0.005 and current_close <= res_lvl:
+        if current_volume >= avg_vol * 1.15:
+            alerts.append(f"👀 **{symbol} ({interval})**: **Ціна біля рівного опору** ({res_lvl:.4f}), готується пробій!")
+
+    # 2. Пробій опору
+    elif res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.15:
+        alerts.append(f"🎯🚀 **{symbol} ({interval})**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
+
+    # 3. Підхід до підтримки
+    if sup_lvl and (current_close - sup_lvl) / sup_lvl <= 0.005 and current_close >= sup_lvl:
+        if current_volume >= avg_vol * 1.15:
+            alerts.append(f"👀 **{symbol} ({interval})**: **Ціна біля рівної підтримки** ({sup_lvl:.4f}), можливий пробій вниз!")
+
+    # 4. Пробій підтримки
+    elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.15:
+        alerts.append(f"🎯⚠️ **{symbol} ({interval})**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
+
+    return alerts
+
 def analyze_market():
     symbols = get_top_volatile_symbols(150)
     signals_found = 0
 
     for symbol in symbols:
         try:
-            closes, highs, lows, volumes = get_klines(symbol, "15m", 60)
-            if not closes or len(closes) < 50:
-                time.sleep(0.03)
-                continue
-
-            current_close = closes[-1]
-            prev_close = closes[-2]
-            current_volume = volumes[-1]
-            
-            recent_vols = volumes[-20:-1]
-            avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
-
-            res_lvl, sup_lvl = find_clustered_levels(highs, lows)
-            alerts = []
-
-            # 1. Підхід / Наближення до опору (зона інтересу в межах 0.5%)
-            if res_lvl and (res_lvl - current_close) / res_lvl <= 0.005 and current_close <= res_lvl:
-                if current_volume >= avg_vol * 1.15:
-                    alerts.append(f"👀 **{symbol} (15m)**: **Ціна біля рівного опору** ({res_lvl:.4f}), готується пробій!")
-
-            # 2. Пробій опору
-            elif res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.15:
-                alerts.append(f"🎯🚀 **{symbol} (15m)**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
-
-            # 3. Підхід до підтримки
-            if sup_lvl and (current_close - sup_lvl) / sup_lvl <= 0.005 and current_close >= sup_lvl:
-                if current_volume >= avg_vol * 1.15:
-                    alerts.append(f"👀 **{symbol} (15m)**: **Ціна біля рівної підтримки** ({sup_lvl:.4f}), можливий пробій вниз!")
-
-            # 4. Пробій підтримки
-            elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.15:
-                alerts.append(f"🎯⚠️ **{symbol} (15m)**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
-
-            for alert in alerts:
-                send_discord_alert(alert)
-                signals_found += 1
-                time.sleep(0.3)
-                
+            # Перевіряємо обидва таймфрейми для кожної монети
+            for tf in ["15m", "1h"]:
+                alerts = process_timeframe_data(symbol, tf)
+                for alert in alerts:
+                    send_discord_alert(alert)
+                    signals_found += 1
+                    time.sleep(0.3)
+                time.sleep(0.05)
         except Exception as e:
             pass
             
         time.sleep(0.05)
 
     if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено (15m)**: знайдено рівнів/зон: {signals_found}")
+        send_discord_alert(f"⏱️ **Цикл завершено**: знайдено сигналів (15m/1h): {signals_found}")
 
 def main():
     while True:
@@ -183,4 +188,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
