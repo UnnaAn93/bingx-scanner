@@ -6,18 +6,17 @@ import threading
 
 # Налаштування параметрів сканування
 VOLUME_MULTIPLIER = 2.5           # У скільки разів поточний об'єм має перевищувати середній
-APPROACH_PERCENT = 0.5            # 0.5% до рівня
+APPROACH_PERCENT = 0.003          # 0.3% до рівня (ближче до цілі)
 TIMEFRAME = "1m"                  # Робота на хвилинках
-LIMIT_CANDLES = 20                # Кількість свічок для середнього об'єму
+LIMIT_CANDLES = 20                # Кількість свічок для аналізу
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 
-# Отримуємо вебхук із змінної середовища Render
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
 async def fetch_top_bingx_symbols(session):
-    """Автоматично завантажує список найактивніших крипто-пар з ф'ючерсів BingX без службового сміття"""
+    """Автоматично завантажує список найактивніших крипто-пар з ф'ючерсів BingX"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url, timeout=5) as response:
@@ -28,7 +27,6 @@ async def fetch_top_bingx_symbols(session):
                 usdt_tickers = []
                 for t in tickers:
                     symbol = t.get("symbol", "")
-                    # Фільтруємо: тільки справжні крипто-пари на кшталт XXX-USDT (без подвійних назв чи цифр посередині)
                     if symbol.endswith("-USDT") and len(symbol) <= 12 and "USD" not in symbol[:-5]:
                         quote_vol = float(t.get("quoteVolume", 0))
                         if quote_vol >= MIN_24H_VOLUME_USDT:
@@ -42,7 +40,6 @@ async def fetch_top_bingx_symbols(session):
     return []
 
 async def fetch_kline_data(session, symbol):
-    """Отримує свічки (kline) через публічне API BingX"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/klines"
     params = {
         "symbol": symbol,
@@ -59,7 +56,6 @@ async def fetch_kline_data(session, symbol):
     return None
 
 async def send_to_discord(session, webhook_url, message):
-    """Асинхронна відправка сповіщення у Discord"""
     if not webhook_url:
         return
     payload = {"content": message}
@@ -71,7 +67,6 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
-    """Функція перевірки однієї монети"""
     kline_data = await fetch_kline_data(session, symbol)
     
     if not kline_data or len(kline_data) < 10:
@@ -80,6 +75,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
     try:
         volumes = [float(x['volume']) for x in kline_data]
         highs = [float(x['high']) for x in kline_data]
+        lows = [float(x['low']) for x in kline_data]
         closes = [float(x['close']) for x in kline_data]
         opens = [float(x['open']) for x in kline_data]
         
@@ -91,34 +87,38 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if avg_volume <= 0:
             return
         
-        resistance_level = max(highs[:-1])
         current_price = closes[-1]
         current_open = opens[-1]
         
-        if resistance_level > 0:
-            distance_to_resistance = (resistance_level - current_price) / resistance_level
-        else:
+        # Шукаємо локальний опір по останніх кількох свічках (наприклад, за останні 5-10 свічок, крім поточної)
+        resistance_level = max(highs[-10:-1])
+        
+        if resistance_level <= 0:
             return
             
+        # Перевіряємо, чи ціна йде вгору (зелена свічка або закривається вище відкриття)
+        is_green_candle = current_price > current_open
+        
+        # Відстань до опору знизу
+        distance_to_resistance = (resistance_level - current_price) / resistance_level
+            
         is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
-        is_approaching = 0 <= distance_to_resistance <= APPROACH_PERCENT
+        
+        # Головне: ціна має бути під самим опором (від 0% до 0.3%) І свічка має бути зеленою (рух до опору, а не падіння від нього)
+        is_approaching = (0 <= distance_to_resistance <= APPROACH_PERCENT) and is_green_candle
 
         if is_volume_spike and is_approaching:
             surge_percent = int((current_volume / avg_volume - 1) * 100)
             
-            if current_price >= current_open:
-                side_emoji = "🟢"
-                side_text = "Кульмінація покупців (Лонг / Зелена свічка)"
-            else:
-                side_emoji = "🔴"
-                side_text = "Кульмінація продавців (Шорт / Червона свічка)"
+            side_emoji = "🟢"
+            side_text = "Кульмінація покупців (Лонг / Пробій або підтискання до опору)"
 
             alert_message = (
                 f"🎯⚡ **УВАГА [Спалах об'єму]**: `{symbol}` (1m)\n"
                 f"• Напрямок: {side_emoji} **{side_text}**\n"
                 f"• Ціна біля опору: `{current_price}` (Рівень: `{resistance_level}`)\n"
                 f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
-                f"⏳ Лови шпильку / готуйся до розвороту!"
+                f"⏳ Готуйся до пробою або реакції від рівня!"
             )
             await send_to_discord(session, discord_webhook_url, alert_message)
 
@@ -126,7 +126,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         pass
 
 async def self_ping_loop(session):
-    """Фонова задача для запобігання засинанню на Render"""
     while True:
         await asyncio.sleep(240)
         try:
@@ -136,7 +135,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено. Сканування тільки чистих криптовалютних ф'ючерсів...")
+    print("Бот запущено. Виправлено фільтрацію підтискання до локальних рівнів...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -154,8 +153,6 @@ async def main():
             sleep_time = max(1, 15 - elapsed)
             await asyncio.sleep(sleep_time)
 
-
-# --- Веб-сервер для Render ---
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
