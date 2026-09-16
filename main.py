@@ -6,18 +6,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 # Налаштування параметрів сканування
-VOLUME_MULTIPLIER = 2.5           # У скільки разів поточний об'єм має перевищувати середній
-APPROACH_PERCENT = 0.003          # 0.3% до рівня
+VOLUME_MULTIPLIER = 2.2           # Трохи м'якший сплеск об'єму (у 2.2 рази)
+APPROACH_PERCENT = 0.007          # 0.7% до рівня (більш гнучка зона для підходу)
 TIMEFRAME = "1m"                  # Робота на хвилинках
-LIMIT_CANDLES = 50                # Збільшуємо історію для пошуку реального локального хаю
+LIMIT_CANDLES = 30                # Історія для локального хаю
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 600            # Не спамити по тій самій монеті частіше ніж раз на 10 хвилин
+COOLDOWN_SECONDS = 180            # 3 хвилини кулдауну на одну монету
 
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
-# Словник для відстеження останніх сповіщень: {symbol: timestamp}
 last_alert_time = {}
 
 async def fetch_top_bingx_symbols(session):
@@ -71,14 +70,13 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
-    # Перевіряємо кулдаун (щоб не спамити одну й ту саму монету)
     current_time = time.time()
     if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
         return
 
     kline_data = await fetch_kline_data(session, symbol)
     
-    if not kline_data or len(kline_data) < 30:
+    if not kline_data or len(kline_data) < 20:
         return
 
     try:
@@ -91,7 +89,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if current_volume <= 0:
             return
 
-        # Середній об'єм по попередніх свічках (без останньої)
         avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
         if avg_volume <= 0:
             return
@@ -99,44 +96,37 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         current_price = closes[-1]
         current_open = opens[-1]
         
-        # Шукаємо серйозний локальний опір по всій вибірці (крім останньої свічки)
         resistance_level = max(highs[:-1])
-        
         if resistance_level <= 0:
             return
             
-        is_green_candle = current_price > current_open
+        is_green_candle = current_price >= current_open
         distance_to_resistance = (resistance_level - current_price) / resistance_level
             
         is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
-        
-        # Ціна має бути під самим рівнем (0 - 0.3%) і свічка має бути висхідною (імпульс до рівня)
         is_approaching = (0 <= distance_to_resistance <= APPROACH_PERCENT) and is_green_candle
 
         if is_volume_spike and is_approaching:
             surge_percent = int((current_volume / avg_volume - 1) * 100)
             
-            side_emoji = "🟢"
-            side_text = "Кульмінація покупців (Підтискання до глобального рівня)"
-
             alert_message = (
                 f"🎯⚡ **УВАГА [Спалах об'єму]**: `{symbol}` (1m)\n"
-                f"• Напрямок: {side_emoji} **{side_text}**\n"
-                f"• Ціна біля опору: `{current_price}` (Рівень: `{resistance_level}`)\n"
+                f"• Напрямок: 🟢 **Підтискання до локального рівня**\n"
+                f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                 f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
-                f"⏳ Готуйся до пробою рівня!"
+                f"⏳ Готуйся до пробою!"
             )
             
-            # Фіксуємо час відправки сигналу для захисту від спаму
             last_alert_time[symbol] = current_time
             await send_to_discord(session, discord_webhook_url, alert_message)
+            print(f"Сотворіння сигналу відправлено для {symbol}")
 
-    except Exception:
+    except Exception as e:
         pass
 
 async def self_ping_loop(session):
     while True:
-        await asyncio.sleep(240)
+        asyncio.sleep(240)
         try:
             async with session.get(RENDER_URL, timeout=5) as response:
                 pass
@@ -144,7 +134,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено. Фільтр спаму (колдаун 10 хв) та оновлений пошук рівня активні...")
+    print("Бот запущено з оновленими адаптивними параметрами сканування...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -184,4 +174,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
+                
