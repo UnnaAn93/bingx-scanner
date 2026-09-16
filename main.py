@@ -4,38 +4,79 @@ import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування (можеш підлаштувати під свої параметри)
+# Налаштування параметрів сканування
 VOLUME_MULTIPLIER = 2.5       # У скільки разів поточний об'єм має перевищувати середній
 APPROACH_PERCENT = 0.003      # Як близько ціна має бути до рівня (0.3%)
 TIMEFRAME = "1m"              # Робота на хвилинках для максимальної швидкості
 LIMIT_CANDLES = 20            # Кількість свічок для розрахунку середнього об'єму
+TOP_COINS_LIMIT = 150         # Кількість найактивніших пар для сканування
 
-# Отримуємо вебхук з змінної середовища Render
+# Отримуємо вебхук із змінної середовища Render
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 
-async def send_to_discord(webhook_url, message):
+async def fetch_top_bingx_symbols():
+    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX за об'ємом"""
+    url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    tickers = data.get("data", [])
+                    # Фільтруємо лише USDT-пари та сортуємо за об'ємом (volume)
+                    usdt_tickers = [
+                        t for t in tickers 
+                        if t.get("symbol", "").endswith("-USDT")
+                    ]
+                    # Сортуємо за спаданням об'єму
+                    usdt_tickers.sort(key=lambda x: float(x.get("volume", 0)), reverse=True)
+                    
+                    # Беремо топ-150
+                    top_symbols = [t["symbol"] for t in usdt_tickers[:TOP_COINS_LIMIT]]
+                    return top_symbols
+        except Exception as e:
+            print(f"Помилка при отриманні списку монет від BingX: {e}")
+        return []
+
+async def fetch_kline_data(session, symbol):
+    """Отримує свічки (kline) для конкретної пари через публічне API BingX"""
+    url = "https://open-api.bingx.com/openApi/swap/v2/quote/klines"
+    params = {
+        "symbol": symbol,
+        "interval": TIMEFRAME,
+        "limit": LIMIT_CANDLES
+    }
+    try:
+        async with session.get(url, params=params, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data.get("data", [])
+    except Exception:
+        pass
+    return None
+
+async def send_to_discord(session, webhook_url, message):
     """Асинхронна відправка сповіщення у Discord"""
     if not webhook_url:
-        print("Помилка: Не задано URL вебхука Discord!")
         return
-        
-    async with aiohttp.ClientSession() as session:
-        payload = {"content": message}
-        try:
-            async with session.post(webhook_url, json=payload) as response:
-                if response.status != 200:
-                    print(f"Помилка відправки у Discord: {response.status}")
-        except Exception as e:
-            print(f"Виняток при відправці у Discord: {e}")
-
-async def check_single_coin(client, symbol, discord_webhook_url):
-    """Функція перевірки однієї монети (працює паралельно для кожної пари)"""
+    payload = {"content": message}
     try:
-        kline_data = await client.get_kline(symbol=symbol, interval=TIMEFRAME, limit=LIMIT_CANDLES)
-        
-        if not kline_data or len(kline_data) < 10:
-            return
+        async with session.post(webhook_url, json=payload) as response:
+            if response.status != 200:
+                print(f"Помилка відправки у Discord: {response.status}")
+    except Exception as e:
+        print(f"Виняток при відправці у Discord: {e}")
 
+async def check_single_coin(session, symbol, discord_webhook_url):
+    """Функція перевірки однієї монети"""
+    kline_data = await fetch_kline_data(session, symbol)
+    
+    if not kline_data or len(kline_data) < 10:
+        return
+
+    try:
+        # У BingX API дані свічок приходять списком словників або масивом (залежно від версії, перевіряємо ключі)
+        # Зазвичай публічне API v2/quote/klines повертає поля: volume, high, close
         volumes = [float(x['volume']) for x in kline_data]
         highs = [float(x['high']) for x in kline_data]
         closes = [float(x['close']) for x in kline_data]
@@ -62,38 +103,33 @@ async def check_single_coin(client, symbol, discord_webhook_url):
                 f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
                 f"⏳ Лови шпильку / готуйся до розвороту!"
             )
-            await send_to_discord(discord_webhook_url, alert_message)
+            await send_to_discord(session, discord_webhook_url, alert_message)
 
-    except Exception as e:
+    except Exception:
         pass
 
-async def scan_market_cycle(client, symbols_list, discord_webhook_url):
-    """Головний цикл, який запускає перевірку всіх монет одночасно"""
-    tasks = [check_single_coin(client, symbol, discord_webhook_url) for symbol in symbols_list]
-    await asyncio.gather(*tasks)
-
 async def main():
-    print("Бот запущено. Початок асинхронного сканування ринку...")
+    print("Бот запущено. Початок сканування 150 найактивніших пар BingX...")
     
-    # Приклад: якщо у тебе поки немає ініціалізованого клієнта, 
-    # тут можна підключити твій SDK BingX та список монет:
-    # client = BingXAsyncClient(...) 
-    # symbols = ["BTC-USDT", "ETH-USDT"]
-    
-    client = None # Тимчасова заглушка, заміни на свій клієнт
-    symbols = []  # Твій список монет
-    
-    while True:
-        start_time = asyncio.get_event_loop().time()
-        
-        if client and symbols and DISCORD_WEBHOOK_URL:
-            await scan_market_cycle(client, symbols, DISCORD_WEBHOOK_URL)
-        else:
-            print("Очікування налаштування клієнта або списку монет у main()...")
-        
-        elapsed = asyncio.get_event_loop().time() - start_time
-        sleep_time = max(1, 10 - elapsed)
-        await asyncio.sleep(sleep_time)
+    async with aiohttp.ClientSession() as session:
+        while True:
+            start_time = asyncio.get_event_loop().time()
+            
+            # Оновлюємо список топ-150 пар на випадок зміни ліквідності на ринку
+            symbols_list = await fetch_top_bingx_symbols()
+            
+            if symbols_list and DISCORD_WEBHOOK_URL:
+                print(f"Сканування ринку для {len(symbols_list)} активних пар...")
+                # Запускаємо паралельні перевірки для всіх пар одразу
+                tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
+                await asyncio.gather(*tasks)
+            else:
+                print("Не вдалося отримати список пар або відсутній вебхук Discord.")
+            
+            # Пауза між циклами сканування (наприклад, 10 секунд)
+            elapsed = asyncio.get_event_loop().time() - start_time
+            sleep_time = max(1, 10 - elapsed)
+            await asyncio.sleep(sleep_time)
 
 
 # --- Веб-сервер для утримання порта на Render ---
@@ -104,7 +140,6 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"BingX Scanner Bot is running!")
     
     def log_message(self, format, *args):
-        # Вимикаємо зайві логи перевірок сервером у консолі
         return
 
 def run_web_server():
