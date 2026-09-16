@@ -5,30 +5,40 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 # Налаштування параметрів сканування
-VOLUME_MULTIPLIER = 2.5       # У скільки разів поточний об'єм має перевищувати середній
-APPROACH_PERCENT = 0.005      # 0.5% до рівня
-TIMEFRAME = "1m"              # Робота на хвилинках
-LIMIT_CANDLES = 20            # Кількість свічок для середнього об'єму
-TOP_COINS_LIMIT = 150         # Кількість найактивніших пар
+VOLUME_MULTIPLIER = 2.5           # У скільки разів поточний об'єм має перевищувати середній
+APPROACH_PERCENT = 0.5            # 0.5% до рівня
+TIMEFRAME = "1m"                  # Робота на хвилинках
+LIMIT_CANDLES = 20                # Кількість свічок для середнього об'єму
+TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
+MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT (5 мільйонів), щоб відсіяти шлам
 
 # Отримуємо вебхук із змінної середовища Render
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
 async def fetch_top_bingx_symbols(session):
-    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX"""
+    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX з фільтром ліквідності"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url, timeout=5) as response:
             if response.status == 200:
                 data = await response.json()
                 tickers = data.get("data", [])
-                usdt_tickers = [
-                    t for t in tickers 
-                    if t.get("symbol", "").endswith("-USDT")
-                ]
-                usdt_tickers.sort(key=lambda x: float(x.get("volume", 0)), reverse=True)
-                top_symbols = [t["symbol"] for t in usdt_tickers[:TOP_COINS_LIMIT]]
+                
+                usdt_tickers = []
+                for t in tickers:
+                    symbol = t.get("symbol", "")
+                    if symbol.endswith("-USDT"):
+                        # Отримуємо добовий об'єм у USDT (у тікері BingX це поле quoteVolume або volume в USDT)
+                        quote_vol = float(t.get("quoteVolume", 0))
+                        if quote_vol >= MIN_24H_VOLUME_USDT:
+                            usdt_tickers.append((symbol, quote_vol))
+                
+                # Сортуємо за спаданням добового об'єму
+                usdt_tickers.sort(key=lambda x: x[1], reverse=True)
+                
+                # Беремо топ
+                top_symbols = [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
                 return top_symbols
     except Exception as e:
         print(f"Помилка при отриманні списку монет від BingX: {e}")
@@ -64,7 +74,7 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
-    """Функція перевірки однієї монети з визначенням напрямку свічки"""
+    """Функція перевірки однієї монети"""
     kline_data = await fetch_kline_data(session, symbol)
     
     if not kline_data or len(kline_data) < 10:
@@ -76,8 +86,14 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         closes = [float(x['close']) for x in kline_data]
         opens = [float(x['open']) for x in kline_data]
         
-        avg_volume = sum(volumes[-(LIMIT_CANDLES - 1):-1]) / (LIMIT_CANDLES - 2)
+        # Перевірка, чи свічки взагалі мають об'єм (відсікаємо повністю мертві свічки)
         current_volume = volumes[-1]
+        if current_volume <= 0:
+            return
+
+        avg_volume = sum(volumes[-(LIMIT_CANDLES - 1):-1]) / (LIMIT_CANDLES - 2)
+        if avg_volume <= 0:
+            return
         
         resistance_level = max(highs[:-1])
         current_price = closes[-1]
@@ -94,7 +110,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if is_volume_spike and is_approaching:
             surge_percent = int((current_volume / avg_volume - 1) * 100)
             
-            # Визначаємо напрямок за кольором свічки
             if current_price >= current_open:
                 side_emoji = "🟢"
                 side_text = "Кульмінація покупців (Лонг / Зелена свічка)"
@@ -125,7 +140,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено. Початок сканування 150 пар із визначенням напрямку...")
+    print("Бот запущено. Початок сканування ліквідних пар з фільтром об'ємів...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -167,4 +182,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-    
+                                
