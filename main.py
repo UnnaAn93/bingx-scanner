@@ -1,191 +1,100 @@
-import time
-import requests
-import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import asyncio
+import aiohttp
+# Тут підключи свої імпорти для клієнта BingX, якщо використовуєш офіційну чи кастомну бібліотеку
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+# Налаштування (можеш підлаштувати під свої параметри)
+VOLUME_MULTIPLIER = 2.5       # У скільки разів поточний об'єм має перевищувати середній
+APPROACH_PERCENT = 0.003      # Як близько ціна має бути до рівня (0.3%)
+TIMEFRAME = "1m"              # Робота на хвилинках для максимальної швидкості
+LIMIT_CANDLES = 20            # Кількість свічок для розрахунку середнього об'єму
 
-def send_discord_alert(message):
-    if not DISCORD_WEBHOOK_URL:
-        print("Помилка: не задано DISCORD_WEBHOOK_URL!")
-        return
-    try:
+async def send_to_discord(webhook_url, message):
+    """Асинхронна відправка сповіщення у Discord"""
+    async with aiohttp.ClientSession() as session:
         payload = {"content": message}
-        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=5)
+        try:
+            async with session.post(webhook_url, json=payload) as response:
+                if response.status != 200:
+                    print(f"Помилка відправки у Discord: {response.status}")
+        except Exception as e:
+            print(f"Виняток при відправці у Discord: {e}")
+
+async def check_single_coin(client, symbol, discord_webhook_url):
+    """Функція перевірки однієї монети (працює паралельно для кожної пари)"""
+    try:
+        # Робимо асинхронний запит свічок (приклад виклику залежить від твого SDK BingX)
+        # Головне — отримати дані по 1m таймфрейму
+        kline_data = await client.get_kline(symbol=symbol, interval=TIMEFRAME, limit=LIMIT_CANDLES)
+        
+        if not kline_data or len(kline_data) < 10:
+            return
+
+        # Витягуємо об'єми, максимуми та ціни закриття
+        # (Формат даних залежить від того, чи повертає BingX словники чи списки, нижче універсальний приклад)
+        volumes = [float(x['volume']) for x in kline_data]
+        highs = [float(x['high']) for x in kline_data]
+        closes = [float(x['close']) for x in kline_data]
+        
+        # Середній об'єм за попередні свічки (виключаючи саму поточну відкриту свічку [-1])
+        avg_volume = sum(volumes[-(LIMIT_CANDLES - 1):-1]) / (LIMIT_CANDLES - 2)
+        current_volume = volumes[-1] # Об'єм свічки, що зараз формується
+        
+        # Рівень опору (наприклад, локальний максимум за попередній період)
+        resistance_level = max(highs[:-1])
+        current_price = closes[-1]
+        
+        # Розраховуємо відстань до рівня та сплеск об'єму
+        if resistance_level > 0:
+            distance_to_resistance = (resistance_level - current_price) / resistance_level
+        else:
+            return
+            
+        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
+        is_approaching = 0 <= distance_to_resistance <= APPROACH_PERCENT
+
+        # Якщо об'єм різко стріляє, а ціна треться об рівень — кидаємо сигнал
+        if is_volume_spike and is_approaching:
+            surge_percent = int((current_volume / avg_volume - 1) * 100)
+            alert_message = (
+                f"🎯⚡ **УВАГА [Зона інтересу / Спалах об'єму]**: `{symbol}` (1m)\n"
+                f"• Ціна біля опору: `{current_price}` (Рівень: `{resistance_level}`)\n"
+                f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
+                f"⏳ Лови шпильку / готуйся до розвороту!"
+            )
+            await send_to_discord(discord_webhook_url, alert_message)
+
     except Exception as e:
-        print(f"Помилка відправки у Discord: {e}")
-
-send_discord_alert("🟢 **Сканер оновлено: додано паралельний пошук рівнів на 15m та 1h таймфреймах!**")
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Scanner is active 24/7!")
-    def log_message(self, format, *args):
+        # Логуємо помилку по конкретній монеті, щоб бот не падав
+        # print(f"Помилка по {symbol}: {e}")
         pass
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+async def scan_market_cycle(client, symbols_list, discord_webhook_url):
+    """Головний цикл, який запускає перевірку всіх монет одночасно"""
+    # Створюємо список асинхронних задач для кожної монети з твого списку
+    tasks = [check_single_coin(client, symbol, discord_webhook_url) for symbol in symbols_list]
+    
+    # ОСЬ ТЕ САМЕ gather: пускає все паралельно і чекає завершення пакету
+    await asyncio.gather(*tasks)
 
-threading.Thread(target=run_web_server, daemon=True).start()
+async def main():
+    # Ініціалізація твого клієнта BingX та посилання на вебхук
+    # client = BingXAsyncClient(...) 
+    # symbols = ["BTC-USDT", "ETH-USDT", "HYPE-USDT", ...] # Твій список сканування
+    # webhook = "ТВОЄ_ПОСИЛАННЯ_НА_DISCORD_WEBHOOK"
 
-def self_ping_worker():
-    time.sleep(10)
-    app_url = RENDER_EXTERNAL_URL 
+    print("Бот запущено. Початок асинхронного сканування ринку...")
+    
     while True:
-        try:
-            if app_url:
-                requests.get(app_url, timeout=5)
-        except:
-            pass
-        time.sleep(300)
-
-threading.Thread(target=self_ping_worker, daemon=True).start()
-
-session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0"})
-
-def get_top_volatile_symbols(top_n=150):
-    url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
-    try:
-        response = session.get(url, timeout=5)
-        data = response.json()
-        tickers = data.get("data", [])
+        start_time = asyncio.get_event_loop().time()
         
-        valid_tickers = []
-        for t in tickers:
-            sym = t.get("symbol", "")
-            if sym.endswith("-USDT"):
-                base_part = sym.split("-")[0]
-                if "2USD" in base_part:
-                    continue
-                try:
-                    change = abs(float(t.get("priceChangePercent", 0)))
-                    valid_tickers.append((sym, change))
-                except:
-                    pass
+        # Запуск сканування всього списку
+        # await scan_market_cycle(client, symbols, webhook)
         
-        valid_tickers.sort(key=lambda x: x[1], reverse=True)
-        return [item[0] for item in valid_tickers[:top_n]]
-    except Exception as e:
-        print(f"Помилка отримання волатильних пар: {e}")
-        return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
+        # Робимо невелику паузу між циклами (наприклад, кожні 5-10 секунд)
+        elapsed = asyncio.get_event_loop().time() - start_time
+        sleep_time = max(1, 10 - elapsed) # Час паузи з урахуванням тривалості запитів
+        await asyncio.sleep(sleep_time)
 
-def get_klines(symbol, interval="15m", limit=60):
-    url = f"https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        response = session.get(url, timeout=4)
-        res_data = response.json()
-        data = res_data.get("data", [])
-        if isinstance(data, list) and len(data) > 0:
-            closes = [float(c.get("close", 0)) for c in data]
-            highs = [float(c.get("high", 0)) for c in data]
-            lows = [float(c.get("low", 0)) for c in data]
-            volumes = [float(c.get("volume", 0)) for c in data]
-            return closes, highs, lows, volumes
-    except:
-        pass
-    return None, None, None, None
-
-def find_clustered_levels(highs, lows, tolerance=0.01):
-    resistance_level = None
-    support_level = None
-    
-    local_highs = []
-    for i in range(2, len(highs) - 2):
-        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
-            local_highs.append(highs[i])
-            
-    local_lows = []
-    for i in range(2, len(lows) - 2):
-        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
-            local_lows.append(lows[i])
-
-    for h in local_highs:
-        matches = [x for x in local_highs if abs(x - h) / h <= tolerance]
-        if len(matches) >= 2:
-            resistance_level = sum(matches) / len(matches)
-            break
-
-    for l in local_lows:
-        matches = [x for x in local_lows if abs(x - l) / l <= tolerance]
-        if len(matches) >= 2:
-            support_level = sum(matches) / len(matches)
-            break
-
-    return resistance_level, support_level
-
-def process_timeframe_data(symbol, interval):
-    closes, highs, lows, volumes = get_klines(symbol, interval, limit=60)
-    if not closes or len(closes) < 50:
-        return []
-
-    current_close = closes[-1]
-    prev_close = closes[-2]
-    current_volume = volumes[-1]
-    
-    recent_vols = volumes[-20:-1]
-    avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else current_volume
-
-    res_lvl, sup_lvl = find_clustered_levels(highs, lows)
-    alerts = []
-
-    # 1. Підхід до опору
-    if res_lvl and (res_lvl - current_close) / res_lvl <= 0.005 and current_close <= res_lvl:
-        if current_volume >= avg_vol * 1.15:
-            alerts.append(f"👀 **{symbol} ({interval})**: **Ціна біля рівного опору** ({res_lvl:.4f}), готується пробій!")
-
-    # 2. Пробій опору
-    elif res_lvl and prev_close <= res_lvl and current_close > res_lvl and current_volume >= avg_vol * 1.15:
-        alerts.append(f"🎯🚀 **{symbol} ({interval})**: **Пробій рівного опору** ({res_lvl:.4f}) на об'ємі!")
-
-    # 3. Підхід до підтримки
-    if sup_lvl and (current_close - sup_lvl) / sup_lvl <= 0.005 and current_close >= sup_lvl:
-        if current_volume >= avg_vol * 1.15:
-            alerts.append(f"👀 **{symbol} ({interval})**: **Ціна біля рівної підтримки** ({sup_lvl:.4f}), можливий пробій вниз!")
-
-    # 4. Пробій підтримки
-    elif sup_lvl and prev_close >= sup_lvl and current_close < sup_lvl and current_volume >= avg_vol * 1.15:
-        alerts.append(f"🎯⚠️ **{symbol} ({interval})**: **Пробій рівної підтримки** ({sup_lvl:.4f}) на об'ємі!")
-
-    return alerts
-
-def analyze_market():
-    symbols = get_top_volatile_symbols(150)
-    signals_found = 0
-
-    for symbol in symbols:
-        try:
-            # Перевіряємо обидва таймфрейми для кожної монети
-            for tf in ["15m", "1h"]:
-                alerts = process_timeframe_data(symbol, tf)
-                for alert in alerts:
-                    send_discord_alert(alert)
-                    signals_found += 1
-                    time.sleep(0.3)
-                time.sleep(0.05)
-        except Exception as e:
-            pass
-            
-        time.sleep(0.05)
-
-    if signals_found > 0:
-        send_discord_alert(f"⏱️ **Цикл завершено**: знайдено сигналів (15m/1h): {signals_found}")
-
-def main():
-    while True:
-        try:
-            analyze_market()
-        except Exception as e:
-            print(f"Помилка: {e}")
-        time.sleep(120)
-
-if __name__ == "__main__":
-    main()
-    
+# Запуск програми локально або на Render
+# if __name__ == "__main__":
+#     asyncio.run(main())
