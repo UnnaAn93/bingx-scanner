@@ -10,14 +10,14 @@ APPROACH_PERCENT = 0.5            # 0.5% до рівня
 TIMEFRAME = "1m"                  # Робота на хвилинках
 LIMIT_CANDLES = 20                # Кількість свічок для середнього об'єму
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
-MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT (5 мільйонів), щоб відсіяти шлам
+MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 
 # Отримуємо вебхук із змінної середовища Render
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
 async def fetch_top_bingx_symbols(session):
-    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX з фільтром ліквідності"""
+    """Автоматично завантажує список найактивніших крипто-пар з ф'ючерсів BingX без службового сміття"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url, timeout=5) as response:
@@ -28,16 +28,13 @@ async def fetch_top_bingx_symbols(session):
                 usdt_tickers = []
                 for t in tickers:
                     symbol = t.get("symbol", "")
-                    if symbol.endswith("-USDT"):
-                        # Отримуємо добовий об'єм у USDT (у тікері BingX це поле quoteVolume або volume в USDT)
+                    # Фільтруємо: тільки справжні крипто-пари на кшталт XXX-USDT (без подвійних назв чи цифр посередині)
+                    if symbol.endswith("-USDT") and len(symbol) <= 12 and "USD" not in symbol[:-5]:
                         quote_vol = float(t.get("quoteVolume", 0))
                         if quote_vol >= MIN_24H_VOLUME_USDT:
                             usdt_tickers.append((symbol, quote_vol))
                 
-                # Сортуємо за спаданням добового об'єму
                 usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-                
-                # Беремо топ
                 top_symbols = [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
                 return top_symbols
     except Exception as e:
@@ -86,7 +83,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         closes = [float(x['close']) for x in kline_data]
         opens = [float(x['open']) for x in kline_data]
         
-        # Перевірка, чи свічки взагалі мають об'єм (відсікаємо повністю мертві свічки)
         current_volume = volumes[-1]
         if current_volume <= 0:
             return
@@ -140,7 +136,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено. Початок сканування ліквідних пар з фільтром об'ємів...")
+    print("Бот запущено. Сканування тільки чистих криптовалютних ф'ючерсів...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -182,4 +178,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                                
+        
