@@ -6,40 +6,36 @@ import threading
 
 # Налаштування параметрів сканування
 VOLUME_MULTIPLIER = 2.5       # У скільки разів поточний об'єм має перевищувати середній
-APPROACH_PERCENT = 0.003      # Як близько ціна має бути до рівня (0.3%)
-TIMEFRAME = "1m"              # Робота на хвилинках для максимальної швидкості
-LIMIT_CANDLES = 20            # Кількість свічок для розрахунку середнього об'єму
-TOP_COINS_LIMIT = 150         # Кількість найактивніших пар для сканування
+APPROACH_PERCENT = 0.005      # 0.5% до рівня
+TIMEFRAME = "1m"              # Робота на хвилинках
+LIMIT_CANDLES = 20            # Кількість свічок для середнього об'єму
+TOP_COINS_LIMIT = 150         # Кількість найактивніших пар
 
 # Отримуємо вебхук із змінної середовища Render
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
+RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
-async def fetch_top_bingx_symbols():
-    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX за об'ємом"""
+async def fetch_top_bingx_symbols(session):
+    """Автоматично завантажує список найактивніших USDT-пар з ф'ючерсів BingX"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    tickers = data.get("data", [])
-                    # Фільтруємо лише USDT-пари та сортуємо за об'ємом (volume)
-                    usdt_tickers = [
-                        t for t in tickers 
-                        if t.get("symbol", "").endswith("-USDT")
-                    ]
-                    # Сортуємо за спаданням об'єму
-                    usdt_tickers.sort(key=lambda x: float(x.get("volume", 0)), reverse=True)
-                    
-                    # Беремо топ-150
-                    top_symbols = [t["symbol"] for t in usdt_tickers[:TOP_COINS_LIMIT]]
-                    return top_symbols
-        except Exception as e:
-            print(f"Помилка при отриманні списку монет від BingX: {e}")
-        return []
+    try:
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                tickers = data.get("data", [])
+                usdt_tickers = [
+                    t for t in tickers 
+                    if t.get("symbol", "").endswith("-USDT")
+                ]
+                usdt_tickers.sort(key=lambda x: float(x.get("volume", 0)), reverse=True)
+                top_symbols = [t["symbol"] for t in usdt_tickers[:TOP_COINS_LIMIT]]
+                return top_symbols
+    except Exception as e:
+        print(f"Помилка при отриманні списку монет від BingX: {e}")
+    return []
 
 async def fetch_kline_data(session, symbol):
-    """Отримує свічки (kline) для конкретної пари через публічне API BingX"""
+    """Отримує свічки (kline) через публічне API BingX"""
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/klines"
     params = {
         "symbol": symbol,
@@ -47,7 +43,7 @@ async def fetch_kline_data(session, symbol):
         "limit": LIMIT_CANDLES
     }
     try:
-        async with session.get(url, params=params, timeout=5) as response:
+        async with session.get(url, params=params, timeout=4) as response:
             if response.status == 200:
                 data = await response.json()
                 return data.get("data", [])
@@ -68,24 +64,24 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
-    """Функція перевірки однієї монети"""
+    """Функція перевірки однієї монети з визначенням напрямку свічки"""
     kline_data = await fetch_kline_data(session, symbol)
     
     if not kline_data or len(kline_data) < 10:
         return
 
     try:
-        # У BingX API дані свічок приходять списком словників або масивом (залежно від версії, перевіряємо ключі)
-        # Зазвичай публічне API v2/quote/klines повертає поля: volume, high, close
         volumes = [float(x['volume']) for x in kline_data]
         highs = [float(x['high']) for x in kline_data]
         closes = [float(x['close']) for x in kline_data]
+        opens = [float(x['open']) for x in kline_data]
         
         avg_volume = sum(volumes[-(LIMIT_CANDLES - 1):-1]) / (LIMIT_CANDLES - 2)
         current_volume = volumes[-1]
         
         resistance_level = max(highs[:-1])
         current_price = closes[-1]
+        current_open = opens[-1]
         
         if resistance_level > 0:
             distance_to_resistance = (resistance_level - current_price) / resistance_level
@@ -97,8 +93,18 @@ async def check_single_coin(session, symbol, discord_webhook_url):
 
         if is_volume_spike and is_approaching:
             surge_percent = int((current_volume / avg_volume - 1) * 100)
+            
+            # Визначаємо напрямок за кольором свічки
+            if current_price >= current_open:
+                side_emoji = "🟢"
+                side_text = "Кульмінація покупців (Лонг / Зелена свічка)"
+            else:
+                side_emoji = "🔴"
+                side_text = "Кульмінація продавців (Шорт / Червона свічка)"
+
             alert_message = (
-                f"🎯⚡ **УВАГА [Зона інтересу / Спалах об'єму]**: `{symbol}` (1m)\n"
+                f"🎯⚡ **УВАГА [Спалах об'єму]**: `{symbol}` (1m)\n"
+                f"• Напрямок: {side_emoji} **{side_text}**\n"
                 f"• Ціна біля опору: `{current_price}` (Рівень: `{resistance_level}`)\n"
                 f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
                 f"⏳ Лови шпильку / готуйся до розвороту!"
@@ -108,31 +114,37 @@ async def check_single_coin(session, symbol, discord_webhook_url):
     except Exception:
         pass
 
+async def self_ping_loop(session):
+    """Фонова задача для запобігання засинанню на Render"""
+    while True:
+        await asyncio.sleep(240)
+        try:
+            async with session.get(RENDER_URL, timeout=5) as response:
+                pass
+        except Exception:
+            pass
+
 async def main():
-    print("Бот запущено. Початок сканування 150 найактивніших пар BingX...")
+    print("Бот запущено. Початок сканування 150 пар із визначенням напрямку...")
     
     async with aiohttp.ClientSession() as session:
+        asyncio.create_task(self_ping_loop(session))
+        
         while True:
             start_time = asyncio.get_event_loop().time()
             
-            # Оновлюємо список топ-150 пар на випадок зміни ліквідності на ринку
-            symbols_list = await fetch_top_bingx_symbols()
+            symbols_list = await fetch_top_bingx_symbols(session)
             
             if symbols_list and DISCORD_WEBHOOK_URL:
-                print(f"Сканування ринку для {len(symbols_list)} активних пар...")
-                # Запускаємо паралельні перевірки для всіх пар одразу
                 tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
                 await asyncio.gather(*tasks)
-            else:
-                print("Не вдалося отримати список пар або відсутній вебхук Discord.")
             
-            # Пауза між циклами сканування (наприклад, 10 секунд)
             elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 10 - elapsed)
+            sleep_time = max(1, 15 - elapsed)
             await asyncio.sleep(sleep_time)
 
 
-# --- Веб-сервер для утримання порта на Render ---
+# --- Веб-сервер для Render ---
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -148,13 +160,11 @@ def run_web_server():
     server.serve_forever()
 
 if __name__ == "__main__":
-    # Запускаємо веб-сервер у фоновому потоці
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
 
-    # Запускаємо асинхронного бота
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
+    
