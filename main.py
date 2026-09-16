@@ -5,14 +5,14 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування параметрів сканування
-VOLUME_MULTIPLIER = 2.2           # Трохи м'якший сплеск об'єму (у 2.2 рази)
-APPROACH_PERCENT = 0.007          # 0.7% до рівня (більш гнучка зона для підходу)
-TIMEFRAME = "1m"                  # Робота на хвилинках
-LIMIT_CANDLES = 30                # Історія для локального хаю
+# Налаштування параметрів сканування для 5-хвилинного таймфрейму
+VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази від середнього
+APPROACH_PERCENT = 0.007          # 0.7% до рівня
+TIMEFRAME = "5m"                  # Змінили таймфрейм на 5 хвилин!
+LIMIT_CANDLES = 30                # Історія для пошуку локального хаю на 5m
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 180            # 3 хвилини кулдауну на одну монету
+COOLDOWN_SECONDS = 300            # 5 хвилин кулдауну на одну монету (оскільки свічка триває 5 хв)
 
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
@@ -110,23 +110,23 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             surge_percent = int((current_volume / avg_volume - 1) * 100)
             
             alert_message = (
-                f"🎯⚡ **УВАГА [Спалах об'єму]**: `{symbol}` (1m)\n"
-                f"• Напрямок: 🟢 **Підтискання до локального рівня**\n"
+                f"🎯⚡ **УВАГА [Спалах об'єму 5m]**: `{symbol}`\n"
+                f"• Напрямок: 🟢 **Підтискання до локального рівня (5m)**\n"
                 f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                f"• Об'єм активної свічки: `+{surge_percent}%` до середнього!\n"
-                f"⏳ Готуйся до пробою!"
+                f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                f"⏳ Очікуй реакцію або пробій на старшому ТФ!"
             )
             
             last_alert_time[symbol] = current_time
             await send_to_discord(session, discord_webhook_url, alert_message)
-            print(f"Сотворіння сигналу відправлено для {symbol}")
+            print(f"Сигнал 5m відправлено для {symbol}")
 
     except Exception as e:
         pass
 
 async def self_ping_loop(session):
     while True:
-        asyncio.sleep(240)
+        await asyncio.sleep(240)
         try:
             async with session.get(RENDER_URL, timeout=5) as response:
                 pass
@@ -134,7 +134,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено з оновленими адаптивними параметрами сканування...")
+    print("Бот запущено на 5-хвилинному таймфреймі (5m)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -156,7 +156,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Scanner Bot is running!")
+        self.wfile.write(b"BingX Scanner Bot (5m) is running!")
     
     def log_message(self, format, *args):
         return
@@ -174,4 +174,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                
+    
