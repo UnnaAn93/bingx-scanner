@@ -5,14 +5,14 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування параметрів для пошуку точок знизу (підтримка / відскок)
+# Налаштування параметрів сканування
 VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
-APPROACH_PERCENT = 0.007          # 0.7% до рівня підтримки знизу
+APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки або опору)
 TIMEFRAME = "5m"                  # Таймфрейм 5 хвилин
-LIMIT_CANDLES = 30                # Історія для пошуку локального мінімуму
+LIMIT_CANDLES = 30                # Історія свічок
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на монету
+COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
@@ -82,8 +82,8 @@ async def check_single_coin(session, symbol, discord_webhook_url):
     try:
         volumes = [float(x['volume']) for x in kline_data]
         lows = [float(x['low']) for x in kline_data]
+        highs = [float(x['high']) for x in kline_data]
         closes = [float(x['close']) for x in kline_data]
-        opens = [float(x['open']) for x in kline_data]
         
         current_volume = volumes[-1]
         if current_volume <= 0:
@@ -94,34 +94,46 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             return
         
         current_price = closes[-1]
-        
-        # Шукаємо локальний рівень підтримки знизу (мінімум по лоу попередніх свічок)
-        support_level = min(lows[:-1])
-        if support_level <= 0:
-            return
-            
-        # Відстань від ціни до підтримки зверху вниз (скільки відсотків до дна)
-        distance_to_support = (current_price - support_level) / support_level
-            
         is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
         
-        # Умова: ціна підходить дуже близько до підтримки (в межах 0.7% над рівнем дна)
-        is_approaching_support = (0 <= distance_to_support <= APPROACH_PERCENT)
+        if not is_volume_spike:
+            return
 
-        if is_volume_spike and is_approaching_support:
-            surge_percent = int((current_volume / avg_volume - 1) * 100)
-            
-            alert_message = (
-                f"🟢🎯 **УВАГА [Кульмінація на дні / Підтримка 5m]**: `{symbol}`\n"
-                f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
-                f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                f"⏳ Готуйся до можливого відскоку вгору!"
-            )
-            
-            last_alert_time[symbol] = current_time
-            await send_to_discord(session, discord_webhook_url, alert_message)
-            print(f"Сигнал дна 5m відправлено для {symbol}")
+        surge_percent = int((current_volume / avg_volume - 1) * 100)
+
+        # 1. Перевірка на ЛОНГ (Підтримка знизу)
+        support_level = min(lows[:-1])
+        if support_level > 0:
+            distance_to_support = (current_price - support_level) / support_level
+            if 0 <= distance_to_support <= APPROACH_PERCENT:
+                alert_message = (
+                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
+                    f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
+                    f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
+                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                    f"⏳ Готуйся до можливого відскоку вгору!"
+                )
+                last_alert_time[symbol] = current_time
+                await send_to_discord(session, discord_webhook_url, alert_message)
+                print(f"Лонг сигнал 5m для {symbol}")
+                return
+
+        # 2. Перевірка на ШОРТ (Опір зверху)
+        resistance_level = max(highs[:-1])
+        if resistance_level > 0:
+            distance_to_resistance = (resistance_level - current_price) / resistance_level
+            if 0 <= distance_to_resistance <= APPROACH_PERCENT:
+                alert_message = (
+                    f"🔴🎯 **УВАГА [ШОРТ / Опір 5m]**: `{symbol}`\n"
+                    f"• Напрямок: 📉 **Підхід до локального хаю / Зونа опору**\n"
+                    f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
+                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                    f"⏳ Готуйся до можливого відбою вниз!"
+                )
+                last_alert_time[symbol] = current_time
+                await send_to_discord(session, discord_webhook_url, alert_message)
+                print(f"Шорт сигнал 5m для {symbol}")
+                return
 
     except Exception as e:
         pass
@@ -136,7 +148,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот переорієнтований на пошук локального дна та підтримки (5m)...")
+    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на 5m...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -158,7 +170,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Support Scanner Bot is running!")
+        self.wfile.write(b"BingX Long/Short Scanner Bot is running!")
     
     def log_message(self, format, *args):
         return
@@ -176,4 +188,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
+            
