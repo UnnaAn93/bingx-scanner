@@ -125,7 +125,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                 alert_message = (
                     f"🔴🎯 **УВАГА [ШОРТ / Опір 5m]**: `{symbol}`\n"
-                    f"• Напрямок: 📉 **Підхід до локального хаю / Зونа опору**\n"
+                    f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
                     f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
                     f"⏳ Готуйся до можливого відбою вниз!"
@@ -188,4 +188,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+    
