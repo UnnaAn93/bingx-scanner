@@ -5,14 +5,14 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування параметрів сканування
+# Налаштування параметрів сканування (змінено на 15m)
 VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
 APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки або опору)
-TIMEFRAME = "5m"                  # Таймфрейм 5 хвилин
-LIMIT_CANDLES = 30                # Історія свічок
+TIMEFRAME = "15m"                 # Таймфрейм змінено на 15 хвилин
+LIMIT_CANDLES = 40                # Збільшена історія свічок для 15m
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
+COOLDOWN_SECONDS = 600            # Кулдаун збільшено до 10 хвилин для 15m
 
 DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
@@ -76,7 +76,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
 
     kline_data = await fetch_kline_data(session, symbol)
     
-    if not kline_data or len(kline_data) < 20:
+    if not kline_data or len(kline_data) < 25:
         return
 
     try:
@@ -107,7 +107,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             distance_to_support = (current_price - support_level) / support_level
             if 0 <= distance_to_support <= APPROACH_PERCENT:
                 alert_message = (
-                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
+                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**: `{symbol}`\n"
                     f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
                     f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
@@ -115,7 +115,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Лонг сигнал 5m для {symbol}")
+                print(f"Лонг сигнал 15m для {symbol}")
                 return
 
         # 2. Перевірка на ШОРТ (Опір зверху)
@@ -124,7 +124,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             distance_to_resistance = (resistance_level - current_price) / resistance_level
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                 alert_message = (
-                    f"🔴🎯 **УВАГА [ШОРТ / Опір 5m]**: `{symbol}`\n"
+                    f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**: `{symbol}`\n"
                     f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
                     f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
@@ -132,7 +132,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Шорт сигнал 5m для {symbol}")
+                print(f"Шорт сигнал 15m для {symbol}")
                 return
 
     except Exception as e:
@@ -148,7 +148,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на 5m...")
+    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на таймфреймі 15m...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -163,14 +163,14 @@ async def main():
                 await asyncio.gather(*tasks)
             
             elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 15 - elapsed)
+            sleep_time = max(1, 30 - elapsed) # Збільшено паузу між циклами для 15m
             await asyncio.sleep(sleep_time)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Long/Short Scanner Bot is running!")
+        self.wfile.write(b"BingX Long/Short Scanner Bot (15m) is running!")
     
     def log_message(self, format, *args):
         return
@@ -188,4 +188,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-    
