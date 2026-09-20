@@ -86,7 +86,7 @@ def get_bingx_symbols():
         data = response.json()
         if data.get("code") == 0:
             contracts = data.get("data", {}).get("contracts", [])
-            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status"] == 1]
+            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status") == 1]
     except Exception:
         pass
     return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
