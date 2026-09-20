@@ -35,7 +35,7 @@ def run_flask():
 
 # --- ФУНКЦІЇ ДІСКОРДУ ---
 def send_discord_alert(message: str):
-    """Відправка сповіщень у Discord-канал"""
+    """Відправка сповіщень виключно у твій Discord-канал"""
     payload = {"content": message}
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
@@ -108,23 +108,19 @@ def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct
 
 def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
     """Розрахунок об'єму (2% від балансу з 20x плечем), встановлення плеча та відправка ордера"""
-    # 1. Отримуємо баланс
     balance = get_bingx_balance()
     if balance <= 0:
         print("❌ Неможливо отримати баланс або він нульовий!")
         return None
 
-    # 2. Виставляємо плече 20x
     set_bingx_leverage(symbol)
 
-    # 3. Розрахунок кількості (2% від депозиту * 20 плече / ціна входу)
     margin_to_use = balance * RISK_DEPOSIT_PCT
     position_notional = margin_to_use * LEVERAGE
     quantity = round(position_notional / entry_price, 3)
     if quantity <= 0:
-        quantity = 1  # Мінімальний захист від нульового об'єму
+        quantity = 1  
 
-    # 4. Розрахунок стоп-лосса і тейк-профіта
     stop_loss, take_profit = calculate_volume_sl_tp(entry_price, candle_low, candle_high)
 
     endpoint = "/openApi/swap/v2/trade/order"
@@ -150,13 +146,13 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
         data = response.json()
         if data.get("code") == 0:
             success_msg = (f"✅ Відкрито {side} по {symbol} (ТФ: {TIMEFRAME})!\n"
-                           f"• Плече: {LEVERAGE}x | Маржа: {margin_size_str if 'margin_size_str' in locals() else '2%'} | Об'єм: {quantity}\n"
+                           f"• Плече: {LEVERAGE}x | Маржа: 2% | Об'єм: {quantity}\n"
                            f"• Вхід: {entry_price} | SL: {stop_loss} | TP: {take_profit}")
             print(success_msg)
             send_discord_alert(success_msg)
             return data
         else:
-            error_msg = f"❌ Помилка від біржі BingX по {symbol}: {data}"
+            error_msg = f"❌ Помилка від біржа BingX по {symbol}: {data}"
             print(error_msg)
             return None
     except Exception as e:
@@ -177,11 +173,9 @@ def main_scanner_loop():
             counter += 1
             print(f"🔄 Сканування ринку (ТФ: {TIMEFRAME}) триває... (Ітерація #{counter})")
             
-            # Тут твої запити на свічки з параметром interval = "5m"
-            # Приклад виклику при знаходженні сигналу:
-            # place_bingx_order("BTC-USDT", "BUY", entry_price=65000, candle_low=64500, candle_high=65200)
+            # Логіка пошуку свічок та об'ємів на 5м
             
-            time.sleep(60) # Перевірка кожну хвилину на 5-хвилинному таймфреймі
+            time.sleep(60) 
         except Exception as e:
             print(f"❌ Помилка в основному циклі: {e}")
             time.sleep(10)
