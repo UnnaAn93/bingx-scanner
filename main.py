@@ -19,6 +19,7 @@ def home():
     return "BingX Volume Scanner & Bot is running!"
 
 def run_flask():
+    print("🌐 Вебсервер Flask запущено на порту 10000")
     app.run(host="0.0.0.0", port=10000)
 
 
@@ -86,20 +87,20 @@ def place_bingx_order(symbol, side, quantity, stop_loss, take_profit):
 # --- ОСНОВНИЙ ЦИКЛ СКАНЕРА ТА ТОРГІВЛІ ---
 def main_scanner_loop():
     print("🚀 Сканер та торговий бот запущені у фоновому режимі...")
+    counter = 0
     while True:
         try:
-            # Т тут виконується логіка твого сканування (наприклад, 15-хвилинні таймфрейми)
-            # Коли знаходиш сигнал, наприклад для SUI-USDT:
-            # symbol = "SUI-USDT"
-            # entry_price = 1.4460
-            # candle_low = 1.4200
-            # candle_high = 1.4500
+            counter += 1
+            print(f"🔄 Сканування ринку триває... (Ітерація #{counter})")
+            
+            # Т тут виконується логіка твого сканування
+            # Коли знаходиш сигнал:
             # sl, tp = calculate_volume_sl_tp(entry_price, candle_low, candle_high)
             # place_bingx_order(symbol, "BUY", 10, sl, tp)
             
             time.sleep(60) # Перевірка кожну хвилину
         except Exception as e:
-            print(f"Помилка в основному циклі: {e}")
+            print(f"❌ Помилка в основному циклі: {e}")
             time.sleep(10)
 
 
