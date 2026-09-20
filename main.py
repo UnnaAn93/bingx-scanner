@@ -15,7 +15,6 @@ MIN_24H_VOLUME_USDT = 100_000
 LEVERAGE = 10                     
 TRADE_USDT_AMOUNT = 10.0          
 
-# Дані автоматично підтягнуться з GitHub Secrets, але якщо забажаєш, вони заповнені напряму:
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "RahutzQYmOWGsDaNYihBArq8EZKeVKLEmQNDcMVt8wdTZkG21GyqK6ldgMcbPev6")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "2HB4IJUipl6ZtznwX7NE3rfMkXYAXXdhGGeussLnisBIQHxxcV6Z7KukpRkcKHTy")
 
@@ -54,7 +53,6 @@ def set_leverage(symbol):
     binance_request("POST", path, params)
 
 def get_open_positions():
-    """Отримує список реальних відкритих позицій з біржі"""
     path = "/fapi/v2/positionRisk"
     res = binance_request("GET", path)
     positions = {}
@@ -241,4 +239,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+        
