@@ -1,44 +1,31 @@
-import asyncio
-import aiohttp
 import os
 import time
 import hmac
 import hashlib
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-import json
+import requests
 
-# --- НАЛАШТУВАННЯ ТОРГІВЛІ ТА СКАНУВАННЯ ---
-VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
-APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки або опору)
-TIMEFRAME = "5"                   # Таймфрейм 5 хвилин
-LIMIT_CANDLES = 30                # Історія свічок
-TOP_COINS_LIMIT = 50              # Кількість пар для сканування
-MIN_24H_VOLUME_USDT = 100_000     # Мінімальний об'єм
-COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
+# --- НАЛАШТУВАННЯ ---
+VOLUME_MULTIPLIER = 2.2           
+APPROACH_PERCENT = 0.007          
+TIMEFRAME = "5"                   
+LIMIT_CANDLES = 30                
+TOP_COINS_LIMIT = 50              
+MIN_24H_VOLUME_USDT = 100_000     
 
-# Торгові параметри
-LEVERAGE = 10                     # Плече
-TRADE_USDT_AMOUNT = 10.0          # Сума ордера в USDT
+LEVERAGE = 10                     
+TRADE_USDT_AMOUNT = 10.0          
 
-# Твої ключі Binance Demo / Testnet (можна також залишити в змінних середовища Render)
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "ТВОЙ_API_KEY")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "ТВОЙ_SECRET_KEY")
+# Дані автоматично підтягнуться з GitHub Secrets, але якщо забажаєш, вони заповнені напряму:
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "RahutzQYmOWGsDaNYihBArq8EZKeVKLEmQNDcMVt8wdTZkG21GyqK6ldgMcbPev6")
+BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "2HB4IJUipl6ZtznwX7NE3rfMkXYAXXdhGGeussLnisBIQHxxcV6Z7KukpRkcKHTy")
 
-# Правильний ендпоінт для ф'ючерсного тестнету/демо Binance
 BINANCE_BASE_URL = "https://testnet.binancefuture.com"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF")
 
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF"
-RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
-
-last_alert_time = {}
-open_positions = {}  # {symbol: "LONG" або "SHORT"}
-
-# --- ФУНКЦІЇ ПІДПИСУ ТА ЗАПИТІВ ДО BINANCE API ---
 def get_binance_signature(secret, query_string):
     return hmac.new(secret.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
-async def binance_request(session, method, path, params=None):
+def binance_request(method, path, params=None):
     if params is None:
         params = {}
     
@@ -52,50 +39,48 @@ async def binance_request(session, method, path, params=None):
     
     try:
         if method == "GET":
-            async with session.get(url, headers=headers, timeout=5) as response:
-                res_json = await response.json()
-                print(f"Binance GET {path} відповідь: статус {response.status}, дані: {res_json}")
-                return res_json
+            response = requests.get(url, headers=headers, timeout=5)
+            return response.json()
         elif method == "POST":
-            async with session.post(url, headers=headers, timeout=5) as response:
-                res_json = await response.json()
-                print(f"Binance POST {path} відповідь: статус {response.status}, дані: {res_json}")
-                return res_json
-        elif method == "DELETE":
-            async with session.delete(url, headers=headers, timeout=5) as response:
-                res_json = await response.json()
-                print(f"Binance DELETE {path} відповідь: статус {response.status}, дані: {res_json}")
-                return res_json
+            response = requests.post(url, headers=headers, timeout=5)
+            return response.json()
     except Exception as e:
         print(f"Помилка запиту до Binance API ({path}): {e}")
     return None
 
-async def set_leverage(session, symbol):
+def set_leverage(symbol):
     path = "/fapi/v1/leverage"
     params = {"symbol": symbol, "leverage": LEVERAGE}
-    await binance_request(session, "POST", path, params)
+    binance_request("POST", path, params)
 
-async def open_market_order(session, symbol, side):
-    """
-    side: 'BUY' (Лонг) або 'SELL' (Шорт)
-    """
-    print(f"Спроба відкрити ринковий ордер на Binance: {symbol} | Сторона: {side}")
-    await set_leverage(session, symbol)
+def get_open_positions():
+    """Отримує список реальних відкритих позицій з біржі"""
+    path = "/fapi/v2/positionRisk"
+    res = binance_request("GET", path)
+    positions = {}
+    if isinstance(res, list):
+        for p in res:
+            amt = float(p['positionAmt'])
+            if amt != 0:
+                symbol = p['symbol']
+                side = "LONG" if amt > 0 else "SHORT"
+                positions[symbol] = side
+    return positions
+
+def open_market_order(symbol, side):
+    print(f"Спроба відкрити ринковий ордер: {symbol} | Сторона: {side}")
+    set_leverage(symbol)
     
-    # Отримуємо поточну ціну для розрахунку кількості
     ticker_url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/price?symbol={symbol}"
     try:
-        async with session.get(ticker_url) as resp:
-            t_data = await resp.json()
-            current_price = float(t_data['price'])
+        resp = requests.get(ticker_url, timeout=5).json()
+        current_price = float(resp['price'])
     except Exception as e:
         print(f"Не вдалося отримати ціну для {symbol}: {e}")
         return
 
     notional_size = TRADE_USDT_AMOUNT * LEVERAGE
-    qty = notional_size / current_price
-    
-    qty = round(qty, 2)
+    qty = round(notional_size / current_price, 2)
     if qty <= 0:
         qty = 0.01
 
@@ -107,36 +92,25 @@ async def open_market_order(session, symbol, side):
         "quantity": qty
     }
     
-    res = await binance_request(session, "POST", path, params)
+    res = binance_request("POST", path, params)
     if res and "orderId" in res:
-        print(f"✅ Binance Demo: Успішно відкрито ордер [{side}] для {symbol}, ID: {res['orderId']}")
+        print(f"✅ Успішно відкрито ордер [{side}] для {symbol}, ID: {res['orderId']}")
     else:
-        print(f"❌ Binance Demo Помилка ордера для {symbol}: {res}")
+        print(f"❌ Помилка ордера для {symbol}: {res}")
 
-async def close_position(session, symbol):
-    current_side = open_positions.get(symbol)
-    if not current_side:
-        return
-    
+def close_position(symbol, current_side):
     close_side = "SELL" if current_side == "LONG" else "BUY"
-    print(f"Спроба закрити позицію по {symbol} (сторона закриття: {close_side})")
+    print(f"Закриваємо позицію по {symbol} (сторона: {close_side})")
     
-    pos_path = "/fapi/v2/positionRisk"
-    pos_res = await binance_request(session, "GET", pos_path)
-    
-    try:
-        position_qty = 0.0
-        if isinstance(pos_res, list):
-            for p in pos_res:
-                if p['symbol'] == symbol:
-                    position_qty = float(p['positionAmt'])
-                    break
-        
-        if position_qty == 0:
-            open_positions.pop(symbol, None)
-            return
-
-        abs_qty = abs(position_qty)
+    pos_res = binance_request("GET", "/fapi/v2/positionRisk")
+    abs_qty = 0.0
+    if isinstance(pos_res, list):
+        for p in pos_res:
+            if p['symbol'] == symbol:
+                abs_qty = abs(float(p['positionAmt']))
+                break
+                
+    if abs_qty > 0:
         path = "/fapi/v1/order"
         params = {
             "symbol": symbol,
@@ -144,70 +118,72 @@ async def close_position(session, symbol):
             "type": "MARKET",
             "quantity": abs_qty
         }
-        res = await binance_request(session, "POST", path, params)
+        res = binance_request("POST", path, params)
         if res and "orderId" in res:
-            print(f"✅ Binance Demo: Позицію по {symbol} закрито.")
-            open_positions.pop(symbol, None)
-    except Exception as e:
-        print(f"Помилка закриття позиції на Binance: {e}")
+            print(f"✅ Позицію по {symbol} закрито.")
 
-# --- СКАНЕР РИНКУ ---
-async def fetch_top_binance_symbols(session):
+def send_to_discord(message):
+    if not DISCORD_WEBHOOK_URL:
+        return
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=5)
+    except Exception:
+        pass
+
+def fetch_top_symbols():
     url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/24hr"
     try:
-        async with session.get(url, timeout=5) as response:
-            if response.status == 200:
-                tickers = await response.json()
-                usdt_tickers = []
-                for t in tickers:
-                    symbol = t.get("symbol", "")
-                    if symbol.endswith("USDT"):
-                        turnover = float(t.get("quoteVolume", 0))
-                        if turnover >= MIN_24H_VOLUME_USDT:
-                            usdt_tickers.append((symbol, turnover))
-                usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-                return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            tickers = response.json()
+            usdt_tickers = []
+            for t in tickers:
+                symbol = t.get("symbol", "")
+                if symbol.endswith("USDT"):
+                    turnover = float(t.get("quoteVolume", 0))
+                    if turnover >= MIN_24H_VOLUME_USDT:
+                        usdt_tickers.append((symbol, turnover))
+            usdt_tickers.sort(key=lambda x: x[1], reverse=True)
+            return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
     except Exception:
         pass
     return []
 
-async def fetch_kline_data(session, symbol):
+def fetch_kline_data(symbol):
     url = f"{BINANCE_BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={TIMEFRAME}m&limit={LIMIT_CANDLES}"
     try:
-        async with session.get(url, timeout=4) as response:
-            if response.status == 200:
-                raw_list = await response.json()
-                formatted = []
-                for item in raw_list:
-                    formatted.append({
-                        "low": float(item[3]),
-                        "high": float(item[2]),
-                        "close": float(item[4]),
-                        "volume": float(item[5])
-                    })
-                return formatted
+        response = requests.get(url, timeout=4)
+        if response.status_code == 200:
+            raw_list = response.json()
+            formatted = []
+            for item in raw_list:
+                formatted.append({
+                    "low": float(item[3]),
+                    "high": float(item[2]),
+                    "close": float(item[4]),
+                    "volume": float(item[5])
+                })
+            return formatted
     except Exception:
         pass
     return None
 
-async def send_to_discord(session, webhook_url, message):
-    if not webhook_url:
-        return
-    try:
-        await session.post(webhook_url, json={"content": message})
-    except Exception:
-        pass
-
-async def check_single_coin(session, symbol, discord_webhook_url):
-    current_time = time.time()
-    if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
+def main():
+    print("Запуск сканування ринку через GitHub Actions...")
+    
+    current_positions = get_open_positions()
+    print(f"Поточні відкриті позиції на біржі: {current_positions}")
+    
+    symbols_list = fetch_top_symbols()
+    if not symbols_list:
+        print("Не вдалося отримати список монет.")
         return
 
-    kline_data = await fetch_kline_data(session, symbol)
-    if not kline_data or len(kline_data) < 20:
-        return
+    for symbol in symbols_list:
+        kline_data = fetch_kline_data(symbol)
+        if not kline_data or len(kline_data) < 20:
+            continue
 
-    try:
         volumes = [x['volume'] for x in kline_data]
         lows = [x['low'] for x in kline_data]
         highs = [x['high'] for x in kline_data]
@@ -215,15 +191,15 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         
         current_volume = volumes[-1]
         if current_volume <= 0:
-            return
+            continue
 
         avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
         if avg_volume <= 0:
-            return
+            continue
         
         current_price = closes[-1]
         if current_volume < (avg_volume * VOLUME_MULTIPLIER):
-            return
+            continue
 
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
@@ -231,92 +207,38 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             
-            if open_positions.get(symbol) == "SHORT":
-                await close_position(session, symbol)
+            if current_positions.get(symbol) == "SHORT":
+                close_position(symbol, "SHORT")
 
-            alert_message = (
-                f"🟢🎯 **BINANCE DEMO [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
-                f"• Напрямок: 🚀 **Підхід до дна / Відскок**\n"
+            alert_msg = (
+                f"🟢🎯 **GH ACTIONS [ЛОНГ / Підтримка]**: `{symbol}`\n"
                 f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` від середнього!"
+                f"• Об'єм: `+{surge_percent}%`"
             )
-            last_alert_time[symbol] = current_time
-            await send_to_discord(session, discord_webhook_url, alert_message)
+            send_to_discord(alert_msg)
             
-            if symbol not in open_positions:
-                await open_market_order(session, symbol, "BUY")
-                open_positions[symbol] = "LONG"
-            return
+            if symbol not in current_positions:
+                open_market_order(symbol, "BUY")
+            continue
 
         # 2. ШОРТ (Опір)
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             
-            if open_positions.get(symbol) == "LONG":
-                await close_position(session, symbol)
+            if current_positions.get(symbol) == "LONG":
+                close_position(symbol, "LONG")
 
-            alert_message = (
-                f"🔴🎯 **BINANCE DEMO [ШОРТ / Опір 5m]**: `{symbol}`\n"
-                f"• Напрямок: 📉 **Підхід до хаю / Відбій**\n"
+            alert_msg = (
+                f"🔴🎯 **GH ACTIONS [ШОРТ / Опір]**: `{symbol}`\n"
                 f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` від середнього!"
+                f"• Об'єм: `+{surge_percent}%`"
             )
-            last_alert_time[symbol] = current_time
-            await send_to_discord(session, discord_webhook_url, alert_message)
+            send_to_discord(alert_msg)
             
-            if symbol not in open_positions:
-                await open_market_order(session, symbol, "SELL")
-                open_positions[symbol] = "SHORT"
-            return
-
-    except Exception:
-        pass
-
-async def self_ping_loop(session):
-    while True:
-        await asyncio.sleep(240)
-        try:
-            async with session.get(RENDER_URL, timeout=5):
-                pass
-        except Exception:
-            pass
-
-async def main():
-    print("Бот запущено для Binance Demo (Сканер + Авто-угоди з логуванням)...")
-    async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping_loop(session))
-        
-        while True:
-            start_time = asyncio.get_event_loop().time()
-            symbols_list = await fetch_top_binance_symbols(session)
-            
-            if symbols_list and DISCORD_WEBHOOK_URL:
-                tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
-                await asyncio.gather(*tasks)
-            
-            elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 15 - elapsed)
-            await asyncio.sleep(sleep_time)
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Binance Demo Scanner Bot is running!")
-    def log_message(self, format, *args):
-        return
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+            if symbol not in current_positions:
+                open_market_order(symbol, "SELL")
+            continue
 
 if __name__ == "__main__":
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Бот зупинений.")
+    main()
     
