@@ -15,11 +15,12 @@ MIN_24H_VOLUME_USDT = 100_000
 LEVERAGE = 10                     
 TRADE_USDT_AMOUNT = 10.0          
 
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "RahutzQYmOWGsDaNYihBArq8EZKeVKLEmQNDcMVt8wdTZkG21GyqK6ldgMcbPev6")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "2HB4IJUipl6ZtznwX7NE3rfMkXYAXXdhGGeussLnisBIQHxxcV6Z7KukpRkcKHTy")
+# Ключі та адреси (для Binance Demo використовується бойовий домен fapi.binance.com)
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
+BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "")
+BINANCE_BASE_URL = "https://fapi.binance.com"
 
-BINANCE_BASE_URL = "https://testnet.binancefuture.com"
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 def get_binance_signature(secret, query_string):
     return hmac.new(secret.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -50,7 +51,8 @@ def binance_request(method, path, params=None):
 def set_leverage(symbol):
     path = "/fapi/v1/leverage"
     params = {"symbol": symbol, "leverage": LEVERAGE}
-    binance_request("POST", path, params)
+    res = binance_request("POST", path, params)
+    print(f"Встановлення кредитного плеча {LEVERAGE}x для {symbol}: {res}")
 
 def get_open_positions():
     path = "/fapi/v2/positionRisk"
@@ -58,15 +60,18 @@ def get_open_positions():
     positions = {}
     if isinstance(res, list):
         for p in res:
-            amt = float(p['positionAmt'])
-            if amt != 0:
-                symbol = p['symbol']
-                side = "LONG" if amt > 0 else "SHORT"
-                positions[symbol] = side
+            try:
+                amt = float(p.get('positionAmt', 0))
+                if amt != 0:
+                    symbol = p['symbol']
+                    side = "LONG" if amt > 0 else "SHORT"
+                    positions[symbol] = side
+            except Exception:
+                continue
     return positions
 
 def open_market_order(symbol, side):
-    print(f"Спроба відкрити ринковий ордер: {symbol} | Сторона: {side}")
+    print(f"🔄 Спроба відкрити ринковий ордер: {symbol} | Сторона: {side}")
     set_leverage(symbol)
     
     ticker_url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/price?symbol={symbol}"
@@ -74,13 +79,13 @@ def open_market_order(symbol, side):
         resp = requests.get(ticker_url, timeout=5).json()
         current_price = float(resp['price'])
     except Exception as e:
-        print(f"Не вдалося отримати ціну для {symbol}: {e}")
+        print(f"❌ Не вдалося отримати ціну для {symbol}: {e}")
         return
 
     notional_size = TRADE_USDT_AMOUNT * LEVERAGE
-    qty = round(notional_size / current_price, 2)
+    qty = round(notional_size / current_price, 3)
     if qty <= 0:
-        qty = 0.01
+        qty = 0.001
 
     path = "/fapi/v1/order"
     params = {
@@ -94,18 +99,18 @@ def open_market_order(symbol, side):
     if res and "orderId" in res:
         print(f"✅ Успішно відкрито ордер [{side}] для {symbol}, ID: {res['orderId']}")
     else:
-        print(f"❌ Помилка ордера для {symbol}: {res}")
+        print(f"❌ Помилка відкриття ордера для {symbol}: {res}")
 
 def close_position(symbol, current_side):
     close_side = "SELL" if current_side == "LONG" else "BUY"
-    print(f"Закриваємо позицію по {symbol} (сторона: {close_side})")
+    print(f"🔄 Закриваємо позицію по {symbol} (сторона: {close_side})")
     
     pos_res = binance_request("GET", "/fapi/v2/positionRisk")
     abs_qty = 0.0
     if isinstance(pos_res, list):
         for p in pos_res:
             if p['symbol'] == symbol:
-                abs_qty = abs(float(p['positionAmt']))
+                abs_qty = abs(float(p.get('positionAmt', 0)))
                 break
                 
     if abs_qty > 0:
@@ -118,7 +123,9 @@ def close_position(symbol, current_side):
         }
         res = binance_request("POST", path, params)
         if res and "orderId" in res:
-            print(f"✅ Позицію по {symbol} закрито.")
+            print(f"✅ Позицію по {symbol} успішно закрито.")
+        else:
+            print(f"❌ Помилка закриття позиції по {symbol}: {res}")
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
@@ -143,8 +150,8 @@ def fetch_top_symbols():
                         usdt_tickers.append((symbol, turnover))
             usdt_tickers.sort(key=lambda x: x[1], reverse=True)
             return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Помилка завантаження списку монет: {e}")
     return []
 
 def fetch_kline_data(symbol):
@@ -167,15 +174,17 @@ def fetch_kline_data(symbol):
     return None
 
 def main():
-    print("Запуск сканування ринку через GitHub Actions...")
+    print("🚀 Запуск сканування ринку через GitHub Actions...")
     
     current_positions = get_open_positions()
     print(f"Поточні відкриті позиції на біржі: {current_positions}")
     
     symbols_list = fetch_top_symbols()
     if not symbols_list:
-        print("Не вдалося отримати список монет.")
+        print("❌ Не вдалося отримати список монет.")
         return
+
+    print(f"Отримано топ монет для перевірки: {len(symbols_list)}")
 
     for symbol in symbols_list:
         kline_data = fetch_kline_data(symbol)
@@ -209,7 +218,7 @@ def main():
                 close_position(symbol, "SHORT")
 
             alert_msg = (
-                f"🟢🎯 **GH ACTIONS [ЛОНГ / Підтримка]**: `{symbol}`\n"
+                f"🟢🎯 **DEMO [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
                 f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                 f"• Об'єм: `+{surge_percent}%`"
             )
@@ -227,7 +236,7 @@ def main():
                 close_position(symbol, "LONG")
 
             alert_msg = (
-                f"🔴🎯 **GH ACTIONS [ШОРТ / Опір]**: `{symbol}`\n"
+                f"🔴🎯 **DEMO [ШОРТ / Опір 5m]**: `{symbol}`\n"
                 f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                 f"• Об'єм: `+{surge_percent}%`"
             )
@@ -237,6 +246,8 @@ def main():
                 open_market_order(symbol, "SELL")
             continue
 
+    print("🏁 Сканування завершено.")
+
 if __name__ == "__main__":
     main()
-    
+                    
