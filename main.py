@@ -86,7 +86,7 @@ def get_bingx_symbols():
         data = response.json()
         if data.get("code") == 0:
             contracts = data.get("data", {}).get("contracts", [])
-            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status"] == 1]
+            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status") == 1]
     except Exception:
         pass
     return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
@@ -115,7 +115,6 @@ def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct
 
 
 def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
-    # Етап 1: Сповіщення про виявлений сигнал
     signal_msg = (f"🎯 **СИГНАЛ [Об'ємний імпульс 5m]**:\n"
                   f"• Пара: `{symbol}`\n"
                   f"• Ціна входу: {entry_price}\n"
@@ -155,7 +154,6 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
         response = requests.post(url, headers=headers, params=params)
         data = response.json()
         if data.get("code") == 0:
-            # Етап 2: Успішне відкриття позиції
             success_msg = (f"✅ **ПОЗИЦІЮ ВІДКРИТО [ЛОНГ]**:\n"
                            f"• Пара: `{symbol}`\n"
                            f"• Плече: {LEVERAGE}x | Ризик: 2% | Об'єм: {quantity}\n"
@@ -163,7 +161,6 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
             print(success_msg)
             send_discord_alert(success_msg)
         else:
-            # Сповіщення про відмову біржі (наприклад, недостатньо коштів, помилка ліміту тощо)
             fail_msg = f"⚠️ **ВІДМОВА БІРЖІ по {symbol}**:\n• Відповідь API: `{data}`"
             print(fail_msg)
             send_discord_alert(fail_msg)
