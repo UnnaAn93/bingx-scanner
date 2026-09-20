@@ -1,9 +1,17 @@
-Import asyncio
+import asyncio
 import aiohttp
 import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import hmac
+import hashlib
+import urllib.parse
+
+# --- НАЛАШТУВАННЯ BINGX API ---
+API_KEY = "TAMQgieAMOQJuuik9XpcPa5wHch0wmXaQ8G6yBdXUlZ6G2vv3uS47QgW1NNfcI4BxLmgmeo5XwFzXEQx9dOA"
+SECRET_KEY = "18EgcerNxJ5fv7TCnxQ5okPXr1VpYsJPnhYRF1GZOsikgHD2c1owRyqApKieZYQoCY2SeclmXVTdW33nIIjg"
+BASE_URL = "https://open-api.bingx.com"
 
 # Налаштування параметрів сканування
 VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
@@ -13,11 +21,54 @@ LIMIT_CANDLES = 30                # Історія свічок
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
+LEVERAGE = 20                     # Плече для торгівлі
+RISK_DEPOSIT_PCT = 0.02           # Ризик на угоду (2%)
 
-DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
+DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY") # Або встав свою силку вебхука напряму, якщо потрібно
 RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
 
 last_alert_time = {}
+
+def get_sign(secret_key, params):
+    parameters = urllib.parse.urlencode(sorted(params.items()))
+    return hmac.new(secret_key.encode('utf-8'), parameters.encode('utf-8'), hashlib.sha256).hexdigest()
+
+def get_bingx_balance():
+    endpoint = "/openApi/swap/v1/user/balance"
+    url = BASE_URL + endpoint
+    timestamp = str(int(time.time() * 1000))
+    params = {"timestamp": timestamp}
+    params["signature"] = get_sign(SECRET_KEY, params)
+    headers = {"X-BX-APIKEY": API_KEY}
+    try:
+        response = requests_get_sync(url, headers=headers, params=params)
+        if response and response.status_code == 200:
+            data = response.json()
+            if data.get("code") == 0:
+                return float(data.get("data", {}).get("balance", {}).get("equity", 0))
+    except Exception as e:
+        print(f"❌ Помилка балансу: {e}")
+    return 0.0
+
+def requests_get_sync(url, headers, params):
+    import requests
+    try:
+        return requests.get(url, headers=headers, params=params, timeout=5)
+    except Exception:
+        return None
+
+def set_bingx_leverage_sync(symbol, side):
+    import requests
+    endpoint = "/openApi/swap/v1/trade/leverage"
+    url = BASE_URL + endpoint
+    timestamp = str(int(time.time() * 1000))
+    params = {"symbol": symbol, "leverage": str(LEVERAGE), "side": side, "timestamp": timestamp}
+    params["signature"] = get_sign(SECRET_KEY, params)
+    headers = {"X-BX-APIKEY": API_KEY}
+    try:
+        requests.post(url, headers=headers, params=params, timeout=5)
+    except Exception as e:
+        print(f"❌ Помилка плеча: {e}")
 
 async def fetch_top_bingx_symbols(session):
     url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
@@ -69,6 +120,91 @@ async def send_to_discord(session, webhook_url, message):
     except Exception as e:
         print(f"Виняток при відправці у Discord: {e}")
 
+async def send_two_step_alert(session, webhook_url, symbol, signal_type, alert_message, lows, highs, closes, current_price, surge_percent):
+    if not webhook_url:
+        return
+
+    # Етап 1: Сповіщення про виявлений сигнал
+    step1_msg = (
+        f"🎯 **СИГНАЛ [{signal_type} / 5m]**: `{symbol}`\n"
+        f"• Ціна входу / поточна: `{current_price}`\n"
+        f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+        f"• Статус: Перевірка балансу та відкриття позиції на біржі..."
+    )
+    await send_to_discord(session, webhook_url, step1_msg)
+
+    # Виконання торгової логіки на біржі в окремому потоці або синхронно
+    loop = asyncio.get_event_loop()
+    balance = await loop.run_in_executor(None, get_bingx_balance)
+
+    if balance <= 0:
+        err_msg = f"❌ **ПОМИЛКА по {symbol}**: Нульовий баланс або не вдалося отримати дані акаунта!"
+        await send_to_discord(session, webhook_url, err_msg)
+        return
+
+    side = "BUY" if "ЛОНГ" in signal_type else "SELL"
+    position_side = "LONG" if side == "BUY" else "SHORT"
+
+    await loop.run_in_executor(None, set_bingx_leverage_sync, symbol, position_side)
+
+    margin_to_use = balance * RISK_DEPOSIT_PCT
+    position_notional = margin_to_use * LEVERAGE
+    quantity = round(position_notional / current_price, 3)
+    if quantity <= 0:
+        quantity = 1
+
+    # Розрахунок SL та TP
+    if side == "BUY":
+        stop_loss = min(lows[:-1]) * 0.998
+        take_profit = current_price + ((current_price - stop_loss) * 2.5)
+    else:
+        stop_loss = max(highs[:-1]) * 1.002
+        take_profit = current_price - ((stop_loss - current_price) * 2.5)
+
+    stop_loss = round(stop_loss, 4)
+    take_profit = round(take_profit, 4)
+
+    endpoint = "/openApi/swap/v2/trade/order"
+    url = BASE_URL + endpoint
+    timestamp = str(int(time.time() * 1000))
+    params = {
+        "symbol": symbol, 
+        "side": side, 
+        "positionSide": position_side,
+        "type": "MARKET", 
+        "quantity": str(quantity),
+        "stopLoss": str(stop_loss), 
+        "takeProfit": str(take_profit),
+        "timestamp": timestamp
+    }
+    params["signature"] = get_sign(SECRET_KEY, params)
+    headers = {"X-BX-APIKEY": API_KEY}
+
+    import requests
+    try:
+        response = await loop.run_in_executor(
+            None, 
+            lambda: requests.post(url, headers=headers, params=params, timeout=5)
+        )
+        if response and response.status_code == 200:
+            data = response.json()
+            if data.get("code") == 0:
+                # Етап 2: Успішне відкриття позиції
+                success_msg = (
+                    f"✅ **ПОЗИЦІЮ ВІДКРИТО [{signal_type}]**:\n"
+                    f"• Пара: `{symbol}`\n"
+                    f"• Плече: `{LEVERAGE}x` | Об'єм: `{quantity}`\n"
+                    f"• Вхід: `{current_price}` | SL: `{stop_loss}` | TP: `{take_profit}`"
+                )
+                await send_to_discord(session, webhook_url, success_msg)
+            else:
+                fail_msg = f"⚠️ **ВІДМОВА БІРЖІ по {symbol}**:\n• Відповідь API: `{data}`"
+                await send_to_discord(session, webhook_url, fail_msg)
+        else:
+            await send_to_discord(session, webhook_url, f"❌ **ПОМИЛКА МЕРЕЖІ при замовленні {symbol}**")
+    except Exception as e:
+        await send_to_discord(session, webhook_url, f"❌ **ВИНЯТОК ПРИ ЗАМОВЛЕННІ {symbol}**: `{e}`")
+
 async def check_single_coin(session, symbol, discord_webhook_url):
     current_time = time.time()
     if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
@@ -106,15 +242,11 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if support_level > 0:
             distance_to_support = (current_price - support_level) / support_level
             if 0 <= distance_to_support <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
-                    f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
-                    f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відскоку вгору!"
-                )
                 last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
+                await send_two_step_alert(
+                    session, discord_webhook_url, symbol, "ЛОНГ / Підтримка 5m",
+                    "", lows, highs, closes, current_price, surge_percent
+                )
                 print(f"Лонг сигнал 5m для {symbol}")
                 return
 
@@ -123,15 +255,11 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if resistance_level > 0:
             distance_to_resistance = (resistance_level - current_price) / resistance_level
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🔴🎯 **УВАГА [ШОРТ / Опір 5m]**: `{symbol}`\n"
-                    f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
-                    f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відбою вниз!"
-                )
                 last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
+                await send_two_step_alert(
+                    session, discord_webhook_url, symbol, "ШОРТ / Опір 5m",
+                    "", lows, highs, closes, current_price, surge_percent
+                )
                 print(f"Шорт сигнал 5m для {symbol}")
                 return
 
@@ -148,7 +276,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на 5m...")
+    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на 5m із двоступеневими сповіщеннями...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -188,3 +316,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
+                           
