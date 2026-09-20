@@ -4,12 +4,16 @@ import time
 import requests
 import urllib.parse
 import threading
+import os
 from flask import Flask
 
 # --- НАЛАШТУВАННЯ BINGX API ---
 API_KEY = "TAMQgieAMOQJuuik9XpcPa5wHch0wmXaQ8G6yBdXUlZ6G2vv3uS47QgW1NNfcI4BxLmgmeo5XwFzXEQx9dOA"
 SECRET_KEY = "18EgcerNxJ5fv7TCnxQ5okPXr1VpYsJPnhYRF1GZOsikgHD2c1owRyqApKieZYQoCY2SeclmXVTdW33nIIjg"
 BASE_URL = "https://open-api.bingx.com"
+
+# --- НАЛАШТУВАННЯ DISCORD ---
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1545120862875815986/khalqqspIhWB0cVtqQpPHq7kYBdj55Nsx70z0xATsarbD4oJpD1FgPUsFSozwfFv9xOz"
 
 # --- FLASK ДЛЯ RENDER (щоб додаток не закривався) ---
 app = Flask(__name__)
@@ -19,8 +23,25 @@ def home():
     return "BingX Volume Scanner & Bot is running!"
 
 def run_flask():
-    print("🌐 Вебсервер Flask запущено на порту 10000")
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🌐 Вебсервер Flask запущено на порту {port}")
+    app.run(host="0.0.0.0", port=port)
+
+
+# --- ФУНКЦІЇ ДІСКОРДУ ---
+def send_discord_alert(message: str):
+    """Відправка сповіщень у твій Discord-канал через вебхук"""
+    payload = {
+        "content": message
+    }
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        if response.status_code == 204:
+            print("📤 Сповіщення успішно надіслано в Discord!")
+        else:
+            print(f"❌ Помилка відправки в Discord: {response.status_code}, {response.text}")
+    except Exception as e:
+        print(f"❌ Виняток при надсиланні на вебхук: {e}")
 
 
 # --- ФУНКЦІЇ БІРЖІ ТА РОЗРАХУНКУ РИЗИКУ ---
@@ -57,7 +78,7 @@ def place_bingx_order(symbol, side, quantity, stop_loss, take_profit):
         "symbol": symbol,         # Наприклад, "SUI-USDT"
         "side": side,             # "BUY" або "SELL"
         "positionSide": "LONG",   # Для лонг позиції
-        "type": "MARKET",         # Ринків ордер для швидкого входу
+        "type": "MARKET",         # Ринковий ордер для швидкого входу
         "quantity": quantity,     # Об'єм контракту
         "stopLoss": str(stop_loss),
         "takeProfit": str(take_profit),
@@ -74,29 +95,35 @@ def place_bingx_order(symbol, side, quantity, stop_loss, take_profit):
         response = requests.post(url, headers=headers, params=params)
         data = response.json()
         if data.get("code") == 0:
-            print(f"✅ Успішно відкрито {side} по {symbol}! SL: {stop_loss}, TP: {take_profit}")
+            success_msg = f"✅ Успішно відкрито {side} по {symbol}! SL: {stop_loss}, TP: {take_profit}"
+            print(success_msg)
+            send_discord_alert(success_msg)
             return data
         else:
-            print(f"❌ Помилка від біржі: {data}")
+            error_msg = f"❌ Помилка від біржі BingX: {data}"
+            print(error_msg)
             return None
     except Exception as e:
-        print(f"❌ Помилка з'єднання з API BingX: {e}")
+        error_msg = f"❌ Помилка з'єднання з API BingX: {e}"
+        print(error_msg)
         return None
 
 
 # --- ОСНОВНИЙ ЦИКЛ СКАНЕРА ТА ТОРГІВЛІ ---
 def main_scanner_loop():
     print("🚀 Сканер та торговий бот запущені у фоновому режимі...")
+    send_discord_alert("🚀 Бот сканування об'ємів та торгівлі успішно запущено й він стежить за ринком!")
+    
     counter = 0
     while True:
         try:
             counter += 1
             print(f"🔄 Сканування ринку триває... (Ітерація #{counter})")
             
-            # Т тут виконується логіка твого сканування
-            # Коли знаходиш сигнал:
+            # Тут виконується логіка твого сканування об'ємів / свічок
+            # Коли знаходиш сигнал, викликаєш:
             # sl, tp = calculate_volume_sl_tp(entry_price, candle_low, candle_high)
-            # place_bingx_order(symbol, "BUY", 10, sl, tp)
+            # place_bingx_order(symbol, "BUY", quantity, sl, tp)
             
             time.sleep(60) # Перевірка кожну хвилину
         except Exception as e:
