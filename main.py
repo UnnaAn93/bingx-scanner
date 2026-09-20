@@ -60,8 +60,8 @@ def get_bingx_balance():
         data = response.json()
         if data.get("code") == 0:
             return float(data.get("data", {}).get("balance", {}).get("equity", 0))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Помилка балансу: {e}")
     return 0.0
 
 
@@ -74,8 +74,8 @@ def set_bingx_leverage(symbol):
     headers = {"X-BX-APIKEY": API_KEY}
     try:
         requests.post(url, headers=headers, params=params)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Помилка плеча: {e}")
 
 
 def get_bingx_symbols():
@@ -86,7 +86,7 @@ def get_bingx_symbols():
         data = response.json()
         if data.get("code") == 0:
             contracts = data.get("data", {}).get("contracts", [])
-            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status") == 1]
+            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status"] == 1]
     except Exception:
         pass
     return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
@@ -115,8 +115,18 @@ def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct
 
 
 def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
+    # Етап 1: Сповіщення про виявлений сигнал
+    signal_msg = (f"🎯 **СИГНАЛ [Об'ємний імпульс 5m]**:\n"
+                  f"• Пара: `{symbol}`\n"
+                  f"• Ціна входу: {entry_price}\n"
+                  f"• Статус: Перевірка балансу та відкриття позиції...")
+    send_discord_alert(signal_msg)
+
     balance = get_bingx_balance()
     if balance <= 0:
+        err_msg = f"❌ **ПОМИЛКА по {symbol}**: Нульовий баланс або не вдалося отримати дані акаунта!"
+        print(err_msg)
+        send_discord_alert(err_msg)
         return
 
     set_bingx_leverage(symbol)
@@ -145,13 +155,22 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
         response = requests.post(url, headers=headers, params=params)
         data = response.json()
         if data.get("code") == 0:
-            msg = (f"🚨 **УВАГА [ЛОНГ / Об'ємний імпульс 5m]**:\n"
-                   f"• Пара: `{symbol}`\n"
-                   f"• Плече: {LEVERAGE}x | Ризик: 2% депозиту | Об'єм: {quantity}\n"
-                   f"• Вхід: {entry_price} | SL: {stop_loss} | TP: {take_profit}")
-            send_discord_alert(msg)
-    except Exception:
-        pass
+            # Етап 2: Успішне відкриття позиції
+            success_msg = (f"✅ **ПОЗИЦІЮ ВІДКРИТО [ЛОНГ]**:\n"
+                           f"• Пара: `{symbol}`\n"
+                           f"• Плече: {LEVERAGE}x | Ризик: 2% | Об'єм: {quantity}\n"
+                           f"• Вхід: {entry_price} | SL: {stop_loss} | TP: {take_profit}")
+            print(success_msg)
+            send_discord_alert(success_msg)
+        else:
+            # Сповіщення про відмову біржі (наприклад, недостатньо коштів, помилка ліміту тощо)
+            fail_msg = f"⚠️ **ВІДМОВА БІРЖІ по {symbol}**:\n• Відповідь API: `{data}`"
+            print(fail_msg)
+            send_discord_alert(fail_msg)
+    except Exception as e:
+        net_err_msg = f"❌ **ПОМИЛКА МЕРЕЖІ при замовленні {symbol}**: `{e}`"
+        print(net_err_msg)
+        send_discord_alert(net_err_msg)
 
 
 async def scan_market():
