@@ -16,16 +16,17 @@ BASE_URL = "https://open-api.bingx.com"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1545120862875815986/khalqqspIhWB0cVtqQpPHq7kYBdj55Nsx70z0xATsarbD4oJpD1FgPUsFSozwfFv9xOz"
 
 # --- ТОРГОВІ ПАРАМЕТРИ ---
-LEVERAGE = 20          # Кредитне плече 20x
-RISK_DEPOSIT_PCT = 0.02 # 2% від депозиту на позицію
-TIMEFRAME = "5m"       # Таймфрейм 5 хвилин
+LEVERAGE = 20           # Кредитне плече 20x
+RISK_DEPOSIT_PCT = 0.02  # 2% від депозиту на позицію
+TIMEFRAME = "5m"        # Таймфрейм 5 хвилин
+VOLUME_MULTIPLIER = 2.0 # Поріг перевищення середнього об'єму (у 2 рази)
 
-# --- FLASK ДЛЯ RENDER ---
+# --- FLASK ДЛЯ RENDER (підтримка активності) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "BingX Volume Scanner & Bot (5m, 20x) is running!"
+    return "Clean BingX Volume & BOS Scanner is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -35,7 +36,7 @@ def run_flask():
 
 # --- ФУНКЦІЇ ДІСКОРДУ ---
 def send_discord_alert(message: str):
-    """Відправка сповіщень виключно у твій Discord-канал"""
+    """Надсилання сповіщень виключно у твій Discord-канал"""
     payload = {"content": message}
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
@@ -67,14 +68,13 @@ def get_bingx_balance():
         data = response.json()
         if data.get("code") == 0:
             balance_info = data.get("data", {}).get("balance", {})
-            equity = float(balance_info.get("equity", 0))
-            return equity
+            return float(balance_info.get("equity", 0))
     except Exception as e:
         print(f"❌ Помилка отримання балансу: {e}")
     return 0.0
 
 def set_bingx_leverage(symbol):
-    """Встановлення кредитного плеча 20x для пари"""
+    """Встановлення плеча 20x"""
     endpoint = "/openApi/swap/v1/trade/leverage"
     url = BASE_URL + endpoint
     timestamp = str(int(time.time() * 1000))
@@ -90,15 +90,31 @@ def set_bingx_leverage(symbol):
     try:
         response = requests.post(url, headers=headers, params=params)
         data = response.json()
-        if data.get("code") == 0:
-            print(f"⚙️ Плече {LEVERAGE}x успішно встановлено для {symbol}")
-        else:
-            print(f"⚠️ Попередження при встановленні плеча для {symbol}: {data}")
+        if data.get("code") != 0:
+            print(f"⚠️ Попередження плеча для {symbol}: {data}")
     except Exception as e:
-        print(f"❌ Помилка з'єднання при встановленні плеча: {e}")
+        print(f"❌ Помилка встановлення плеча: {e}")
+
+def get_klines(symbol):
+    """Отримання свічок (крок 5 хвилин) з BingX API"""
+    endpoint = "/openApi/swap/v1/market/klines"
+    url = BASE_URL + endpoint
+    params = {
+        "symbol": symbol,
+        "interval": TIMEFRAME,
+        "limit": 20  # Беремо останні 20 свічок для аналізу середнього об'єму
+    }
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        if data.get("code") == 0:
+            return data.get("data", [])
+    except Exception as e:
+        print(f"❌ Помилка отримання свічок для {symbol}: {e}")
+    return []
 
 def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct=0.002):
-    """Розрахунок SL та TP з урахуванням буфера шуму"""
+    """Розрахунок стоп-лосса і тейк-профіта з буфером шуму"""
     stop_loss = candle_low * (1 - risk_buffer_pct)
     if stop_loss >= entry_price:
         stop_loss = entry_price * 0.99  
@@ -107,11 +123,11 @@ def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct
     return round(stop_loss, 4), round(take_profit, 4)
 
 def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
-    """Розрахунок об'єму (2% від балансу з 20x плечем), встановлення плеча та відправка ордера"""
+    """Відкриття позиції з розрахунком 2% від депозиту та 20x плечем"""
     balance = get_bingx_balance()
     if balance <= 0:
-        print("❌ Неможливо отримати баланс або він нульовий!")
-        return None
+        print("❌ Нульовий баланс!")
+        return
 
     set_bingx_leverage(symbol)
 
@@ -145,27 +161,26 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
         response = requests.post(url, headers=headers, params=params)
         data = response.json()
         if data.get("code") == 0:
-            success_msg = (f"✅ Відкрито {side} по {symbol} (ТФ: {TIMEFRAME})!\n"
-                           f"• Плече: {LEVERAGE}x | Маржа: 2% | Об'єм: {quantity}\n"
-                           f"• Вхід: {entry_price} | SL: {stop_loss} | TP: {take_profit}")
-            print(success_msg)
-            send_discord_alert(success_msg)
-            return data
+            msg = (f"🚨 **УВАГА [ЛОНГ / Об'ємний імпульс 5m]**:\n"
+                   f"• Пара: `{symbol}`\n"
+                   f"• Плече: {LEVERAGE}x | Ризик: 2% депозиту | Об'єм: {quantity}\n"
+                   f"• Вхід: {entry_price} | SL: {stop_loss} | TP: {take_profit}")
+            print(msg)
+            send_discord_alert(msg)
         else:
-            error_msg = f"❌ Помилка від біржа BingX по {symbol}: {data}"
-            print(error_msg)
-            return None
+            print(f"❌ Помилка ордера BingX по {symbol}: {data}")
     except Exception as e:
-        error_msg = f"❌ Помилка з'єднання з API BingX: {e}"
-        print(error_msg)
-        return None
+        print(f"❌ Помилка з'єднання при відправці ордера: {e}")
 
 
-# --- ОСНОВНИЙ ЦИКЛ СКАНЕРА (5м) ---
+# --- ОСНОВНИЙ СКАНЕР РИНКУ ---
 def main_scanner_loop():
-    startup_msg = f"🚀 Бот запущено! Таймфрейм: {TIMEFRAME} | Плече: {LEVERAGE}x | Ризик: {RISK_DEPOSIT_PCT*100}% від депозиту."
+    startup_msg = f"🚀 Чистий бот сканування запущено! ТФ: {TIMEFRAME} | Плече: {LEVERAGE}x | Ризик: {RISK_DEPOSIT_PCT*100}%."
     print(startup_msg)
     send_discord_alert(startup_msg)
+    
+    # Список монет для моніторингу (можеш додавати інші пари)
+    symbols_to_scan = ["BTC-USDT", "ETH-USDT", "SUI-USDT", "SOL-USDT", "AVAX-USDT"]
     
     counter = 0
     while True:
@@ -173,18 +188,40 @@ def main_scanner_loop():
             counter += 1
             print(f"🔄 Сканування ринку (ТФ: {TIMEFRAME}) триває... (Ітерація #{counter})")
             
-            # Логіка пошуку свічок та об'ємів на 5м
+            for symbol in symbols_to_scan:
+                klines = get_klines(symbol)
+                if len(klines) < 10:
+                    continue
+                
+                # Аналізуємо передостанню закриту свічку
+                prev_candle = klines[-2]
+                # Формат klines на BingX зазвичай: [timestamp, open, high, low, close, volume, ...]
+                candle_low = float(prev_candle[3])
+                candle_high = float(prev_candle[2])
+                entry_price = float(prev_candle[4])
+                current_volume = float(prev_candle[5])
+                
+                # Розрахунок середнього об'єму за попередні свічки
+                past_volumes = [float(k[5]) for k in klines[:-2]]
+                avg_volume = sum(past_volumes) / len(past_volumes) if past_volumes else 1.0
+                
+                # Умова сплеску об'єму (у N разів вище середнього)
+                if current_volume >= (avg_volume * VOLUME_MULTIPLIER):
+                    print(f"🎯 Знайдено сплеск об'єму по {symbol}!")
+                    place_bingx_order(symbol, "BUY", entry_price, candle_low, candle_high)
             
-            time.sleep(60) 
+            time.sleep(60) # Пауза хвилину між ітераціями сканування
         except Exception as e:
             print(f"❌ Помилка в основному циклі: {e}")
-            time.sleep(10)
+            time.sleep(15)
 
 
 if __name__ == "__main__":
+    # Запуск Flask у фоні
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
+    # Запуск основного сканера
     main_scanner_loop()
     
