@@ -1,190 +1,83 @@
-import asyncio
-import aiohttp
-import os
+import hmac
+import hashlib
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import requests
+import urllib.parse
 
-# Налаштування параметрів сканування (змінено на 15m)
-VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
-APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки або опору)
-TIMEFRAME = "15m"                 # Таймфрейм змінено на 15 хвилин
-LIMIT_CANDLES = 40                # Збільшена історія свічок для 15m
-TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
-MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 600            # Кулдаун збільшено до 10 хвилин для 15m
+# Твої дані демо-рахунку BingX
+API_KEY = "TAMQgieAMOQJuuik9XpcPa5wHch0wmXaQ8G6yBdXUlZ6G2vv3uS47QgW1NNfcI4BxLmgmeo5XwFzXEQx9dOA"
+SECRET_KEY = "18EgcerNxJ5fv7TCnxQ5okPXr1VpYsJPnhYRF1GZOsikgHD2c1owRyqApKieZYQoCY2SeclmXVTdW33nIIjg"
 
-DISCORD_WEBHOOK_URL = os.environ.get("BINGX_API_KEY")
-RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
+# Базовий URL для BingX Futures (демо/тестове середовище або стандартний прод-ендпоінт для ф'ючерсів)
+BASE_URL = "https://open-api.bingx.com"
 
-last_alert_time = {}
+def get_sign(secret_key, params):
+    """Створення підпису HMAC SHA256 для запитів BingX API"""
+    parameters = urllib.parse.urlencode(sorted(params.items()))
+    return hmac.new(secret_key.encode('utf-8'), parameters.encode('utf-8'), hashlib.sha256).hexdigest()
 
-async def fetch_top_bingx_symbols(session):
-    url = "https://open-api.bingx.com/openApi/swap/v2/quote/ticker"
-    try:
-        async with session.get(url, timeout=5) as response:
-            if response.status == 200:
-                data = await response.json()
-                tickers = data.get("data", [])
-                
-                usdt_tickers = []
-                for t in tickers:
-                    symbol = t.get("symbol", "")
-                    if symbol.endswith("-USDT") and len(symbol) <= 12 and "USD" not in symbol[:-5]:
-                        quote_vol = float(t.get("quoteVolume", 0))
-                        if quote_vol >= MIN_24H_VOLUME_USDT:
-                            usdt_tickers.append((symbol, quote_vol))
-                
-                usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-                top_symbols = [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
-                return top_symbols
-    except Exception as e:
-        print(f"Помилка при отриманні списку монет від BingX: {e}")
-    return []
+def calculate_volume_sl_tp(entry_price, candle_low, candle_high, risk_buffer_pct=0.002):
+    """
+    Розрахунок стоп-лосса і тейк-профіта на основі діапазону та мінімуму свічки з буфером шуму.
+    
+    :param entry_price: ціна входження (BUY)
+    :param candle_low: мінімум свічки / нижня графіка зони накопичення (як на твойму скріншоті)
+    :param candle_high: максимум свічки
+    :param risk_buffer_pct: додатковий відступ (буфер) нижче мінімуму від ринкового шуму
+    :return: (stop_loss_price, take_profit_price)
+    """
+    # Стоп ставимо нижче мінімуму свічки з урахуванням буфера, щоб уникнути вибивання тінями
+    stop_loss = candle_low * (1 - risk_buffer_pct)
+    
+    # Якщо розрахований стоп чомусь вище або дорівнює входу (захист від непередбачуваних даних)
+    if stop_loss >= entry_price:
+        stop_loss = entry_price * 0.99  
+        
+    # Визначаємо ризик (відстань від входу до стопу)
+    risk_distance = entry_price - stop_loss
+    
+    # Тейк-профіт робимо з фіксованим співвідношенням ризик/прибуток (наприклад, 1 до 2 або 1 до 3)
+    # або прив'язуємо до верхньої межі імпульсу (candle_high)
+    take_profit = entry_price + (risk_distance * 2.5)
+    
+    return round(stop_loss, 4), round(take_profit, 4)
 
-async def fetch_kline_data(session, symbol):
-    url = "https://open-api.bingx.com/openApi/swap/v2/quote/klines"
+def place_bingx_order(symbol, side, quantity, stop_loss, take_profit):
+    """
+    Відправка ринкового ордера на ф'ючерси BingX разом із захисними Stop Loss та Take Profit
+    """
+    endpoint = "/openApi/swap/v2/trade/order"
+    url = BASE_URL + endpoint
+    
+    timestamp = str(int(time.time() * 1000))
+    
     params = {
-        "symbol": symbol,
-        "interval": TIMEFRAME,
-        "limit": LIMIT_CANDLES
+        "symbol": symbol,         # Наприклад, "SUI-USDT"
+        "side": side,             # "BUY" або "SELL"
+        "positionSide": "LONG",   # Для лонг позиції
+        "type": "MARKET",         # Ринків ордер для швидкого входу за сигналом
+        "quantity": quantity,     # Об'єм контракту
+        "stopLoss": str(stop_loss),
+        "takeProfit": str(take_profit),
+        "timestamp": timestamp
     }
+    
+    params["signature"] = get_sign(SECRET_KEY, params)
+    
+    headers = {
+        "X-BX-APIKEY": API_KEY
+    }
+    
     try:
-        async with session.get(url, params=params, timeout=4) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data.get("data", [])
-    except Exception:
-        pass
-    return None
-
-async def send_to_discord(session, webhook_url, message):
-    if not webhook_url:
-        return
-    payload = {"content": message}
-    try:
-        async with session.post(webhook_url, json=payload) as response:
-            if response.status != 200:
-                print(f"Помилка відправки у Discord: {response.status}")
+        response = requests.post(url, headers=headers, params=params)
+        data = response.json()
+        if data.get("code") == 0:
+            print(f"✅ Успішно відкрито {side} по {symbol}! SL: {stop_loss}, TP: {take_profit}")
+            return data
+        else:
+            print(f"❌ Помилка від біріж: {data}")
+            return None
     except Exception as e:
-        print(f"Виняток при відправці у Discord: {e}")
-
-async def check_single_coin(session, symbol, discord_webhook_url):
-    current_time = time.time()
-    if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
-        return
-
-    kline_data = await fetch_kline_data(session, symbol)
-    
-    if not kline_data or len(kline_data) < 25:
-        return
-
-    try:
-        volumes = [float(x['volume']) for x in kline_data]
-        lows = [float(x['low']) for x in kline_data]
-        highs = [float(x['high']) for x in kline_data]
-        closes = [float(x['close']) for x in kline_data]
+        print(f"❌ Помилка з'єднання з API BingX: {e}")
+        return None
         
-        current_volume = volumes[-1]
-        if current_volume <= 0:
-            return
-
-        avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
-        if avg_volume <= 0:
-            return
-        
-        current_price = closes[-1]
-        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
-        
-        if not is_volume_spike:
-            return
-
-        surge_percent = int((current_volume / avg_volume - 1) * 100)
-
-        # 1. Перевірка на ЛОНГ (Підтримка знизу)
-        support_level = min(lows[:-1])
-        if support_level > 0:
-            distance_to_support = (current_price - support_level) / support_level
-            if 0 <= distance_to_support <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**: `{symbol}`\n"
-                    f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
-                    f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відскоку вгору!"
-                )
-                last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Лонг сигнал 15m для {symbol}")
-                return
-
-        # 2. Перевірка на ШОРТ (Опір зверху)
-        resistance_level = max(highs[:-1])
-        if resistance_level > 0:
-            distance_to_resistance = (resistance_level - current_price) / resistance_level
-            if 0 <= distance_to_resistance <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**: `{symbol}`\n"
-                    f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
-                    f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відбою вниз!"
-                )
-                last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Шорт сигнал 15m для {symbol}")
-                return
-
-    except Exception as e:
-        pass
-
-async def self_ping_loop(session):
-    while True:
-        await asyncio.sleep(240)
-        try:
-            async with session.get(RENDER_URL, timeout=5) as response:
-                pass
-        except Exception:
-            pass
-
-async def main():
-    print("Бот сканує ринок на ЛОНГ (підтримка) та ШОРТ (опір) на таймфреймі 15m...")
-    
-    async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping_loop(session))
-        
-        while True:
-            start_time = asyncio.get_event_loop().time()
-            
-            symbols_list = await fetch_top_bingx_symbols(session)
-            
-            if symbols_list and DISCORD_WEBHOOK_URL:
-                tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
-                await asyncio.gather(*tasks)
-            
-            elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 30 - elapsed) # Збільшено паузу між циклами для 15m
-            await asyncio.sleep(sleep_time)
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"BingX Long/Short Scanner Bot (15m) is running!")
-    
-    def log_message(self, format, *args):
-        return
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
-
-if __name__ == "__main__":
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Бот зупинений користувачем.")
