@@ -86,7 +86,7 @@ def get_bingx_symbols():
         data = response.json()
         if data.get("code") == 0:
             contracts = data.get("data", {}).get("contracts", [])
-            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status") == 1]
+            return [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status"] == 1]
     except Exception:
         pass
     return ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
@@ -158,14 +158,13 @@ async def scan_market():
     startup_msg = f"🚀 Асинхронний чистий сканер запущено! ТФ: {TIMEFRAME} | Плече: {LEVERAGE}x | Ризик: {RISK_DEPOSIT_PCT*100}%."
     send_discord_alert(startup_msg)
     
-    async with aiohttp.ClientSession() робітників as session:
+    async with aiohttp.ClientSession() as session:
         counter = 0
         while True:
             try:
                 counter += 1
                 symbols = get_bingx_symbols()
                 
-                # Паралельні запити для всіх пар одразу
                 tasks = [fetch_klines(session, symbol) for symbol in symbols]
                 results = await asyncio.gather(*tasks)
                 
@@ -192,12 +191,10 @@ async def scan_market():
 
 
 def main():
-    # Запуск Flask у фоні
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Запуск асинхронного сканера
     asyncio.run(scan_market())
 
 
