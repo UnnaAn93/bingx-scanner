@@ -12,8 +12,8 @@ API_KEY = "TAMQgieAMOQJuuik9XpcPa5wHch0wmXaQ8G6yBdXUlZ6G2vv3uS47QgW1NNfcI4BxLmgm
 SECRET_KEY = "18EgcerNxJ5fv7TCnxQ5okPXr1VpYsJPnhYRF1GZOsikgHD2c1owRyqApKieZYQoCY2SeclmXVTdW33nIIjg"
 BASE_URL = "https://open-api.bingx.com"
 
-# --- НАЛАШТУВАННЯ DISCORD ---
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1545120862875815986/khalqqspIhWB0cVtqQpPHq7kYBdj55Nsx70z0xATsarbD4oJpD1FgPUsFSozwfFv9xOz"
+# --- НАЛАШТУВАННЯ DISCORD (Новий чистий вебхук SpideyBot) ---
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF"
 
 # --- ТОРГОВІ ПАРАМЕТРИ ---
 LEVERAGE = 20           # Кредитне плече 20x
@@ -36,7 +36,7 @@ def run_flask():
 
 # --- ФУНКЦІЇ ДІСКОРДУ ---
 def send_discord_alert(message: str):
-    """Надсилання сповіщень виключно у твій Discord-канал"""
+    """Надсилання сповіщень виключно у твій Discord-канал без сторонніх вставок"""
     payload = {"content": message}
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
@@ -95,6 +95,23 @@ def set_bingx_leverage(symbol):
     except Exception as e:
         print(f"❌ Помилка встановлення плеча: {e}")
 
+def get_bingx_symbols():
+    """Автоматичне отримання всіх активних USDT-пар (150+) з BingX API"""
+    endpoint = "/openApi/swap/v1/market/contracts"
+    url = BASE_URL + endpoint
+    try:
+        response = requests.get(url)
+        data = response.json()
+        if data.get("code") == 0:
+            contracts = data.get("data", {}).get("contracts", [])
+            symbols = [c["symbol"] for c in contracts if c.get("symbol", "").endswith("-USDT") and c.get("status") == 1]
+            return symbols
+    except Exception as e:
+        print(f"❌ Помилка отримання списку пар: {e}")
+    
+    # Резервний список на випадок тимчасового збою мережі
+    return ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "SUI-USDT"]
+
 def get_klines(symbol):
     """Отримання свічок (крок 5 хвилин) з BingX API"""
     endpoint = "/openApi/swap/v1/market/klines"
@@ -102,7 +119,7 @@ def get_klines(symbol):
     params = {
         "symbol": symbol,
         "interval": TIMEFRAME,
-        "limit": 20  # Беремо останні 20 свічок для аналізу середнього об'єму
+        "limit": 20  # Останні 20 свічок для аналізу середнього об'єму
     }
     try:
         response = requests.get(url, params=params)
@@ -175,53 +192,51 @@ def place_bingx_order(symbol, side, entry_price, candle_low, candle_high):
 
 # --- ОСНОВНИЙ СКАНЕР РИНКУ ---
 def main_scanner_loop():
-    startup_msg = f"🚀 Чистий бот сканування запущено! ТФ: {TIMEFRAME} | Плече: {LEVERAGE}x | Ризик: {RISK_DEPOSIT_PCT*100}%."
+    startup_msg = f"🚀 Повний чистий сканер запущено! ТФ: {TIMEFRAME} | Плече: {LEVERAGE}x | Ризик: {RISK_DEPOSIT_PCT*100}%."
     print(startup_msg)
     send_discord_alert(startup_msg)
-    
-    # Список монет для моніторингу (можеш додавати інші пари)
-    symbols_to_scan = ["BTC-USDT", "ETH-USDT", "SUI-USDT", "SOL-USDT", "AVAX-USDT"]
     
     counter = 0
     while True:
         try:
             counter += 1
-            print(f"🔄 Сканування ринку (ТФ: {TIMEFRAME}) триває... (Ітерація #{counter})")
+            print(f"🔄 Оновлення списку пар та сканування ринку (ТФ: {TIMEFRAME})... (Ітерація #{counter})")
+            
+            # Динамічно завантажуємо весь список активних пар (150+)
+            symbols_to_scan = get_bingx_symbols()
+            print(f"📊 Активних пар для аналізу: {len(symbols_to_scan)}")
             
             for symbol in symbols_to_scan:
                 klines = get_klines(symbol)
                 if len(klines) < 10:
                     continue
                 
-                # Аналізуємо передостанню закриту свічку
                 prev_candle = klines[-2]
-                # Формат klines на BingX зазвичай: [timestamp, open, high, low, close, volume, ...]
                 candle_low = float(prev_candle[3])
                 candle_high = float(prev_candle[2])
                 entry_price = float(prev_candle[4])
                 current_volume = float(prev_candle[5])
                 
-                # Розрахунок середнього об'єму за попередні свічки
                 past_volumes = [float(k[5]) for k in klines[:-2]]
                 avg_volume = sum(past_volumes) / len(past_volumes) if past_volumes else 1.0
                 
-                # Умова сплеску об'єму (у N разів вище середнього)
+                # Перевірка на сплеск об'єму
                 if current_volume >= (avg_volume * VOLUME_MULTIPLIER):
                     print(f"🎯 Знайдено сплеск об'єму по {symbol}!")
                     place_bingx_order(symbol, "BUY", entry_price, candle_low, candle_high)
             
-            time.sleep(60) # Пауза хвилину між ітераціями сканування
+            time.sleep(60) # Пауза між ітераціями
         except Exception as e:
             print(f"❌ Помилка в основному циклі: {e}")
             time.sleep(15)
 
 
 if __name__ == "__main__":
-    # Запуск Flask у фоні
+    # Запуск Flask у фоні для Render
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     
     # Запуск основного сканера
     main_scanner_loop()
-    
+                
