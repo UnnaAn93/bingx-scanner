@@ -39,10 +39,10 @@ def binance_request(method, path, params=None):
     
     try:
         if method == "GET":
-            response = requests.get(url, headers=headers, timeout=5)
+            response = requests.get(url, headers=headers, timeout=10)
             return response.json()
         elif method == "POST":
-            response = requests.post(url, headers=headers, timeout=5)
+            response = requests.post(url, headers=headers, timeout=10)
             return response.json()
     except Exception as e:
         print(f"Помилка запиту до Binance API ({path}): {e}")
@@ -138,26 +138,38 @@ def send_to_discord(message):
 def fetch_top_symbols():
     url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/24hr"
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=10)
+        print(f"Статус запиту 24hr тікерів: {response.status_code}")
         if response.status_code == 200:
             tickers = response.json()
+            if not isinstance(tickers, list):
+                print(f"⚠️ Очікувався список, а отримано: {type(tickers)}")
+                return []
+            
             usdt_tickers = []
             for t in tickers:
                 symbol = t.get("symbol", "")
                 if symbol.endswith("USDT"):
-                    turnover = float(t.get("quoteVolume", 0))
-                    if turnover >= MIN_24H_VOLUME_USDT:
-                        usdt_tickers.append((symbol, turnover))
+                    try:
+                        turnover = float(t.get("quoteVolume", 0))
+                        if turnover >= MIN_24H_VOLUME_USDT:
+                            usdt_tickers.append((symbol, turnover))
+                    except Exception:
+                        continue
             usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-            return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+            result = [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+            print(f"Знайдено відповідних USDT пар: {len(result)}")
+            return result
+        else:
+            print(f"⚠️ Помилка Binance API: {response.text}")
     except Exception as e:
-        print(f"Помилка завантаження списку монет: {e}")
+        print(f"❌ Виняток при завантаженні списку монет: {e}")
     return []
 
 def fetch_kline_data(symbol):
     url = f"{BINANCE_BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={TIMEFRAME}m&limit={LIMIT_CANDLES}"
     try:
-        response = requests.get(url, timeout=4)
+        response = requests.get(url, timeout=5)
         if response.status_code == 200:
             raw_list = response.json()
             formatted = []
@@ -250,4 +262,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                    
+        
