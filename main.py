@@ -21,11 +21,11 @@ COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну 
 LEVERAGE = 10                     # Плече
 TRADE_USDT_AMOUNT = 10.0          # Сума ордера в USDT
 
-# Ключі Binance Demo, які ти щойно згенерувала
+# Твої ключі Binance Demo / Testnet (можна також залишити в змінних середовища Render)
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "ТВОЙ_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY", "ТВОЙ_SECRET_KEY")
 
-# Демо-ендпоінт ф'ючерсів Binance
+# Правильний ендпоінт для ф'ючерсного тестнету/демо Binance
 BINANCE_BASE_URL = "https://testnet.binancefuture.com"
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF"
@@ -53,15 +53,21 @@ async def binance_request(session, method, path, params=None):
     try:
         if method == "GET":
             async with session.get(url, headers=headers, timeout=5) as response:
-                return await response.json()
+                res_json = await response.json()
+                print(f"Binance GET {path} відповідь: статус {response.status}, дані: {res_json}")
+                return res_json
         elif method == "POST":
             async with session.post(url, headers=headers, timeout=5) as response:
-                return await response.json()
+                res_json = await response.json()
+                print(f"Binance POST {path} відповідь: статус {response.status}, дані: {res_json}")
+                return res_json
         elif method == "DELETE":
             async with session.delete(url, headers=headers, timeout=5) as response:
-                return await response.json()
+                res_json = await response.json()
+                print(f"Binance DELETE {path} відповідь: статус {response.status}, дані: {res_json}")
+                return res_json
     except Exception as e:
-        print(f"Помилка запиту до Binance API: {e}")
+        print(f"Помилка запиту до Binance API ({path}): {e}")
     return None
 
 async def set_leverage(session, symbol):
@@ -73,21 +79,22 @@ async def open_market_order(session, symbol, side):
     """
     side: 'BUY' (Лонг) або 'SELL' (Шорт)
     """
+    print(f"Спроба відкрити ринковий ордер на Binance: {symbol} | Сторона: {side}")
     await set_leverage(session, symbol)
     
-    # Отримуємо ціну для розрахунку кількості
+    # Отримуємо поточну ціну для розрахунку кількості
     ticker_url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/price?symbol={symbol}"
     try:
         async with session.get(ticker_url) as resp:
             t_data = await resp.json()
             current_price = float(t_data['price'])
-    except Exception:
+    except Exception as e:
+        print(f"Не вдалося отримати ціну для {symbol}: {e}")
         return
 
     notional_size = TRADE_USDT_AMOUNT * LEVERAGE
     qty = notional_size / current_price
     
-    # Округлення під правила пари (тут можна залишити стандартне або спростити)
     qty = round(qty, 2)
     if qty <= 0:
         qty = 0.01
@@ -102,9 +109,9 @@ async def open_market_order(session, symbol, side):
     
     res = await binance_request(session, "POST", path, params)
     if res and "orderId" in res:
-        print(f"Binance Demo: Успішно відкрито ордер [{side}] для {symbol}")
+        print(f"✅ Binance Demo: Успішно відкрито ордер [{side}] для {symbol}, ID: {res['orderId']}")
     else:
-        print(f"Binance Demo Помилка ордера для {symbol}: {res}")
+        print(f"❌ Binance Demo Помилка ордера для {symbol}: {res}")
 
 async def close_position(session, symbol):
     current_side = open_positions.get(symbol)
@@ -112,8 +119,8 @@ async def close_position(session, symbol):
         return
     
     close_side = "SELL" if current_side == "LONG" else "BUY"
+    print(f"Спроба закрити позицію по {symbol} (сторона закриття: {close_side})")
     
-    # Отримуємо інформацію про позицію
     pos_path = "/fapi/v2/positionRisk"
     pos_res = await binance_request(session, "GET", pos_path)
     
@@ -139,7 +146,7 @@ async def close_position(session, symbol):
         }
         res = await binance_request(session, "POST", path, params)
         if res and "orderId" in res:
-            print(f"Binance Demo: Позицію по {symbol} закрито.")
+            print(f"✅ Binance Demo: Позицію по {symbol} закрито.")
             open_positions.pop(symbol, None)
     except Exception as e:
         print(f"Помилка закриття позиції на Binance: {e}")
@@ -165,7 +172,6 @@ async def fetch_top_binance_symbols(session):
     return []
 
 async def fetch_kline_data(session, symbol):
-    # Binance приймає інтервали на кшталт '5m'
     url = f"{BINANCE_BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={TIMEFRAME}m&limit={LIMIT_CANDLES}"
     try:
         async with session.get(url, timeout=4) as response:
@@ -276,7 +282,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот запущено для Binance Demo (Сканер + Авто-угоди)...")
+    print("Бот запущено для Binance Demo (Сканер + Авто-угоди з логуванням)...")
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -313,4 +319,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-                         
+    
