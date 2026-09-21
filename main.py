@@ -2,7 +2,7 @@ import os
 import time
 import requests
 
-# --- НАЛАШТУВАННЯ ---
+# --- НАЛАШТУВАННЯ BYBIT ---
 VOLUME_MULTIPLIER = 2.2           
 APPROACH_PERCENT = 0.007          
 TIMEFRAME = "15"                  # Таймфрейм 15 хвилин
@@ -10,7 +10,8 @@ LIMIT_CANDLES = 30
 TOP_COINS_LIMIT = 50              
 MIN_24H_VOLUME_USDT = 100_000     
 
-BINANCE_BASE_URL = "https://fapi.binance.com"
+# Використовуємо публічний API Bybit (працює і для Testnet/Mainnet для споту та ф'ючерсів)
+BYBIT_BASE_URL = "https://api.bybit.com"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 def send_to_discord(message):
@@ -22,58 +23,66 @@ def send_to_discord(message):
         pass
 
 def fetch_top_symbols():
-    url = f"{BINANCE_BASE_URL}/fapi/v1/ticker/24hr"
+    # Отримання тікерів лінійки Linear (USDT Futures) від Bybit
+    url = f"{BYBIT_BASE_URL}/v5/market/tickers?category=linear"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            tickers = response.json()
-            if not isinstance(tickers, list):
-                return []
-            
-            usdt_tickers = []
-            for t in tickers:
-                symbol = t.get("symbol", "")
-                if symbol.endswith("USDT"):
-                    try:
-                        turnover = float(t.get("quoteVolume", 0))
-                        if turnover >= MIN_24H_VOLUME_USDT:
-                            usdt_tickers.append((symbol, turnover))
-                    except Exception:
-                        continue
-            usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-            return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+            data = response.json()
+            if data.get("retCode") == 0:
+                list_tickers = data.get("result", {}).get("list", [])
+                usdt_tickers = []
+                
+                for t in list_tickers:
+                    symbol = t.get("symbol", "")
+                    if symbol.endswith("USDT"):
+                        try:
+                            turnover = float(t.get("turnover24h", 0))
+                            if turnover >= MIN_24H_VOLUME_USDT:
+                                usdt_tickers.append((symbol, turnover))
+                        except Exception:
+                            continue
+                            
+                usdt_tickers.sort(key=lambda x: x[1], reverse=True)
+                return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
     except Exception as e:
-        print(f"❌ Помилка отримання списку монет: {e}")
+        print(f"❌ Помилка отримання списку монет Bybit: {e}")
     return []
 
 def fetch_kline_data(symbol):
-    url = f"{BINANCE_BASE_URL}/fapi/v1/klines?symbol={symbol}&interval={TIMEFRAME}m&limit={LIMIT_CANDLES}"
+    # У Bybit таймфрейми задаються хвилинами (15) або рядками ("15")
+    url = f"{BYBIT_BASE_URL}/v5/market/kline?category=linear&symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT_CANDLES}"
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
-            raw_list = response.json()
-            formatted = []
-            for item in raw_list:
-                formatted.append({
-                    "low": float(item[3]),
-                    "high": float(item[2]),
-                    "close": float(item[4]),
-                    "volume": float(item[5])
-                })
-            return formatted
+            data = response.json()
+            if data.get("retCode") == 0:
+                raw_list = data.get("result", {}).get("list", [])
+                # Bybit повертає свічки від найновішої до найстарішої, тому розгортаємо ([::-1])
+                raw_list.reverse()
+                formatted = []
+                for item in raw_list:
+                    # Формат відповіді Bybit kline: [startTime, open, high, low, close, volume, turnover]
+                    formatted.append({
+                        "low": float(item[3]),
+                        "high": float(item[2]),
+                        "close": float(item[4]),
+                        "volume": float(item[5])
+                    })
+                return formatted
     except Exception:
         pass
     return None
 
 def main():
-    print("🚀 Запуск моніторингу ринку (ТФ: 15хв)...")
+    print("🚀 Запуск моніторингу Bybit (ТФ: 15хв)...")
     
     symbols_list = fetch_top_symbols()
     if not symbols_list:
-        print("❌ Не вдалося отримати список монет.")
+        print("❌ Не вдалося отримати список монет від Bybit.")
         return
 
-    print(f"Перевіряємо топ монет: {len(symbols_list)}")
+    print(f"Перевіряємо топ монет Bybit: {len(symbols_list)}")
 
     for symbol in symbols_list:
         kline_data = fetch_kline_data(symbol)
@@ -104,7 +113,7 @@ def main():
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             alert_msg = (
-                f"🟢🎯 **СИГНАЛ НА ЛОНГ [15m]**: `{symbol}`\n"
+                f"🟢🎯 **СИГНАЛ НА ЛОНГ [Bybit 15m]**: `{symbol}`\n"
                 f"• Напрямок: 🚀 Підхід до дна / Відскок\n"
                 f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                 f"• Об'єм: `+{surge_percent}%` від середнього!"
@@ -116,7 +125,7 @@ def main():
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             alert_msg = (
-                f"🔴🎯 **СИГНАЛ НА ШОРТ [15m]**: `{symbol}`\n"
+                f"🔴🎯 **СИГНАЛ НА ШОРТ [Bybit 15m]**: `{symbol}`\n"
                 f"• Напрямок: 📉 Підхід до хаю / Відбій\n"
                 f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                 f"• Об'єм: `+{surge_percent}%` від середнього!"
@@ -124,7 +133,7 @@ def main():
             send_to_discord(alert_msg)
             continue
 
-    print("🏁 Сканування завершено.")
+    print("🏁 Сканування Bybit завершено.")
 
 if __name__ == "__main__":
     main()
