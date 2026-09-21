@@ -2,6 +2,9 @@ import asyncio
 import aiohttp
 import os
 import time
+import hmac
+import hashlib
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -14,13 +17,72 @@ TOP_COINS_LIMIT = 150             # Кількість найактивніши�
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-# Вебхук та налаштування сервера беруться з Environment Variables на Render
+# Змінні середовища з Render
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
+
+# API ключі Bitget (потрібні для перевірки відкритих позицій)
+BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
+BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
+BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
 
 BITGET_BASE_URL = "https://api.bitget.com"
 
 last_alert_time = {}
+
+def get_bitget_sign(timestamp, method, request_path, body=""):
+    message = str(timestamp) + method.upper() + request_path + body
+    mac = hmac.new(BITGET_SECRET_KEY.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode('utf-8')
+
+def get_bitget_headers(method, request_path, body=""):
+    timestamp = str(int(time.time() * 1000))
+    sign = get_bitget_sign(timestamp, method, request_path, body)
+    return {
+        "ACCESS-KEY": BITGET_API_KEY,
+        "ACCESS-SIGN": sign,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+async def fetch_open_positions(session):
+    if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
+        return "⚠️ API ключі Bitget не налаштовані, перевірка позицій пропущена."
+
+    path = "/api/v2/mix/position/all-position-v2"
+    url = f"{BITGET_BASE_URL}{path}?productType=USDT-FUTURES"
+    headers = get_bitget_headers("GET", path + "?productType=USDT-FUTURES")
+
+    try:
+        async with session.get(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("code") == "00000":
+                    positions = data.get("data", [])
+                    active_positions = []
+                    for p in positions:
+                        total_pos = float(p.get("total", 0))
+                        if total_pos > 0:
+                            symbol = p.get("symbol", "")
+                            hold_side = p.get("holdSide", "") # long або short
+                            entry_price = p.get("averageOpenPrice", "0")
+                            unrealized_pnl = p.get("unrealizedPL", "0")
+                            leverage = p.get("leverage", "1")
+                            
+                            active_positions.append(
+                                f"• `{symbol}` | **{hold_side.upper()}** ({leverage}x)\n"
+                                f"  Ціна входу: `{entry_price}` | PnL: `{unrealized_pnl} USDT`"
+                            )
+                    
+                    if active_positions:
+                        report = "📋 **Звіт про відкриті позиції на старті:**\n" + "\n".join(active_positions)
+                        return report
+                    else:
+                        return "📋 **Звіт про відкриті позиції:** Наразі немає відкритих позицій."
+            return "❌ Помилка при отриманні позицій від Bitget (невірний статус відповіді)."
+    except Exception as e:
+        return f"❌ Виняток при запиті позицій: {e}"
 
 async def fetch_top_bitget_symbols(session):
     url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
@@ -171,7 +233,13 @@ async def main():
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
+        # Запускаємо захист від засинання
         asyncio.create_task(self_ping_loop(session))
+        
+        # При запуску одразу перевіряємо відкриті позиції та надсилаємо звіт у Discord
+        positions_report = await fetch_open_positions(session)
+        print(positions_report)
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, positions_report)
         
         while True:
             start_time = asyncio.get_event_loop().time()
@@ -209,4 +277,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
+                                            
