@@ -54,7 +54,6 @@ async def get_active_positions_details(session):
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return []
 
-    # Перевіряємо обидва можливі типи для покриття Unified та USDT-FUTURES
     endpoints = [
         "/api/v2/mix/position/all-position?productType=USDT-FUTURES",
         "/api/v2/mix/position/all-position?productType=COIN-FUTURES"
@@ -84,7 +83,6 @@ async def get_active_positions_details(session):
         except Exception as e:
             print(f"Помилка запиту позицій ({path_with_query}): {e}")
 
-    # Видаляємо можливі дублікати за символом
     unique_positions = {p['symbol']: p for p in active_positions}.values()
     return list(unique_positions)
 
@@ -229,14 +227,14 @@ async def self_ping_loop(session):
 
 async def main():
     global last_position_report_time
-    print("Бот Captain Hook запущено з розширеним пошуком позицій...")
+    print("Бот Captain Hook запущено з оновленою логікою звітності...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Жодних сигналів під час відкритих позицій.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook оновлено і запущено!** Контролює відкриті позиції.")
         
         previous_had_position = False
         
@@ -244,18 +242,17 @@ async def main():
             start_time = asyncio.get_event_loop().time()
             current_time = time.time()
             
-            # Крок 1: Перевіряємо наявність відкритих позицій на біржі
+            # Перевіряємо відкриті позиції
             active_positions = await get_active_positions_details(session)
             has_position = len(active_positions) > 0
             
             # Якщо позиція щойно закрита
             if previous_had_position and not has_position:
-                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Сканування ринку та пошук нових сигналів відновлено.")
+                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Поновлюю сканування ринку та пошук нових точок входу.")
             
             if has_position:
-                # Позиція є — блокуємо нові сигнали входу, надсилаємо звіт кожні 3 хвилини
-                print(f"Знайдено активну позицію. Сканування на паузі.")
-                if current_time - last_position_report_time > 180:
+                # Позиція є — сканування на паузі, даємо звіт кожні 2 хвилини
+                if current_time - last_position_report_time > 120:
                     report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ:**\n"
                     for pos in active_positions:
                         side_text = "🟢 ЛОНГ" if pos['holdSide'] == 'long' else "🔴 ШОРТ"
@@ -263,12 +260,12 @@ async def main():
                             f"• Монета: `{pos['symbol']}` ({side_text})\n"
                             f"• Об'єм: `{pos['total']}` | Ціна входу: `{pos['averageOpenPrice']}`\n"
                             f"• PnL: `{pos['unrealizedPL']}` USDT\n"
-                            f"⚠️ **Контроль:** Перевір стакан. Час фіксувати результат або переносити стоп у б/у!"
+                            f"⚠️ **Контроль:** Перевір стакан та графік. Стеж за рухом ціни!"
                         )
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
                     last_position_report_time = current_time
             else:
-                # Позицій немає — шукаємо нові сигнали
+                # Позицій немає — скануємо ринок
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
@@ -302,4 +299,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                        
+    
