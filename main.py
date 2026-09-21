@@ -13,9 +13,9 @@ VOLUME_MULTIPLIER_ENTRY = 2.0
 VOLUME_MULTIPLIER_EXIT = 3.0      
 VOLUME_DECREASE_EXIT = 0.5        
 
-APPROACH_PERCENT = 0.007          # Повернуто на 0.7% для стабільнішої генерації сигналів
+APPROACH_PERCENT = 0.007          
 TIMEFRAME = "15m"                 
-LIMIT_CANDLES = 60                
+LIMIT_CANDLES = 100               # Збільшено історію до 100 свічок для пошуку глобальніших рівнів
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
@@ -118,7 +118,7 @@ async def fetch_top_bitget_symbols(session):
                     return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
     except Exception as e:
         print(f"Помилка при отриманні списку монет: {e}")
-    return []
+    return {}
 
 
 async def fetch_kline_data(session, symbol):
@@ -169,7 +169,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         return
 
     kline_data = await fetch_kline_data(session, symbol)
-    if not kline_data or len(kline_data) < 55:
+    if not kline_data or len(kline_data) < 80:
         return
 
     try:
@@ -194,32 +194,26 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         # Розрахунок трендового фільтра EMA 50
         ema_50 = calculate_ema(closes, period=50)
 
-        # Рівні підтримки / опору
-        historical_prices = []
-        for i in range(len(closes) - 1):
-            historical_prices.append(lows[i])
-            historical_prices.append(highs[i])
+        # --- ПОШУК ЗНАЧНИХ (ГЛОБАЛЬНИХ) ЕКСТРЕМУМІВ ЗАМІСТЬ ДРІБНИХ КЛАСТЕРІВ ---
+        # Шукаємо локальні вершини та низи (фрактали з плечем 3) за попередні свічки
+        swing_highs = []
+        swing_lows = []
+        
+        for i in range(3, len(kline_data) - 4): # не беремо саму поточну свічку
+            # Перевірка на локальний хай (опір)
+            if highs[i] >= max(highs[i-3:i]) and highs[i] >= max(highs[i+1:i+4]):
+                swing_highs.append(highs[i])
+            # Перевірка на локальний рівень дна (підтримка)
+            if lows[i] <= min(lows[i-3:i]) and lows[i] <= min(lows[i+1:i+4]):
+                swing_lows.append(lows[i])
 
-        clusters = []
-        cluster_threshold = 0.001
-        sorted_prices = sorted(historical_prices)
-        if sorted_prices:
-            current_cluster = [sorted_prices[0]]
-            for p in sorted_prices[1:]:
-                if abs(p - current_cluster[-1]) / current_cluster[-1] <= cluster_threshold:
-                    current_cluster.append(p)
-                else:
-                    if len(current_cluster) >= 2:
-                        clusters.append(sum(current_cluster) / len(current_cluster))
-                    current_cluster = [p]
-            if len(current_cluster) >= 2:
-                clusters.append(sum(current_cluster) / len(current_cluster))
+        # Вибираємо найбільш значущі (найвищий опір вище поточної ціни та найнижча підтримка нижче)
+        valid_upper = [h for h in swing_highs if h > current_price]
+        valid_lower = [l for l in swing_lows if l < current_price]
 
-        lower_clusters = [c for c in clusters if c < current_price]
-        upper_clusters = [c for c in clusters if c > current_price]
-
-        support_level = max(lower_clusters) if lower_clusters else min(lows[:-1])
-        resistance_level = min(upper_clusters) if upper_clusters else max(highs[:-1])
+        # Якщо значних фрактальних рівнів не знайдено, беремо абсолютні екстремуми діапазону
+        resistance_level = min(valid_upper) if valid_upper else max(highs[:-1])
+        support_level = max(valid_lower) if valid_lower else min(lows[:-1])
 
         # --- 1. СУПРОВІД ПОЗИЦІЙ ---
         if symbol in open_positions:
@@ -242,7 +236,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                         f"🔔 МЕНЕДЖЕР [ЛОНГ 15m]: `{symbol}`\n"
                         f"• Вхід: `{entry_price}` | Поточна: `{current_price}`\n"
                         f"• PnL: {pnl_emoji} **{pnl_text}**\n"
-                        f"• Вихід: 🚨 **Підхід до опору (`{resistance_level}`) + {exit_reason}!**"
+                        f"• Вихід: 🚨 **Підхід до глобального опору (`{resistance_level:.4f}`) + {exit_reason}!**"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
@@ -256,13 +250,13 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                         f"🔔 МЕНЕДЖЕР [ШОРТ 15m]: `{symbol}`\n"
                         f"• Вхід: `{entry_price}` | Поточна: `{current_price}`\n"
                         f"• PnL: {pnl_emoji} **{pnl_text}**\n"
-                        f"• Вихід: 🚨 **Підхід до підтримки (`{support_level}`) + {exit_reason}!**"
+                        f"• Вихід: 🚨 **Підхід до глобальної підтримки (`{support_level:.4f}`) + {exit_reason}!**"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-        # --- 2. ПОШУК СИГНАЛІВ З ТРЕНДОВИМ ФІЛЬТРОМ EMA 50 ---
+        # --- 2. ПОШУК СИГНАЛІВ З ФІЛЬТРОМ ГЛОБАЛЬНИХ РІВНІВ ТА EMA 50 ---
         else:
             is_volume_spike_entry = current_volume >= (avg_volume * VOLUME_MULTIPLIER_ENTRY)
             if not is_volume_spike_entry:
@@ -270,14 +264,14 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
 
             is_green_candle = current_price >= current_open
 
-            # СИГНАЛ НА ЛОНГ: ціна вище EMA 50 + підхід до підтримки в межах 0.7%
+            # СИГНАЛ НА ЛОНГ: ціна вище EMA 50 + підхід до значної підтримки в межах 0.7%
             if support_level > 0 and is_green_candle and current_price > ema_50:
                 distance_to_support = (current_price - support_level) / support_level
                 if 0 <= distance_to_support <= APPROACH_PERCENT:
                     alert_message = (
                         f"🟢🎯 **РАННІЙ ЛОНГ [Підтримка 15m]**: `{symbol}`\n"
-                        f"• Точка інтересу: 🚀 **Підхід до підтримки по тренду**\n"
-                        f"• Ціна: `{current_price}` (Підтримка: `{support_level}`, EMA50: `{ema_50:.2f}`)\n"
+                        f"• Точка інтересу: 🚀 **Підхід до значної підтримки**\n"
+                        f"• Ціна: `{current_price}` (Підтримка: `{support_level:.4f}`, EMA50: `{ema_50:.2f}`)\n"
                         f"• Об'єм свічки: `+{surge_percent}%` від середнього\n"
                         f"⏳ Сигнал на відскок вгору за трендом!"
                     )
@@ -285,14 +279,14 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-            # СИГНАЛ НА ШОРТ: ціна нижче EMA 50 + підхід до опору в межах 0.7%
+            # СИГНАЛ НА ШОРТ: ціна нижче EMA 50 + підхід до значного опору в межах 0.7%
             if resistance_level > 0 and not is_green_candle and current_price < ema_50:
                 distance_to_resistance = (resistance_level - current_price) / resistance_level
                 if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                     alert_message = (
                         f"🔴🎯 **РАННІЙ ШОРТ [Опір 15m]**: `{symbol}`\n"
-                        f"• Точка інтересу: 📉 **Підхід до опору по тренду**\n"
-                        f"• Ціна: `{current_price}` (Опір: `{resistance_level}`, EMA50: `{ema_50:.2f}`)\n"
+                        f"• Точка інтересу: 📉 **Підхід до значного опору**\n"
+                        f"• Ціна: `{current_price}` (Опір: `{resistance_level:.4f}`, EMA50: `{ema_50:.2f}`)\n"
                         f"• Об'єм свічки: `+{surge_percent}%` від середнього\n"
                         f"⏳ Сигнал на відбій вниз за трендом!"
                     )
@@ -315,7 +309,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот сканує ринок (EMA 50 + APPROACH_PERCENT = 0.007 на 15m)...")
+    print("Бот сканує ринок (глобальні фрактальні рівні + EMA 50)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -339,7 +333,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"EMA Filtered Scanner Bot (0.7% Approach) is running!")
+        self.wfile.write(b"Fractal Filtered Scanner Bot is running!")
     
     def log_message(self, format, *args):
         return
@@ -359,3 +353,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
+        
