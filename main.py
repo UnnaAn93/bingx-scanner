@@ -49,7 +49,7 @@ def get_bitget_headers(method, request_path, body=""):
 
 async def get_active_positions_details(session):
     """
-    Отримує деталі відкритих позицій для Unified / USDT-FUTURES акаунта.
+    Отримує деталі відкритих позицій для Unified / USDT-FUTURES акаунта з подвійною перевіркою.
     """
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return []
@@ -227,16 +227,17 @@ async def self_ping_loop(session):
 
 async def main():
     global last_position_report_time
-    print("Бот Captain Hook запущено з оновленою логікою звітності...")
+    print("Бот Captain Hook запущено з захистом від пропуску позицій...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook оновлено і запущено!** Контролює відкриті позиції.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook запущено!** Захист від сканування при відкритих позиціях активовано.")
         
         previous_had_position = False
+        consecutive_empty_checks = 0  # Лічильник для підтвердження закриття позиції
         
         while True:
             start_time = asyncio.get_event_loop().time()
@@ -244,14 +245,33 @@ async def main():
             
             # Перевіряємо відкриті позиції
             active_positions = await get_active_positions_details(session)
-            has_position = len(active_positions) > 0
+            raw_has_position = len(active_positions) > 0
             
-            # Якщо позиція щойно закрита
+            # Захист: якщо біржа видала 0 позицій, робимо короткий повторний запит, щоб виключити баг API
+            if not raw_has_position:
+                await asyncio.sleep(1.5)
+                retry_positions = await get_active_positions_details(session)
+                if len(retry_positions) > 0:
+                    active_positions = retry_positions
+                    raw_has_position = True
+
+            has_position = raw_has_position
+            
+            # Якщо позиція дійсно була, а тепер кілька разів підтверджено відсутність
             if previous_had_position and not has_position:
-                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Поновлюю сканування ринку та пошук нових точок входу.")
-            
+                consecutive_empty_checks += 1
+                if consecutive_empty_checks >= 2: # Чекаємо 2 підтвердження підряд
+                    await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Поновлюю сканування ринку та пошук нових точок входу.")
+                    previous_had_position = False
+                    consecutive_empty_checks = 0
+                else:
+                    has_position = True # Поки тримаємо статус на паузі, щоб уникнути хибного спрацювання
+            else:
+                consecutive_empty_checks = 0
+
             if has_position:
-                # Позиція є — сканування на паузі, даємо звіт кожні 2 хвилини
+                previous_had_position = True
+                # Позиція є — сканування на паузі, надсилаємо звіт кожні 2 хвилини
                 if current_time - last_position_report_time > 120:
                     report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ:**\n"
                     for pos in active_positions:
@@ -265,13 +285,11 @@ async def main():
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
                     last_position_report_time = current_time
             else:
-                # Позицій немає — скануємо ринок
+                # Позицій точно немає — скануємо ринок
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
                     await asyncio.gather(*tasks)
-            
-            previous_had_position = has_position
             
             elapsed = asyncio.get_event_loop().time() - start_time
             sleep_time = max(1, 15 - elapsed)
@@ -299,4 +317,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-    
+        
