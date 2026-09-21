@@ -9,16 +9,16 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 # --- НАЛАШТУВАННЯ ПАРАМЕТРІВ СКАНУВАННЯ ---
-VOLUME_MULTIPLIER_ENTRY = 2.0     # Чуттливіший сплеск об'єму для раннього входу
-VOLUME_MULTIPLIER_EXIT = 3.0      # Кульмінаційний сплеск для виходу
-VOLUME_DECREASE_EXIT = 0.5        # Затухання об'єму для виходу
+VOLUME_MULTIPLIER_ENTRY = 2.0     
+VOLUME_MULTIPLIER_EXIT = 3.0      
+VOLUME_DECREASE_EXIT = 0.5        
 
-APPROACH_PERCENT = 0.003          # Звужено до 0.3% для раннього реагування на підході до рівня
-TIMEFRAME = "15m"                 # Таймфрейм 15 хвилин
-LIMIT_CANDLES = 30                # Історія свічок
-TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
-MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
-COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
+APPROACH_PERCENT = 0.003          
+TIMEFRAME = "15m"                 
+LIMIT_CANDLES = 60                # Збільшено історію для коректного розрахунку EMA 50
+TOP_COINS_LIMIT = 150             
+MIN_24H_VOLUME_USDT = 5_000_000   
+COOLDOWN_SECONDS = 300            
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
@@ -30,6 +30,16 @@ BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
 BITGET_BASE_URL = "https://api.bitget.com"
 
 last_alert_time = {}
+
+
+def calculate_ema(closes, period=50):
+    if len(closes) < period:
+        return sum(closes) / len(closes)
+    multiplier = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for price in closes[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
 
 
 def get_bitget_signature_v1(timestamp, method, request_path, body=""):
@@ -159,7 +169,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         return
 
     kline_data = await fetch_kline_data(session, symbol)
-    if not kline_data or len(kline_data) < 20:
+    if not kline_data or len(kline_data) < 55:
         return
 
     try:
@@ -181,7 +191,10 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         current_open = opens[-1]
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
-        # --- КЛАСТЕРИ / РІВНІ ---
+        # Розрахунок трендового фільтра EMA 50
+        ema_50 = calculate_ema(closes, period=50)
+
+        # Рівні підтримки / опору
         historical_prices = []
         for i in range(len(closes) - 1):
             historical_prices.append(lows[i])
@@ -208,7 +221,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         support_level = max(lower_clusters) if lower_clusters else min(lows[:-1])
         resistance_level = min(upper_clusters) if upper_clusters else max(highs[:-1])
 
-        # --- 1. СУПРОВІД ВІДКРИТИХ ПОЗИЦІЙ ---
+        # --- 1. СУПРОВІД ПОЗИЦІЙ ---
         if symbol in open_positions:
             pos_info = open_positions[symbol]
             pos_side = pos_info["side"].upper()
@@ -249,7 +262,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-        # --- 2. ПОШУК РАННІХ СИГНАЛІВ НА ВХІД (ДЗЕРКАЛЬНО) ---
+        # --- 2. ПОШУК СИГНАЛІВ З ТРЕНДОВИМ ФІЛЬТРОМ EMA 50 ---
         else:
             is_volume_spike_entry = current_volume >= (avg_volume * VOLUME_MULTIPLIER_ENTRY)
             if not is_volume_spike_entry:
@@ -257,31 +270,31 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
 
             is_green_candle = current_price >= current_open
 
-            # СИГНАЛ НА ЛОНГ (Ранній підхід до підтримки знизу)
-            if support_level > 0 and is_green_candle:
+            # СИГНАЛ НА ЛОНГ: тільки якщо ціна вище EMA 50 (висхідний/флєтовий контекст)
+            if support_level > 0 and is_green_candle and current_price > ema_50:
                 distance_to_support = (current_price - support_level) / support_level
                 if 0 <= distance_to_support <= APPROACH_PERCENT:
                     alert_message = (
                         f"🟢🎯 **РАННІЙ ЛОНГ [Підтримка 15m]**: `{symbol}`\n"
-                        f"• Точка інтересу: 🚀 **Точний підхід до дна / Зона підтримки**\n"
-                        f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
+                        f"• Точка інтересу: 🚀 **Підхід до підтримки по тренду**\n"
+                        f"• Ціна: `{current_price}` (Підтримка: `{support_level}`, EMA50: `{ema_50:.2f}`)\n"
                         f"• Об'єм свічки: `+{surge_percent}%` від середнього\n"
-                        f"⏳ Ранній сигнал на відскок вгору!"
+                        f"⏳ Сигнал на відскок вгору за трендом!"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-            # СИГНАЛ НА ШОРТ (Ранній підхід до опору зверху — без запізнення)
-            if resistance_level > 0 and not is_green_candle:
+            # СИГНАЛ НА ШОРТ: тільки якщо ціна нижче EMA 50 (низхідний/флєтовий контекст)
+            if resistance_level > 0 and not is_green_candle and current_price < ema_50:
                 distance_to_resistance = (resistance_level - current_price) / resistance_level
                 if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                     alert_message = (
                         f"🔴🎯 **РАННІЙ ШОРТ [Опір 15m]**: `{symbol}`\n"
-                        f"• Точка інтересу: 📉 **Точний підхід до хаю / Зона опору**\n"
-                        f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
+                        f"• Точка інтересу: 📉 **Підхід до опору по тренду**\n"
+                        f"• Ціна: `{current_price}` (Опір: `{resistance_level}`, EMA50: `{ema_50:.2f}`)\n"
                         f"• Об'єм свічки: `+{surge_percent}%` від середнього\n"
-                        f"⏳ Ранній сигнал на відбій вниз!"
+                        f"⏳ Сигнал на відбій вниз за трендом!"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
@@ -302,7 +315,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот сканує ринок (ранній вхід на підході до рівнів + дзеркальний лонг/шорт на 15m)...")
+    print("Бот сканує ринок (фільтр EMA 50 + ранній вхід на рівнях 15m)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -318,7 +331,7 @@ async def main():
                 await asyncio.gather(*tasks)
             
             elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 10 - elapsed)  # Скорочено інтервал очікування для оперативності
+            sleep_time = max(1, 10 - elapsed)
             await asyncio.sleep(sleep_time)
 
 
@@ -326,7 +339,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Early Entry Long/Short Scanner Bot (15m) is running!")
+        self.wfile.write(b"EMA Filtered Scanner Bot (15m) is running!")
     
     def log_message(self, format, *args):
         return
