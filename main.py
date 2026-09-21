@@ -14,7 +14,7 @@ TOP_COINS_LIMIT = 150             # Кількість найактивніши�
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-# Вебхук та налаштування сервера беруться виключно з Environment Variables на Render
+# Вебхук та налаштування сервера беруться з Environment Variables на Render
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
 
@@ -155,6 +155,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
     except Exception as e:
         pass
 
+# Механізм захисту від засинання (Self-Ping)
 async def self_ping_loop(session):
     while True:
         await asyncio.sleep(240)
@@ -185,6 +186,7 @@ async def main():
             sleep_time = max(1, 15 - elapsed)
             await asyncio.sleep(sleep_time)
 
+# Локальний вебсервер для підтримки життєздатності сервісу на Render
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -207,4 +209,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                                
+        
