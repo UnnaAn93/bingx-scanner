@@ -53,7 +53,9 @@ async def fetch_open_positions(session):
     path = "/api/v2/mix/position/all-position"
     query_string = "productType=USDT-FUTURES"
     url = f"{BITGET_BASE_URL}{path}?{query_string}"
-    headers = get_bitget_headers("GET", path + "?" + query_string)
+    
+    request_path = f"{path}?{query_string}"
+    headers = get_bitget_headers("GET", request_path)
 
     try:
         async with session.get(url, headers=headers, timeout=5) as response:
@@ -82,7 +84,9 @@ async def fetch_open_positions(session):
                         return "📋 **Звіт про відкриті позиції:** Наразі немає відкритих позицій."
                 else:
                     return f"❌ Помилка API Bitget: код {data.get('code')} ({data.get('msg')})"
-            return f"❌ Помилка статусу HTTP від Bitget: {response.status}"
+            else:
+                response_text = await response.text()
+                return f"❌ Помилка статусу HTTP від Bitget: {response.status} | Відповідь: {response_text}"
     except Exception as e:
         return f"❌ Виняток при запиті позицій: {e}"
 
@@ -276,4 +280,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+        
