@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bitget Scanner & Position Bot is running!"
+    return "Bitget Unified Scanner & Bot is running!"
 
 BITGET_API_KEY = os.getenv("BITGET_API_KEY")
 BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
@@ -30,24 +30,19 @@ async def send_discord_notification(message: str):
         except Exception as e:
             print(f"❌ [Discord Error]: {e}", flush=True)
 
-async def check_zec_position():
+async def check_uni_assets():
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget!", flush=True)
+        print("❌ [Uni Check] Помилка: відсутні API-ключі Bitget!", flush=True)
         return
 
     base_url = "https://api.bitget.com"
-    # Використовуємо правильний ендпоінт для Unified Account
-    endpoint = "/api/v2/uni/mix/positions"
-    params = {
-        "productType": "USDT-FUTURES",
-        "marginCoin": "USDT"
-    }
+    endpoint = "/api/v2/uni/account/assets"
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     
-    query_string = "marginCoin=USDT&productType=USDT-FUTURES"
-    message = timestamp + method + endpoint + "?" + query_string
+    # Для GET запиту без параметрів рядок підпису виглядає так:
+    message = timestamp + method + endpoint
     
     signature = base64.b64encode(
         hmac.new(BITGET_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
@@ -61,33 +56,22 @@ async def check_zec_position():
         "Content-Type": "application/json"
     }
 
-    url = base_url + endpoint + "?" + query_string
-    print(f"🔍 [ZEC Check] Запит Unified позицій: {url}", flush=True)
+    url = base_url + endpoint
+    print(f"🔍 [Uni Check] Запит активів Unified API: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=10) as response:
-                print(f"📥 [ZEC Check] Статус: {response.status}", flush=True)
+                print(f"📥 [Uni Check] Статус: {response.status}", flush=True)
                 data = await response.json()
-                print(f"📦 [ZEC Check] Відповідь: {data}", flush=True)
+                print(f"📦 [Uni Check] Відповідь: {data}", flush=True)
                 
                 if data.get("code") == "00000":
-                    positions = data.get("data", [])
-                    print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}", flush=True)
-                    found = False
-                    for pos in positions:
-                        if pos.get("symbol") == "ZECUSDT":
-                            found = True
-                            hold_side = pos.get("holdSide")
-                            total = pos.get("total")
-                            print(f"🎯 Знайдено позицію ZECUSDT! Сторона: {hold_side}, Об'єм: {total}", flush=True)
-                            await send_discord_notification(f"📊 **Позиція ZECUSDT**: {hold_side}, об'єм: {total}")
-                    if not found:
-                        print("ℹ️ [ZEC Check] Позиція ZECUSDT відсутня.", flush=True)
+                    print("✅ Успішно отримано дані єдиного акаунта!", flush=True)
                 else:
-                    print(f"⚠️ [ZEC Check] Помилка від біржі: {data}", flush=True)
+                    print(f"⚠️ [Uni Check] Помилка від біржі: {data}", flush=True)
     except Exception as e:
-        print(f"❌ [ZEC Check] Виняток: {e}", flush=True)
+        print(f"❌ [Uni Check] Виняток: {e}", flush=True)
 
 async def background_scanner():
     await asyncio.sleep(5)
@@ -95,8 +79,8 @@ async def background_scanner():
     
     while True:
         try:
-            print("🔄 Запуск перевірки позицій...", flush=True)
-            await check_zec_position()
+            print("🔄 Запуск перевірки єдиного акаунта...", flush=True)
+            await check_uni_assets()
         except Exception as e:
             print(f"❌ Помилка в циклі: {e}", flush=True)
             
