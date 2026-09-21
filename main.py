@@ -9,13 +9,15 @@ import threading
 VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
 APPROACH_PERCENT = 0.008          # 0.8% до рівня (підтримки або опору)
 TIMEFRAME = "5m"                  # Таймфрейм 5 хвилин
-LIMIT_CANDLES = 40                # Історія свічок
+LIMIT_LIMIT = 40                  # Історія свічок (зберігаємо назву для зручності)
+LIMIT_CANDLES = 40
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF"
-RENDER_URL = "https://bingx-scanner-djbf.onrender.com"
+# Вебхук береться виключно із системних змінних (Environment Variables) на Render
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 
 BITGET_BASE_URL = "https://api.bitget.com"
 
@@ -59,7 +61,6 @@ async def fetch_kline_data(session, symbol):
                 data = await response.json()
                 if data.get("code") == "00000":
                     raw_list = data.get("data", [])
-                    # Bitget повертає відсортовані від нових до старих, розгортаємо в хронологічному порядку
                     raw_list.sort(key=lambda x: int(x[0]))
                     formatted = []
                     for item in raw_list:
@@ -76,6 +77,7 @@ async def fetch_kline_data(session, symbol):
 
 async def send_to_discord(session, webhook_url, message):
     if not webhook_url:
+        print("Попередження: DISCORD_WEBHOOK_URL не задано в середовищі!")
         return
     payload = {"content": message}
     try:
@@ -165,6 +167,8 @@ async def self_ping_loop(session):
 
 async def main():
     print("Бот сканує ринок Bitget на ЛОНГ (підтримка) та ШОРТ (опір) на 5m...")
+    if not DISCORD_WEBHOOK_URL:
+        print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -174,7 +178,7 @@ async def main():
             
             symbols_list = await fetch_top_bitget_symbols(session)
             
-            if symbols_list and DISCORD_WEBHOOK_URL:
+            if symbols_list:
                 tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
                 await asyncio.gather(*tasks)
             
