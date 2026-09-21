@@ -36,9 +36,10 @@ async def check_zec_position():
         return
 
     base_url = "https://api.bitget.com"
-    # Виправляємо шлях на стандартний V2 мікс-ендпоінт позицій
-    endpoint = "/api/v2/mix/position/all-position"
-    params = {"productType": "usdt-futures"}
+    # Використовуємо саме UNI ендпоінт, оскільки акаунт у Unified режимі
+    endpoint = "/api/v2/uni/mix/position/all-position"
+    # Для Unified Account часто використовується "USDT-FUTURES" або перевірка без параметра чи з "umcbl"
+    params = {"productType": "USDT-FUTURES"}
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
@@ -57,7 +58,7 @@ async def check_zec_position():
     }
 
     url = base_url + endpoint
-    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget API: {url}", flush=True)
+    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -88,7 +89,7 @@ async def check_zec_position():
 async def background_scanner():
     await asyncio.sleep(5)
     print("🤖 [Scanner] Фоновий процес стартував!", flush=True)
-    await send_discord_notification("🤖 **Бот оновлено!** Переведено на правильний ендпоінт Bitget для відстеження ZEC.")
+    await send_discord_notification("🤖 **Бот оновлено!** Налаштовано під Unified Account Bitget.")
     
     while True:
         try:
