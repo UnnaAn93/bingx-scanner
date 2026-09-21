@@ -5,19 +5,18 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування параметрів сканування
+# Налаштування параметрів сканування для Bitget (15m)
 VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
 APPROACH_PERCENT = 0.008          # 0.8% до рівня (підтримки або опору)
-TIMEFRAME = "5m"                  # Таймфрейм 5 хвилин
-LIMIT_LIMIT = 40                  # Історія свічок (зберігаємо назву для зручності)
-LIMIT_CANDLES = 40
+TIMEFRAME = "15m"                 # Таймфрейм 15 хвилин
+LIMIT_CANDLES = 40                # Історія свічок
 TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
 MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
 COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-# Вебхук береться виключно із системних змінних (Environment Variables) на Render
+# Вебхук та налаштування сервера беруться виключно з Environment Variables на Render
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
+RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
 
 BITGET_BASE_URL = "https://api.bitget.com"
 
@@ -125,7 +124,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             distance_to_support = (current_price - support_level) / support_level
             if 0 <= distance_to_support <= APPROACH_PERCENT:
                 alert_message = (
-                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 5m]**: `{symbol}`\n"
+                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
                     f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
@@ -133,7 +132,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Лонг сигнал 5m для {symbol}")
+                print(f"Лонг сигнал 15m для {symbol}")
                 return
 
         # 2. Перевірка на ШОРТ (Опір зверху)
@@ -142,7 +141,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             distance_to_resistance = (resistance_level - current_price) / resistance_level
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                 alert_message = (
-                    f"🔴🎯 **УВАГА [ШОРТ / Опір 5m]**: `{symbol}`\n"
+                    f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
                     f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
@@ -150,7 +149,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Шорт сигнал 5m для {symbol}")
+                print(f"Шорт сигнал 15m для {symbol}")
                 return
 
     except Exception as e:
@@ -166,7 +165,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот сканує ринок Bitget на ЛОНГ (підтримка) та ШОРТ (опір) на 5m...")
+    print("Бот Captain Hook сканує ринок Bitget на 15m...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
@@ -190,7 +189,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bitget Long/Short Scanner Bot is running!")
+        self.wfile.write(b"Captain Hook Bitget Scanner Bot is running!")
     
     def log_message(self, format, *args):
         return
@@ -208,4 +207,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+                                
