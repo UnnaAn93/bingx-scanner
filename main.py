@@ -2,7 +2,6 @@ import os
 import time
 import hmac
 import hashlib
-import base64
 import aiohttp
 import asyncio
 import threading
@@ -12,11 +11,10 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bitget Account Assets Bot is running!"
+    return "BingX Scanner Bot is running!"
 
-BITGET_API_KEY = os.getenv("BITGET_API_KEY")
-BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+BINGX_API_KEY = os.getenv("BINGX_API_KEY")
+BINGX_SECRET_KEY = os.getenv("BINGX_SECRET_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 async def send_discord_notification(message: str):
@@ -30,62 +28,58 @@ async def send_discord_notification(message: str):
         except Exception as e:
             print(f"❌ [Discord Error]: {e}", flush=True)
 
-async def check_account_assets():
-    if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("❌ [Asset Check] Помилка: відсутні API-ключі Bitget!", flush=True)
+def get_bingX_signature(secret_key, message):
+    return hmac.new(secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+async def check_bingx_positions():
+    if not BINGX_API_KEY or not BINGX_SECRET_KEY:
+        print("❌ [BingX Check] Відсутні API-ключі BingX!", flush=True)
         return
 
-    base_url = "https://api.bitget.com"
-    endpoint = "/api/v2/account/assets"
+    base_url = "https://open-api.bingx.com"
+    endpoint = "/openApi/swap/v2/user/positions"
     
     timestamp = str(int(time.time() * 1000))
-    method = "GET"
+    params_str = f"timestamp={timestamp}"
     
-    message = timestamp + method + endpoint
-    
-    signature = base64.b64encode(
-        hmac.new(BITGET_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
-    ).decode("utf-8")
+    signature = get_bingX_signature(BINGX_SECRET_KEY, params_str)
+    url = f"{base_url}{endpoint}?{params_str}&signature={signature}"
     
     headers = {
-        "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
-        "Content-Type": "application/json"
+        "X-BX-APIKEY": BINGX_API_KEY
     }
 
-    url = base_url + endpoint
-    print(f"🔍 [Asset Check] Запит активів: {url}", flush=True)
+    print(f"🔍 [BingX Check] Запит позицій: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=10) as response:
-                print(f"📥 [Asset Check] Статус: {response.status}", flush=True)
+                print(f"📥 [BingX Check] Статус: {response.status}", flush=True)
                 data = await response.json()
-                print(f"📦 [Asset Check] Відповідь: {data}", flush=True)
+                print(f"📦 [BingX Check] Відповідь: {data}", flush=True)
                 
-                if data.get("code") == "00000":
-                    print("✅ Успішно підключено до акаунта!", flush=True)
-                    assets = data.get("data", [])
-                    for asset in assets:
-                        coin = asset.get("coin")
-                        available = asset.get("available")
-                        if float(available or 0) > 0:
-                            print(f"💰 Монета: {coin}, Доступно: {available}", flush=True)
+                if data.get("code") == 0:
+                    positions = data.get("data", [])
+                    if positions:
+                        for pos in positions:
+                            symbol = pos.get("symbol")
+                            size = pos.get("positionAmt")
+                            print(f"📈 Знайдено позицію: {symbol}, Розмір: {size}", flush=True)
+                    else:
+                        print("ℹ️ Немає відкритих позицій.", flush=True)
                 else:
-                    print(f"⚠️ [Asset Check] Помилка від біржі: {data}", flush=True)
+                    print(f"⚠️ Помилка від біржі BingX: {data}", flush=True)
     except Exception as e:
-        print(f"❌ [Asset Check] Виняток: {e}", flush=True)
+        print(f"❌ [BingX Check] Виняток: {e}", flush=True)
 
 async def background_scanner():
     await asyncio.sleep(5)
-    print("🤖 [Scanner] Фоновий процес стартував!", flush=True)
+    print("🤖 [Scanner] BingX фоновий сканер стартував!", flush=True)
     
     while True:
         try:
-            print("🔄 Запуск перевірки активів...", flush=True)
-            await check_account_assets()
+            print("🔄 Сканування відкритих позицій на BingX...", flush=True)
+            await check_bingx_positions()
         except Exception as e:
             print(f"❌ Помилка в циклі: {e}", flush=True)
             
