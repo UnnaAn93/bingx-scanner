@@ -36,14 +36,19 @@ async def check_zec_position():
         return
 
     base_url = "https://api.bitget.com"
-    # Виправляємо шлях для Unified Account позицій
-    endpoint = "/api/v2/uni/mix/positions"
-    params = {"productType": "USDT-FUTURES"}
+    endpoint = "/api/v2/mix/position/all-position"
+    params = {
+        "productType": "usdt-futures",
+        "marginCoin": "USDT"
+    }
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     
-    message = timestamp + method + endpoint
+    # Для GET запитів підпис будується з урахуванням query-параметрів
+    query_string = "productType=usdt-futures&marginCoin=USDT"
+    message = timestamp + method + endpoint + "?" + query_string
+    
     signature = base64.b64encode(
         hmac.new(BITGET_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
     ).decode("utf-8")
@@ -56,17 +61,16 @@ async def check_zec_position():
         "Content-Type": "application/json"
     }
 
-    url = base_url + endpoint
-    print(f"🔍 [ZEC Check] Запит позицій Unified API: {url}", flush=True)
+    url = base_url + endpoint + "?" + query_string
+    print(f"🔍 [ZEC Check] Запит позицій: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params, timeout=10) as response:
+            async with session.get(url, headers=headers, timeout=10) as response:
                 print(f"📥 [ZEC Check] Статус: {response.status}", flush=True)
-                text_response = await response.text()
-                print(f"📦 [ZEC Check] Тіло відповіді: {text_response}", flush=True)
-                
                 data = await response.json()
+                print(f"📦 [ZEC Check] Відповідь: {data}", flush=True)
+                
                 if data.get("code") == "00000":
                     positions = data.get("data", [])
                     print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}", flush=True)
