@@ -1,100 +1,262 @@
+import asyncio
+import aiohttp
 import os
 import time
 import hmac
 import hashlib
-import aiohttp
-import asyncio
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from flask import Flask
 
-app = Flask(__name__)
+# Налаштування параметрів сканування та супроводу (15m)
+VOLUME_MULTIPLIER = 2.2           
+APPROACH_PERCENT = 0.008          
+TIMEFRAME = "15m"                 
+LIMIT_CANDLES = 40                
+TOP_COINS_LIMIT = 150             
+MIN_24H_VOLUME_USDT = 5_000_000   
+COOLDOWN_SECONDS = 300            
 
-@app.route("/")
-def home():
-    return "BingX Scanner Bot is running!"
+API_KEY = os.environ.get("BINGX_API_KEY", "")
+API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 
-BINGX_API_KEY = os.getenv("BINGX_API_KEY")
-BINGX_SECRET_KEY = os.getenv("BINGX_SECRET_KEY")
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+BINGX_BASE_URL = "https://open-api.bingx.com"
 
-async def send_discord_notification(message: str):
-    if not DISCORD_WEBHOOK_URL:
+last_alert_time = {}
+active_position = None  # {'symbol': ..., 'side': 'LONG'/'SHORT', 'entryPrice': ...}
+
+def get_sign(api_secret, payload):
+    return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
+
+async def send_to_discord(session, webhook_url, message):
+    if not webhook_url:
         return
     payload = {"content": message}
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10) as resp:
-                pass
-        except Exception as e:
-            print(f"❌ [Discord Error]: {e}", flush=True)
+    try:
+        async with session.post(webhook_url, json=payload) as response:
+            pass
+    except Exception as e:
+        print(f"Помилка Discord: {e}", flush=True)
 
-def get_bingX_signature(secret_key, message):
-    return hmac.new(secret_key.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-async def check_bingx_positions():
-    if not BINGX_API_KEY or not BINGX_SECRET_KEY:
-        print("❌ [BingX Check] Відсутні API-ключі BingX!", flush=True)
-        return
-
-    base_url = "https://open-api.bingx.com"
-    endpoint = "/openApi/swap/v2/user/positions"
-    
+async def fetch_open_positions(session):
+    if not API_KEY or not API_SECRET:
+        return []
+    path = "/openApi/swap/v2/user/positions"
     timestamp = str(int(time.time() * 1000))
     params_str = f"timestamp={timestamp}"
-    
-    signature = get_bingX_signature(BINGX_SECRET_KEY, params_str)
-    url = f"{base_url}{endpoint}?{params_str}&signature={signature}"
-    
-    headers = {
-        "X-BX-APIKEY": BINGX_API_KEY
-    }
-
-    print(f"🔍 [BingX Check] Запит позицій: {url}", flush=True)
-    
+    signature = get_sign(API_SECRET, params_str)
+    url = f"{BINGX_BASE_URL}{path}?{params_str}&signature={signature}"
+    headers = {"X-BX-APIKEY": API_KEY}
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=10) as response:
-                print(f"📥 [BingX Check] Статус: {response.status}", flush=True)
+        async with session.get(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
                 data = await response.json()
-                print(f"📦 [BingX Check] Відповідь: {data}", flush=True)
-                
                 if data.get("code") == 0:
                     positions = data.get("data", [])
-                    if positions:
-                        for pos in positions:
-                            symbol = pos.get("symbol")
-                            size = pos.get("positionAmt")
-                            print(f"📈 Знайдено позицію: {symbol}, Розмір: {size}", flush=True)
-                    else:
-                        print("ℹ️ Немає відкритих позицій.", flush=True)
-                else:
-                    print(f"⚠️ Помилка від біржі BingX: {data}", flush=True)
-    except Exception as e:
-        print(f"❌ [BingX Check] Виняток: {e}", flush=True)
+                    return [p for p in positions if float(p.get("positionAmt", 0)) != 0]
+    except Exception:
+        pass
+    return []
 
-async def background_scanner():
-    await asyncio.sleep(5)
-    print("🤖 [Scanner] BingX фоновий сканер стартував!", flush=True)
-    
+async def fetch_top_bingx_symbols(session):
+    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
+    try:
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("code") == 0:
+                    list_tickers = data.get("data", [])
+                    usdt_tickers = []
+                    for t in list_tickers:
+                        symbol = t.get("symbol", "")
+                        if symbol.endswith("-USDT") or symbol.endswith("USDT"):
+                            try:
+                                quote_vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
+                                if quote_vol >= MIN_24H_VOLUME_USDT:
+                                    usdt_tickers.append((symbol, quote_vol))
+                            except Exception:
+                                continue
+                    usdt_tickers.sort(key=lambda x: x[1], reverse=True)
+                    return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+    except Exception:
+        pass
+    return []
+
+async def fetch_kline_data(session, symbol):
+    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines"
+    params = {"symbol": symbol, "interval": TIMEFRAME, "limit": str(LIMIT_CANDLES)}
+    try:
+        async with session.get(url, params=params, timeout=4) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("code") == 0:
+                    raw_list = data.get("data", [])
+                    raw_list.sort(key=lambda x: int(x.get("time", x.get("openTime", 0))))
+                    formatted = []
+                    for item in raw_list:
+                        formatted.append({
+                            "high": float(item.get("high", 0)),
+                            "low": float(item.get("low", 0)),
+                            "close": float(item.get("close", 0)),
+                            "volume": float(item.get("volume", 0))
+                        })
+                    return formatted
+    except Exception:
+        pass
+    return None
+
+async def check_single_coin(session, symbol, discord_webhook_url):
+    current_time = time.time()
+    if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
+        return
+
+    kline_data = await fetch_kline_data(session, symbol)
+    if not kline_data or len(kline_data) < 30:
+        return
+
+    try:
+        volumes = [x['volume'] for x in kline_data]
+        lows = [x['low'] for x in kline_data]
+        highs = [x['high'] for x in kline_data]
+        closes = [x['close'] for x in kline_data]
+        
+        current_volume = volumes[-1]
+        if current_volume <= 0:
+            return
+
+        avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
+        if avg_volume <= 0:
+            return
+        
+        current_price = closes[-1]
+        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
+        if not is_volume_spike:
+            return
+
+        surge_percent = int((current_volume / avg_volume - 1) * 100)
+
+        # 1. Сигнал на ЛОНГ
+        support_level = min(lows[:-1])
+        if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
+            alert_message = (
+                f"🟢🎯 **ВІДКРИТИ ЛОНГ [Підтримка 15m]**:\n`{symbol}`\n"
+                f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
+                f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
+            )
+            last_alert_time[symbol] = current_time
+            await send_to_discord(session, discord_webhook_url, alert_message)
+            return
+
+        # 2. Сигнал на ШОРТ
+        resistance_level = max(highs[:-1])
+        if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
+            alert_message = (
+                f"🔴🎯 **ВІДКРИТИ ШОРТ [Опір 15m]**:\n`{symbol}`\n"
+                f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
+                f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
+            )
+            last_alert_time[symbol] = current_time
+            await send_to_discord(session, discord_webhook_url, alert_message)
+            return
+
+    except Exception:
+        pass
+
+async def monitor_active_position(session, pos, discord_webhook_url):
+    """Стежить за відкритою позицією, аналізує об'єми та дає сигнал на закриття"""
+    sym = pos.get("symbol")
+    amt = float(pos.get("positionAmt", 0))
+    entry_price = float(pos.get("avgPrice", 0))
+    pnl = pos.get("unrealizedProfit", "0")
+    side = "LONG" if amt > 0 else "SHORT"
+
+    kline_data = await fetch_kline_data(session, sym)
+    if not kline_data or len(kline_data) < 10:
+        return
+
+    current_volume = kline_data[-1]['volume']
+    prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
+    current_price = kline_data[-1]['close']
+
+    # Умова 1: Впали об'єми (ліквідність згасла нижче середнього)
+    is_volume_dropped = current_volume < (prev_avg_volume * 0.6)
+
+    # Умова 2: Зміна напрямку / різкий протилежний рух
+    is_reversal = False
+    if side == "LONG" and current_price < entry_price * 0.992:  # наприклад, пробиття вниз більше ніж на 0.8%
+        is_reversal = True
+    elif side == "SHORT" and current_price > entry_price * 1.008:
+        is_reversal = True
+
+    # Формуємо звіт та перевіряємо сигнал на вихід
+    report_msg = (
+        f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+        f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+        f"• PnL: `{pnl} USDT`"
+    )
+
+    if is_volume_dropped:
+        report_msg += f"\n⚠️ **УВАГА: Об'єми впали! Рекомендується закрити угоду (згасання імпульсу).**"
+    elif is_reversal:
+        report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується терміново закрити угоду.**"
+
+    await send_to_discord(session, discord_webhook_url, report_msg)
+
+async def self_ping_loop(session):
     while True:
+        await asyncio.sleep(240)
         try:
-            print("🔄 Сканування відкритих позицій на BingX...", flush=True)
-            await check_bingx_positions()
-        except Exception as e:
-            print(f"❌ Помилка в циклі: {e}", flush=True)
-            
-        await asyncio.sleep(60)
+            async with session.get(RENDER_URL, timeout=5) as response:
+                pass
+        except Exception:
+            pass
 
-def run_flask():
+async def main():
+    print("Бот супроводу та аналізу сигналів BingX запущено...")
+    async with aiohttp.ClientSession() as session:
+        asyncio.create_task(self_ping_loop(session))
+        
+        while True:
+            start_time = asyncio.get_event_loop().time()
+            
+            open_positions = await fetch_open_positions(session)
+            
+            if open_positions:
+                # Якщо є відкрита позиція — супроводжуємо її та шукаємо сигнал на закриття
+                pos = open_positions[0]
+                await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
+            else:
+                # Якщо позицій немає — скануємо ринок на нові входи
+                print("Активних позицій немає. Скануємо ринок...")
+                symbols_list = await fetch_top_bingx_symbols(session)
+                if symbols_list:
+                    tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
+                    await asyncio.gather(*tasks)
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            sleep_time = max(1, 30 - elapsed)
+            await asyncio.sleep(sleep_time)
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"BingX Smart Position Bot is running!")
+    def log_message(self, format, *args):
+        return
+
+def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
 
 if __name__ == "__main__":
-    def start_background_loop():
-        asyncio.run(background_scanner())
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
 
-    bot_thread = threading.Thread(target=start_background_loop, daemon=True)
-    bot_thread.start()
-    
-    run_flask()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Бот зупинений.")
     
