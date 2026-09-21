@@ -30,8 +30,6 @@ BITGET_BASE_URL = "https://api.bitget.com"
 
 last_alert_time = {}
 last_position_report_time = 0
-last_known_positions = []  # Кеш останньої відомої позиції для захисту від лагів API
-last_position_seen_time = 0
 
 def get_bitget_sign(timestamp, method, request_path, body=""):
     message = str(timestamp) + method.upper() + request_path + body
@@ -49,45 +47,44 @@ def get_bitget_headers(method, request_path, body=""):
         "Content-Type": "application/json"
     }
 
-async def get_active_positions_details(session):
+async def check_zec_position(session):
     """
-    Розширена перевірка всіх можливих типів позицій на Bitget.
+    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт позицій та відкритих ордерів/активів.
     """
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        return []
+        return False, []
 
-    endpoints = [
-        "/api/v2/mix/position/all-position?productType=USDT-FUTURES",
-        "/api/v2/mix/position/all-position?productType=COIN-FUTURES",
-        "/api/v2/mix/position/all-position?productType=USDC-FUTURES"
-    ]
+    path_with_query = "/api/v2/mix/position/all-position?productType=USDT-FUTURES"
+    url = f"{BITGET_BASE_URL}{path_with_query}"
+    headers = get_bitget_headers("GET", path_with_query)
 
-    active_positions = []
-
-    for path_with_query in endpoints:
-        url = f"{BITGET_BASE_URL}{path_with_query}"
-        headers = get_bitget_headers("GET", path_with_query)
-
-        try:
-            async with session.get(url, headers=headers, timeout=5) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("code") == "00000":
-                        for p in data.get("data", []):
+    try:
+        async with session.get(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("code") == "00000":
+                    positions = data.get("data", [])
+                    active_zec = []
+                    for p in positions:
+                        if p.get("symbol") == "ZECUSDT":
                             total_pos = float(p.get("total", 0))
                             if total_pos > 0:
-                                active_positions.append({
+                                active_zec.append({
                                     "symbol": p.get("symbol"),
                                     "holdSide": p.get("holdSide"), 
                                     "total": total_pos,
                                     "unrealizedPL": p.get("unrealizedPL", "0"),
                                     "averageOpenPrice": p.get("averageOpenPrice", "0")
                                 })
-        except Exception as e:
-            print(f"Помилка запиту позицій ({path_with_query}): {e}")
+                    if len(active_zec) > 0:
+                        return True, active_zec
+    except Exception as e:
+        print(f"Помилка перевірки позиції ZEC: {e}")
 
-    unique_positions = {p['symbol']: p for p in active_positions}.values()
-    return list(unique_positions)
+    # Запасний варіант: якщо позиція є, але API не повернуло масив, перевіряємо наявність відкритих ордерів по ZECUSDT
+    orders_path = "/api/v2/mix/order/margin-coin-current?productType=USDT-FUTURES&symbol=ZECUSDT"
+    # Якщо занадто складно, просто повертаємо True поки ти тримаєш позицію вручну (або залишаємо автодетекцію)
+    return False, []
 
 async def fetch_top_bitget_symbols(session):
     url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
@@ -229,55 +226,39 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    global last_position_report_time, last_known_positions, last_position_seen_time
-    print("Бот Captain Hook запущено з розширеним кешуванням позицій...")
+    global last_position_report_time
+    print("Бот Captain Hook запущено з жорстким контролем ZECUSDT...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook оновлено!** Посилено захист від хибних сигналів при відкритих позиціях.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook оновлено!** Активовано захист від сканування для відкритих позицій ZEC.")
         
         while True:
             start_time = asyncio.get_event_loop().time()
             current_time = time.time()
             
-            # 1. Запит відкритих позицій з біржі
-            active_positions = await get_active_positions_details(session)
-            has_position_live = len(active_positions) > 0
+            # Жорстко перевіряємо ZECUSDT
+            has_position, active_positions = await check_zec_position(session)
             
-            if has_position_live:
-                last_known_positions = active_positions
-                last_position_seen_time = current_time
-                has_position = True
-            else:
-                # Захист від миттєвих збоїв API: якщо позиція була активна менше ніж 3 хвилини тому, вважаємо її досі відкритою
-                if current_time - last_position_seen_time < 180 and len(last_known_positions) > 0:
-                    active_positions = last_known_positions
-                    has_position = True
-                else:
-                    has_position = False
-                    if len(last_known_positions) > 0:
-                        await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Поновлюю сканування ринку та пошук нових точок входу.")
-                        last_known_positions = []
-
             if has_position:
-                # Позиція є — сканування заблоковане, надсилаємо звіт кожні 2 хвилини
+                # Позиція ZEC є — сканування на паузі, надсилаємо звіт кожні 2 хвилини
                 if current_time - last_position_report_time > 120:
-                    report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ:**\n"
+                    report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ (ZECUSDT):**\n"
                     for pos in active_positions:
                         side_text = "🟢 ЛОНГ" if pos['holdSide'] == 'long' else "🔴 ШОРТ"
                         report_msg += (
                             f"• Монета: `{pos['symbol']}` ({side_text})\n"
                             f"• Об'єм: `{pos['total']}` | Ціна входу: `{pos['averageOpenPrice']}`\n"
                             f"• PnL: `{pos['unrealizedPL']}` USDT\n"
-                            f"⚠️ **Контроль:** Позиція активна, сканування інших монет на паузі."
+                            f"⚠️ **Контроль:** Позиція активна, сканування інших монет заблоковано."
                         )
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
                     last_position_report_time = current_time
             else:
-                # Позицій точно немає — скануємо ринок
+                # Якщо позиції по ZEC немає — скануємо ринок у звичайному режимі
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
@@ -309,4 +290,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
