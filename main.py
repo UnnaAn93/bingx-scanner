@@ -50,7 +50,8 @@ async def fetch_open_positions(session):
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return "⚠️ API ключі Bitget не налаштовані, перевірка позицій пропущена."
 
-    path = "/api/v2/mix/position/all-position"
+    # Ендпоїнт для Unified Account на Bitget
+    path = "/api/v2/uni/position/all-position"
     query_string = "productType=USDT-FUTURES"
     url = f"{BITGET_BASE_URL}{path}?{query_string}"
     
@@ -79,11 +80,11 @@ async def fetch_open_positions(session):
                             )
                     
                     if active_positions:
-                        return "📋 **Звіт про відкриті позиції на старті:**\n" + "\n".join(active_positions)
+                        return "📋 **Звіт про відкриті позиції на старті (Unified Account):**\n" + "\n".join(active_positions)
                     else:
-                        return "📋 **Звіт про відкриті позиції:** Наразі немає відкритих позицій."
+                        return "📋 **Звіт про відкриті позиції (Unified Account):** Наразі немає відкритих позицій."
                 else:
-                    return f"❌ Помилка API Bitget: код {data.get('code')} ({data.get('msg')})"
+                    return f"❌ Помилка API Bitget (Unified): код {data.get('code')} ({data.get('msg')})"
             else:
                 response_text = await response.text()
                 return f"❌ Помилка статусу HTTP від Bitget: {response.status} | Відповідь: {response_text}"
@@ -280,4 +281,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-        
+    
