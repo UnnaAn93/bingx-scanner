@@ -30,16 +30,14 @@ async def send_discord_notification(message: str):
         except Exception as e:
             print(f"❌ [Discord Error]: {e}", flush=True)
 
-async def check_zec_position():
+async def check_account_info():
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget у змінних середовища!", flush=True)
+        print("❌ [API Check] Помилка: відсутні API-ключі Bitget!", flush=True)
         return
 
     base_url = "https://api.bitget.com"
-    # Використовуємо саме UNI ендпоінт, оскільки акаунт у Unified режимі
-    endpoint = "/api/v2/uni/mix/position/all-position"
-    # Для Unified Account часто використовується "USDT-FUTURES" або перевірка без параметра чи з "umcbl"
-    params = {"productType": "USDT-FUTURES"}
+    # Перевіримо загальний уніфікований ендпоінт активів/акаунта
+    endpoint = "/api/v2/uni/account/info"
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
@@ -58,43 +56,25 @@ async def check_zec_position():
     }
 
     url = base_url + endpoint
-    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API: {url}", flush=True)
+    print(f"🔍 [API Check] Запит інформації про акаунт: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, params=params, timeout=10) as response:
-                print(f"📥 [ZEC Check] Статус відповіді від Bitget: {response.status}", flush=True)
+            async with session.get(url, headers=headers, timeout=10) as response:
+                print(f"📥 [API Check] Статус: {response.status}", flush=True)
                 text_response = await response.text()
-                print(f"📦 [ZEC Check] Тіло відповіді: {text_response}", flush=True)
-                
-                data = await response.json()
-                if data.get("code") == "00000":
-                    positions = data.get("data", [])
-                    print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}", flush=True)
-                    found = False
-                    for pos in positions:
-                        if pos.get("symbol") == "ZECUSDT":
-                            found = True
-                            hold_side = pos.get("holdSide")
-                            total = pos.get("total")
-                            print(f"🎯 Знайдено позицію ZECUSDT! Сторона: {hold_side}, Об'єм: {total}", flush=True)
-                            await send_discord_notification(f"📊 **Позиція ZECUSDT**: {hold_side}, об'єм: {total}")
-                    if not found:
-                        print("ℹ️ [ZEC Check] Позиція ZECUSDT наразі відсутня в списку відкритих.", flush=True)
-                else:
-                    print(f"⚠️ [ZEC Check] Помилка від біржі Bitget: {data}", flush=True)
+                print(f"📦 [API Check] Відповідь: {text_response}", flush=True)
     except Exception as e:
-        print(f"❌ [ZEC Check] Виняток під час запиту позиції: {e}", flush=True)
+        print(f"❌ [API Check] Виняток: {e}", flush=True)
 
 async def background_scanner():
     await asyncio.sleep(5)
     print("🤖 [Scanner] Фоновий процес стартував!", flush=True)
-    await send_discord_notification("🤖 **Бот оновлено!** Налаштовано під Unified Account Bitget.")
     
     while True:
         try:
-            print("🔄 Запуск циклу перевірки позицій...", flush=True)
-            await check_zec_position()
+            print("🔄 Запуск перевірки акаунта...", flush=True)
+            await check_account_info()
         except Exception as e:
             print(f"❌ Помилка в циклі: {e}", flush=True)
             
