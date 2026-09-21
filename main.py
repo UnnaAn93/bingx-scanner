@@ -47,21 +47,21 @@ def get_bitget_headers(method, request_path, body=""):
 
 async def check_zec_position(session):
     """
-    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт позицій з marginCoin=USDT.
+    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт Єдиного акаунта (UNI).
     """
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         print("Попередження: API ключі Bitget не задані!")
         return False, []
 
-    # Додаємо marginCoin=USDT, як вимагає V2 API Bitget
-    path_with_query = "/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT"
+    # Використовуємо шлях для Єдиного акаунта (Unified Account)
+    path_with_query = "/api/v2/uni/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT"
     url = f"{BITGET_BASE_URL}{path_with_query}"
     headers = get_bitget_headers("GET", path_with_query)
 
     try:
         async with session.get(url, headers=headers, timeout=5) as response:
             text_resp = await response.text()
-            print(f"Відповідь Bitget API позицій (status {response.status}): {text_resp}")
+            print(f"Відповідь Bitget UNI API позицій (status {response.status}): {text_resp}")
             
             if response.status == 200:
                 import json
@@ -83,7 +83,7 @@ async def check_zec_position(session):
                     if len(active_zec) > 0:
                         return True, active_zec
     except Exception as e:
-        print(f"Помилка перевірки позиції ZEC: {e}")
+        print(f"Помилка перевірки позиції ZEC через UNI API: {e}")
 
     return False, []
 
@@ -226,11 +226,11 @@ async def self_ping_loop(session):
 
 async def main():
     global last_position_report_time
-    print("Бот запущено з додатковим логуванням відповіді позицій...")
+    print("Бот запущено з підтримкою Єдиного акаунта (UNI)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот оновлено!** Додано запит marginCoin=USDT та логування відповіді біржі.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот оновлено!** Переведено на ендпоінти Єдиного акаунта Bitget для відстеження ZEC.")
         
         while True:
             start_time = asyncio.get_event_loop().time()
@@ -283,3 +283,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+            
