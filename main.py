@@ -17,11 +17,9 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 
-# Змінні середовища з Render
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
 
-# API ключі Bitget
 BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
 BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
 BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
@@ -49,19 +47,25 @@ def get_bitget_headers(method, request_path, body=""):
 
 async def check_zec_position(session):
     """
-    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт позицій та відкритих ордерів/активів.
+    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт позицій з marginCoin=USDT.
     """
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
+        print("Попередження: API ключі Bitget не задані!")
         return False, []
 
-    path_with_query = "/api/v2/mix/position/all-position?productType=USDT-FUTURES"
+    # Додаємо marginCoin=USDT, як вимагає V2 API Bitget
+    path_with_query = "/api/v2/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT"
     url = f"{BITGET_BASE_URL}{path_with_query}"
     headers = get_bitget_headers("GET", path_with_query)
 
     try:
         async with session.get(url, headers=headers, timeout=5) as response:
+            text_resp = await response.text()
+            print(f"Відповідь Bitget API позицій (status {response.status}): {text_resp}")
+            
             if response.status == 200:
-                data = await response.json()
+                import json
+                data = json.loads(text_resp)
                 if data.get("code") == "00000":
                     positions = data.get("data", [])
                     active_zec = []
@@ -81,9 +85,6 @@ async def check_zec_position(session):
     except Exception as e:
         print(f"Помилка перевірки позиції ZEC: {e}")
 
-    # Запасний варіант: якщо позиція є, але API не повернуло масив, перевіряємо наявність відкритих ордерів по ZECUSDT
-    orders_path = "/api/v2/mix/order/margin-coin-current?productType=USDT-FUTURES&symbol=ZECUSDT"
-    # Якщо занадто складно, просто повертаємо True поки ти тримаєш позицію вручну (або залишаємо автодетекцію)
     return False, []
 
 async def fetch_top_bitget_symbols(session):
@@ -140,15 +141,13 @@ async def fetch_kline_data(session, symbol):
 
 async def send_to_discord(session, webhook_url, message):
     if not webhook_url:
-        print("Попередження: DISCORD_WEBHOOK_URL не задано в середовищі!")
         return
     payload = {"content": message}
     try:
         async with session.post(webhook_url, json=payload) as response:
-            if response.status != 200:
-                print(f"Помилка відправки у Discord: {response.status}")
-    except Exception as e:
-        print(f"Виняток при відправці у Discord: {e}")
+            pass
+    except Exception:
+        pass
 
 async def check_single_coin(session, symbol, discord_webhook_url):
     current_time = time.time()
@@ -227,24 +226,19 @@ async def self_ping_loop(session):
 
 async def main():
     global last_position_report_time
-    print("Бот Captain Hook запущено з жорстким контролем ZECUSDT...")
-    if not DISCORD_WEBHOOK_URL:
-        print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
+    print("Бот запущено з додатковим логуванням відповіді позицій...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
-        
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook оновлено!** Активовано захист від сканування для відкритих позицій ZEC.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот оновлено!** Додано запит marginCoin=USDT та логування відповіді біржі.")
         
         while True:
             start_time = asyncio.get_event_loop().time()
             current_time = time.time()
             
-            # Жорстко перевіряємо ZECUSDT
             has_position, active_positions = await check_zec_position(session)
             
             if has_position:
-                # Позиція ZEC є — сканування на паузі, надсилаємо звіт кожні 2 хвилини
                 if current_time - last_position_report_time > 120:
                     report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ (ZECUSDT):**\n"
                     for pos in active_positions:
@@ -253,12 +247,11 @@ async def main():
                             f"• Монета: `{pos['symbol']}` ({side_text})\n"
                             f"• Об'єм: `{pos['total']}` | Ціна входу: `{pos['averageOpenPrice']}`\n"
                             f"• PnL: `{pos['unrealizedPL']}` USDT\n"
-                            f"⚠️ **Контроль:** Позиція активна, сканування інших монет заблоковано."
+                            f"⚠️ **Контроль:** Позиція активна, сканування заблоковано."
                         )
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
                     last_position_report_time = current_time
             else:
-                # Якщо позиції по ZEC немає — скануємо ринок у звичайному режимі
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
@@ -289,4 +282,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот зупинений користувачем.")
+        pass
+                        
