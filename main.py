@@ -41,9 +41,8 @@ def get_bitget_signature_v1(timestamp, method, request_path, body=""):
 
 
 async def fetch_open_positions(session):
-    """Отримує список відкритих ф'ючерсних позицій через надійний v1 API Bitget"""
+    """Отримує список відкритих ф'ючерсних позицій чітко для USDT-M ф'ючерсів Bitget v1"""
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("Попередження: API-ключі Bitget не задані!")
         return {} 
 
     method = "GET"
@@ -71,12 +70,10 @@ async def fetch_open_positions(session):
                 if data.get("code") == "00000":
                     positions = {}
                     for pos in data.get("data", []):
-                        # У V1 загальний об'єм позиції зберігається в поле total 또는 holdPosition
                         total_size = float(pos.get("total", 0) or pos.get("holdPosition", 0))
                         if total_size > 0:
                             symbol = pos.get("symbol")
-                            # holdSide може бути long або short
-                            hold_side = pos.get("holdSide") or pos.get("positionSide", "long")
+                            hold_side = pos.get("holdSide") or pos.get("positionSide", "short")
                             entry_price = float(pos.get("averageOpenPrice", 0) or pos.get("openPriceAvg", 0))
                             unrealized_pnl = float(pos.get("unrealizedPL", 0) or pos.get("achievedProfits", 0))
                             
@@ -87,12 +84,8 @@ async def fetch_open_positions(session):
                                 "pnl": unrealized_pnl
                             }
                     return positions
-                else:
-                    print(f"Помилка API Bitget (позиції): {data.get('code')} - {data.get('msg')}")
-            else:
-                print(f"HTTP помилка при запиті позицій Bitget: {response.status}")
     except Exception as e:
-        print(f"Виняток при отриманні позицій Bitget: {e}")
+        print(f"Помилка запиту позицій: {e}")
     return {}
 
 
@@ -187,8 +180,33 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         
         current_price = closes[-1]
         surge_percent = int((current_volume / avg_volume - 1) * 100)
-        support_level = min(lows[:-1])
-        resistance_level = max(highs[:-1])
+
+        # --- ЗОНУВАННЯ ТА КЛАСТЕРИЗАЦІЯ РІВНІВ ---
+        historical_prices = []
+        for i in range(len(closes) - 1):
+            historical_prices.append(lows[i])
+            historical_prices.append(highs[i])
+
+        clusters = []
+        cluster_threshold = 0.001
+        sorted_prices = sorted(historical_prices)
+        if sorted_prices:
+            current_cluster = [sorted_prices[0]]
+            for p in sorted_prices[1:]:
+                if abs(p - current_cluster[-1]) / current_cluster[-1] <= cluster_threshold:
+                    current_cluster.append(p)
+                else:
+                    if len(current_cluster) >= 2:
+                        clusters.append(sum(current_cluster) / len(current_cluster))
+                    current_cluster = [p]
+            if len(current_cluster) >= 2:
+                clusters.append(sum(current_cluster) / len(current_cluster))
+
+        lower_clusters = [c for c in clusters if c < current_price]
+        upper_clusters = [c for c in clusters if c > current_price]
+
+        support_level = max(lower_clusters) if lower_clusters else min(lows[:-1])
+        resistance_level = min(upper_clusters) if upper_clusters else max(highs[:-1])
 
         # ПЕРЕВІРКА ПОЗИЦІЇ ДЛЯ КОНКРЕТНОЇ МОНЕТИ (Вихід з позиції)
         if symbol in open_positions:
@@ -276,7 +294,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот запущено: перевірка позицій Bitget (v1 API) + режим блокування сигналів...")
+    print("Бот запущено: кластеризація рівнів + перевірка позицій Bitget (v1 API)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -284,10 +302,8 @@ async def main():
         while True:
             start_time = asyncio.get_event_loop().time()
             
-            # 1. Затягуємо список відкритих позицій з Bitget через надійний ендпоінт v1
             open_positions = await fetch_open_positions(session)
             
-            # 2. Якщо є відкрита позиція, надсилаємо звіт про її стан у чат
             if open_positions and DISCORD_WEBHOOK_URL:
                 for symbol, pos in open_positions.items():
                     pnl = pos["pnl"]
@@ -302,10 +318,8 @@ async def main():
                     )
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, status_msg)
             
-            # 3. Отримуємо топ монети для сканування (працює тільки якщо open_positions порожній)
             symbols_list = await fetch_top_bitget_symbols(session)
             
-            # 4. Перевіряємо монети
             if symbols_list and DISCORD_WEBHOOK_URL:
                 tasks = [check_single_coin(session, symbol, open_positions, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
                 await asyncio.gather(*tasks)
