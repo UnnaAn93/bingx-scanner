@@ -5,7 +5,7 @@ import requests
 # --- НАЛАШТУВАННЯ ---
 VOLUME_MULTIPLIER = 2.2           
 APPROACH_PERCENT = 0.007          
-TIMEFRAME = "15"                  
+TIMEFRAME = "15"                  # Таймфрейм 15 хвилин
 LIMIT_CANDLES = 30                
 TOP_COINS_LIMIT = 50              
 MIN_24H_VOLUME_USDT = 100_000     
@@ -105,8 +105,9 @@ def main():
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             alert_msg = (
                 f"🟢🎯 **СИГНАЛ НА ЛОНГ [15m]**: `{symbol}`\n"
+                f"• Напрямок: 🚀 Підхід до дна / Відскок\n"
                 f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` (Рекомендація: розглянути вхід)"
+                f"• Об'єм: `+{surge_percent}%` від середнього!"
             )
             send_to_discord(alert_msg)
             continue
@@ -116,8 +117,9 @@ def main():
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             alert_msg = (
                 f"🔴🎯 **СИГНАЛ НА ШОРТ [15m]**: `{symbol}`\n"
+                f"• Напрямок: 📉 Підхід до хаю / Відбій\n"
                 f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` (Рекомендація: розглянути вхід)"
+                f"• Об'єм: `+{surge_percent}%` від середнього!"
             )
             send_to_discord(alert_msg)
             continue
