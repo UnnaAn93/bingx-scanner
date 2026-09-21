@@ -2,6 +2,9 @@ import asyncio
 import aiohttp
 import os
 import time
+import hmac
+import hashlib
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -18,10 +21,61 @@ COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
 
+# API ключі Bitget
+BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
+BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
+BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
+
 BITGET_BASE_URL = "https://api.bitget.com"
 
 last_alert_time = {}
-current_tracked_position = None  # Зберігає інформацію про активний сигнал/позицію
+is_position_open = False  # Статус наявності відкритої позиції
+
+def get_bitget_sign(timestamp, method, request_path, body=""):
+    message = str(timestamp) + method.upper() + request_path + body
+    mac = hmac.new(BITGET_SECRET_KEY.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return base64.b64encode(mac.digest()).decode('utf-8')
+
+def get_bitget_headers(method, request_path, body=""):
+    timestamp = str(int(time.time() * 1000))
+    sign = get_bitget_sign(timestamp, method, request_path, body)
+    return {
+        "ACCESS-KEY": BITGET_API_KEY,
+        "ACCESS-SIGN": sign,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+async def check_bitget_positions(session):
+    """
+    Перевіряє наявність відкритих позицій через ендпоїнт Unified Account на Bitget.
+    """
+    if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
+        return False
+
+    # Ендпоїнт для отримання позицій на Unified Account
+    path = "/api/v2/uni/position/margin-position"
+    url = f"{BITGET_BASE_URL}{path}"
+    
+    headers = get_bitget_headers("GET", path)
+
+    try:
+        async with session.get(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("code") == "00000":
+                    positions = data.get("data", [])
+                    for p in positions:
+                        # Перевіряємо, чи є ненульовий об'єм позиції
+                        total_pos = float(p.get("total", p.get("hold", 0)))
+                        if total_pos > 0:
+                            return True
+                    return False
+    except Exception as e:
+        print(f"Помилка при перевірці позицій Unified: {e}")
+    
+    return False
 
 async def fetch_top_bitget_symbols(session):
     url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
@@ -88,10 +142,10 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
-    global current_tracked_position
+    global is_position_open
     
-    # Якщо вже є активна позиція/сигнал — не шукаємо нові
-    if current_tracked_position is not None:
+    # Якщо на біржі є відкрита позиція — нові сигнали не шукаємо
+    if is_position_open:
         return
 
     current_time = time.time()
@@ -129,13 +183,12 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if support_level > 0:
             distance_to_support = (current_price - support_level) / support_level
             if 0 <= distance_to_support <= APPROACH_PERCENT:
-                current_tracked_position = f"{symbol} LONG"
                 alert_message = (
                     f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
                     f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"🔒 **Сигнал видано. Сканування призупинено до завершення/скидання позиції.**"
+                    f"⏳ Готуйся до можливого відскоку вгору!"
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
@@ -146,13 +199,12 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if resistance_level > 0:
             distance_to_resistance = (resistance_level - current_price) / resistance_level
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
-                current_tracked_position = f"{symbol} SHORT"
                 alert_message = (
                     f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
                     f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"🔒 **Сигнал видано. Сканування призупинено до завершення/скидання позиції.**"
+                    f"⏳ Готуйся до можливого відбою вниз!"
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
@@ -171,28 +223,35 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    global current_tracked_position
-    print("Бот Captain Hook запущено...")
+    global is_position_open
+    print("Бот Captain Hook запущено в режимі перевірки Unified позицій...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Жодних помилок API — чисте сканування та блокування нових сигналів під час активної угоди.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Автоматично контролює відкриті позиції Unified Account.")
         
         while True:
             start_time = asyncio.get_event_loop().time()
             
-            # Якщо позиція не активна — скануємо ринок
-            if current_tracked_position is None:
+            # Крок 1: Опитуємо біржа на наявність відкритої позиції
+            previous_state = is_position_open
+            is_position_open = await check_bitget_positions(session)
+            
+            # Якщо позиція була закрита (змінився стан з True на False)
+            if previous_state and not is_position_open:
+                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Сканування ринку відновлено, шукаю нові сигнали.")
+            
+            # Крок 2: Скануємо ринок ТІЛЬКИ якщо немає відкритої позиції
+            if not is_position_open:
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
                     await asyncio.gather(*tasks)
             else:
-                # Якщо тобі потрібно скинути блокування вручну або додати перевірку, тут можна керувати станом
-                pass
+                print("Позиція активна на біржі. Сканування призупинено.")
             
             elapsed = asyncio.get_event_loop().time() - start_time
             sleep_time = max(1, 15 - elapsed)
@@ -202,7 +261,8 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Captain Hook Clean Bot is running!")
+        status_text = f"Bot is running. Position active: {is_position_open}"
+        self.wfile.write(status_text.encode('utf-8'))
     
     def log_message(self, format, *args):
         return
@@ -220,4 +280,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+    
