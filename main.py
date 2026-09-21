@@ -7,36 +7,29 @@ import aiohttp
 import asyncio
 from flask import Flask
 
-# Ініціалізація вебсервера для Render (щоб сервіс не засинав)
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "Bitget Scanner & Position Bot is running!"
 
-# Змінні середовища
 BITGET_API_KEY = os.getenv("BITGET_API_KEY")
 BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
 BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 async def send_discord_notification(message: str):
-    """Надсилання повідомлень у Discord"""
     if not DISCORD_WEBHOOK_URL:
-        print("⚠️ [Discord] Webhook URL не налаштовано!")
         return
-    
     payload = {"content": message}
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10) as resp:
-                if resp.status not in [200, 204]:
-                    print(f"⚠️ [Discord] Помилка відправки: статус {resp.status}")
+                pass
         except Exception as e:
-            print(f"❌ [Discord] Виняток при відправці: {e}")
+            print(f"❌ [Discord Error]: {e}")
 
 async def check_zec_position():
-    """Перевірка позиції ZECUSDT через Bitget UNI API з детальним логуванням"""
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget у змінних середовища!")
         return
@@ -48,7 +41,6 @@ async def check_zec_position():
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     
-    # Підпис за стандартами Bitget V2
     message = timestamp + method + endpoint
     signature = base64.b64encode(
         hmac.new(BITGET_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
@@ -63,7 +55,7 @@ async def check_zec_position():
     }
 
     url = base_url + endpoint
-    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API: {url}")
+    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API...")
     
     try:
         async with aiohttp.ClientSession() as session:
@@ -92,20 +84,16 @@ async def check_zec_position():
         print(f"❌ [ZEC Check] Виняток під час запиту позиції: {e}")
 
 async def background_scanner():
-    """Головний цикл бота: сканування ринку та періодична перевірка позицій"""
-    await asyncio.sleep(5)  клієнтів
+    await asyncio.sleep(5)
     await send_discord_notification("🤖 **Бот оновлено!** Переведено на ендпоінти Єдиного акаунта Bitget для відстеження ZEC.")
     
     while True:
         try:
-            print("🔄 Запуск чергового циклу перевірки...")
-            # Тут виконується перевірка позиції
+            print("🔄 Запуск циклу перевірки позицій...")
             await check_zec_position()
-            
         except Exception as e:
-            print(f"❌ Помилка в циклі сканера: {e}")
+            print(f"❌ Помилка в циклі: {e}")
             
-        # Пауза між перевірками (наприклад, 60 секунд)
         await asyncio.sleep(60)
 
 def run_flask():
@@ -113,10 +101,7 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    # Запускаємо фоновий цикл бота асинхронно разом із Flask
     loop = asyncio.get_event_loop()
     loop.create_task(background_scanner())
-    
-    # Запуск вебсервера
     run_flask()
     
