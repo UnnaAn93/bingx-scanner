@@ -21,7 +21,7 @@ COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
 
-# API ключі Bitget (потрібні для перевірки відкритих позицій)
+# API ключі Bitget
 BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
 BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
 BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
@@ -50,9 +50,10 @@ async def fetch_open_positions(session):
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return "⚠️ API ключі Bitget не налаштовані, перевірка позицій пропущена."
 
-    path = "/api/v2/mix/position/all-position-v2"
-    url = f"{BITGET_BASE_URL}{path}?productType=USDT-FUTURES"
-    headers = get_bitget_headers("GET", path + "?productType=USDT-FUTURES")
+    path = "/api/v2/mix/position/all-position"
+    query_string = "productType=USDT-FUTURES"
+    url = f"{BITGET_BASE_URL}{path}?{query_string}"
+    headers = get_bitget_headers("GET", path + "?" + query_string)
 
     try:
         async with session.get(url, headers=headers, timeout=5) as response:
@@ -65,7 +66,7 @@ async def fetch_open_positions(session):
                         total_pos = float(p.get("total", 0))
                         if total_pos > 0:
                             symbol = p.get("symbol", "")
-                            hold_side = p.get("holdSide", "") # long або short
+                            hold_side = p.get("holdSide", "") 
                             entry_price = p.get("averageOpenPrice", "0")
                             unrealized_pnl = p.get("unrealizedPL", "0")
                             leverage = p.get("leverage", "1")
@@ -76,11 +77,12 @@ async def fetch_open_positions(session):
                             )
                     
                     if active_positions:
-                        report = "📋 **Звіт про відкриті позиції на старті:**\n" + "\n".join(active_positions)
-                        return report
+                        return "📋 **Звіт про відкриті позиції на старті:**\n" + "\n".join(active_positions)
                     else:
                         return "📋 **Звіт про відкриті позиції:** Наразі немає відкритих позицій."
-            return "❌ Помилка при отриманні позицій від Bitget (невірний статус відповіді)."
+                else:
+                    return f"❌ Помилка API Bitget: код {data.get('code')} ({data.get('msg')})"
+            return f"❌ Помилка статусу HTTP від Bitget: {response.status}"
     except Exception as e:
         return f"❌ Виняток при запиті позицій: {e}"
 
@@ -217,7 +219,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
     except Exception as e:
         pass
 
-# Механізм захисту від засинання (Self-Ping)
 async def self_ping_loop(session):
     while True:
         await asyncio.sleep(240)
@@ -233,10 +234,9 @@ async def main():
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
-        # Запускаємо захист від засинання
         asyncio.create_task(self_ping_loop(session))
         
-        # При запуску одразу перевіряємо відкриті позиції та надсилаємо звіт у Discord
+        # Звіт про відкриті позиції на старті
         positions_report = await fetch_open_positions(session)
         print(positions_report)
         await send_to_discord(session, DISCORD_WEBHOOK_URL, positions_report)
@@ -254,7 +254,6 @@ async def main():
             sleep_time = max(1, 15 - elapsed)
             await asyncio.sleep(sleep_time)
 
-# Локальний вебсервер для підтримки життєздатності сервісу на Render
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -277,4 +276,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                                            
+            
