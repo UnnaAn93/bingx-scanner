@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bitget Unified Scanner & Bot is running!"
+    return "Bitget Account Assets Bot is running!"
 
 BITGET_API_KEY = os.getenv("BITGET_API_KEY")
 BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
@@ -30,18 +30,17 @@ async def send_discord_notification(message: str):
         except Exception as e:
             print(f"❌ [Discord Error]: {e}", flush=True)
 
-async def check_uni_assets():
+async def check_account_assets():
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("❌ [Uni Check] Помилка: відсутні API-ключі Bitget!", flush=True)
+        print("❌ [Asset Check] Помилка: відсутні API-ключі Bitget!", flush=True)
         return
 
     base_url = "https://api.bitget.com"
-    endpoint = "/api/v2/uni/account/assets"
+    endpoint = "/api/v2/account/assets"
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     
-    # Для GET запиту без параметрів рядок підпису виглядає так:
     message = timestamp + method + endpoint
     
     signature = base64.b64encode(
@@ -57,21 +56,27 @@ async def check_uni_assets():
     }
 
     url = base_url + endpoint
-    print(f"🔍 [Uni Check] Запит активів Unified API: {url}", flush=True)
+    print(f"🔍 [Asset Check] Запит активів: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=10) as response:
-                print(f"📥 [Uni Check] Статус: {response.status}", flush=True)
+                print(f"📥 [Asset Check] Статус: {response.status}", flush=True)
                 data = await response.json()
-                print(f"📦 [Uni Check] Відповідь: {data}", flush=True)
+                print(f"📦 [Asset Check] Відповідь: {data}", flush=True)
                 
                 if data.get("code") == "00000":
-                    print("✅ Успішно отримано дані єдиного акаунта!", flush=True)
+                    print("✅ Успішно підключено до акаунта!", flush=True)
+                    assets = data.get("data", [])
+                    for asset in assets:
+                        coin = asset.get("coin")
+                        available = asset.get("available")
+                        if float(available or 0) > 0:
+                            print(f"💰 Монета: {coin}, Доступно: {available}", flush=True)
                 else:
-                    print(f"⚠️ [Uni Check] Помилка від біржі: {data}", flush=True)
+                    print(f"⚠️ [Asset Check] Помилка від біржі: {data}", flush=True)
     except Exception as e:
-        print(f"❌ [Uni Check] Виняток: {e}", flush=True)
+        print(f"❌ [Asset Check] Виняток: {e}", flush=True)
 
 async def background_scanner():
     await asyncio.sleep(5)
@@ -79,8 +84,8 @@ async def background_scanner():
     
     while True:
         try:
-            print("🔄 Запуск перевірки єдиного акаунта...", flush=True)
-            await check_uni_assets()
+            print("🔄 Запуск перевірки активів...", flush=True)
+            await check_account_assets()
         except Exception as e:
             print(f"❌ Помилка в циклі: {e}", flush=True)
             
