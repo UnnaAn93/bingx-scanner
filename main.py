@@ -36,17 +36,17 @@ async def check_zec_position():
         return
 
     base_url = "https://api.bitget.com"
-    endpoint = "/api/v2/mix/position/all-position"
+    # Використовуємо правильний ендпоінт для Unified Account
+    endpoint = "/api/v2/uni/mix/positions"
     params = {
-        "productType": "usdt-futures",
+        "productType": "USDT-FUTURES",
         "marginCoin": "USDT"
     }
     
     timestamp = str(int(time.time() * 1000))
     method = "GET"
     
-    # Для GET запитів підпис будується з урахуванням query-параметрів
-    query_string = "productType=usdt-futures&marginCoin=USDT"
+    query_string = "marginCoin=USDT&productType=USDT-FUTURES"
     message = timestamp + method + endpoint + "?" + query_string
     
     signature = base64.b64encode(
@@ -62,7 +62,7 @@ async def check_zec_position():
     }
 
     url = base_url + endpoint + "?" + query_string
-    print(f"🔍 [ZEC Check] Запит позицій: {url}", flush=True)
+    print(f"🔍 [ZEC Check] Запит Unified позицій: {url}", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
