@@ -5,6 +5,7 @@ import hashlib
 import base64
 import aiohttp
 import asyncio
+import threading
 from flask import Flask
 
 app = Flask(__name__)
@@ -101,7 +102,11 @@ def run_flask():
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(background_scanner())
+    def start_background_loop():
+        asyncio.run(background_scanner())
+
+    bot_thread = threading.Thread(target=start_background_loop, daemon=True)
+    bot_thread.start()
+    
     run_flask()
     
