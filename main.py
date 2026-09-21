@@ -13,7 +13,7 @@ VOLUME_MULTIPLIER_ENTRY = 2.2     # Сплеск для відкриття по�
 VOLUME_MULTIPLIER_EXIT = 3.0      # Сильний сплеск (кульмінація) для виходу з позиції
 VOLUME_DECREASE_EXIT = 0.5        # Зниження об'єму (затухання) для виходу з позиції
 
-APPROACH_PERCENT = 0.007          
+APPROACH_PERCENT = 0.002          # Зменшено до 0.2% для точного підходу до рівнів
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 30                
 TOP_COINS_LIMIT = 150             
@@ -181,7 +181,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         current_price = closes[-1]
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
-        # --- ЗОНУВАННЯ ТА КЛАСТЕРИЗАЦІЯ РІВНІВ ---
+        # --- СУВОРИЙ ПОШУК ТА КЛАСТЕРИЗАЦІЯ РІВНІВ ---
         historical_prices = []
         for i in range(len(closes) - 1):
             historical_prices.append(lows[i])
@@ -202,11 +202,12 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
             if len(current_cluster) >= 2:
                 clusters.append(sum(current_cluster) / len(current_cluster))
 
+        # Жорстко розділяємо: нижче ціни — підтримка, вище ціни — опір
         lower_clusters = [c for c in clusters if c < current_price]
         upper_clusters = [c for c in clusters if c > current_price]
 
-        support_level = max(lower_clusters) if lower_clusters else min(lows[:-1])
-        resistance_level = min(upper_clusters) if upper_clusters else max(highs[:-1])
+        support_level = max(lower_clusters) if lower_clusters else 0
+        resistance_level = min(upper_clusters) if upper_clusters else 0
 
         # ПЕРЕВІРКА ПОЗИЦІЇ ДЛЯ КОНКРЕТНОЇ МОНЕТИ (Вихід з позиції)
         if symbol in open_positions:
@@ -249,12 +250,13 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-        # СТАНДАРТНИЙ ВХІД (працює ТІЛЬКИ якщо взагалі немає відкритих позицій на акаунті)
+        # СТАНДАРТНИЙ ВХІД (працює ТІЛЬКИ якщо немає відкритих позицій)
         else:
             is_volume_spike_entry = current_volume >= (avg_volume * VOLUME_MULTIPLIER_ENTRY)
             if not is_volume_spike_entry:
                 return
 
+            # Перевірка на ЛОНГ (ціна біля підтримки знизу)
             if support_level > 0:
                 distance_to_support = (current_price - support_level) / support_level
                 if 0 <= distance_to_support <= APPROACH_PERCENT:
@@ -267,6 +269,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
+            # Перевірка на ШОРТ (ціна біля опору зверху)
             if resistance_level > 0:
                 distance_to_resistance = (resistance_level - current_price) / resistance_level
                 if 0 <= distance_to_resistance <= APPROACH_PERCENT:
@@ -294,7 +297,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот запущено: кластеризація рівнів + перевірка позицій Bitget (v1 API)...")
+    print("Бот запущено: суворе розділення рівнів (підтримка/опір) + перевірка позицій Bitget (v1 API)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -353,4 +356,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+                
