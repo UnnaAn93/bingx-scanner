@@ -28,11 +28,11 @@ async def send_discord_notification(message: str):
             async with session.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10) as resp:
                 pass
         except Exception as e:
-            print(f"❌ [Discord Error]: {e}")
+            print(f"❌ [Discord Error]: {e}", flush=True)
 
 async def check_zec_position():
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget у змінних середовища!")
+        print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget у змінних середовища!", flush=True)
         return
 
     base_url = "https://api.bitget.com"
@@ -56,44 +56,45 @@ async def check_zec_position():
     }
 
     url = base_url + endpoint
-    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API...")
+    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API...", flush=True)
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, params=params, timeout=10) as response:
-                print(f"📥 [ZEC Check] Статус відповіді від Bitget: {response.status}")
+                print(f"📥 [ZEC Check] Статус відповіді від Bitget: {response.status}", flush=True)
                 text_response = await response.text()
-                print(f"📦 [ZEC Check] Тіло відповіді: {text_response}")
+                print(f"📦 [ZEC Check] Тіло відповіді: {text_response}", flush=True)
                 
                 data = await response.json()
                 if data.get("code") == "00000":
                     positions = data.get("data", [])
-                    print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}")
+                    print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}", flush=True)
                     found = False
                     for pos in positions:
                         if pos.get("symbol") == "ZECUSDT":
                             found = True
                             hold_side = pos.get("holdSide")
                             total = pos.get("total")
-                            print(f"🎯 Знайдено позицію ZECUSDT! Сторона: {hold_side}, Об'єм: {total}")
+                            print(f"🎯 Знайдено позицію ZECUSDT! Сторона: {hold_side}, Об'єм: {total}", flush=True)
                             await send_discord_notification(f"📊 **Позиція ZECUSDT**: {hold_side}, об'єм: {total}")
                     if not found:
-                        print("ℹ️ [ZEC Check] Позиція ZECUSDT наразі відсутня в списку відкритих.")
+                        print("ℹ️ [ZEC Check] Позиція ZECUSDT наразі відсутня в списку відкритих.", flush=True)
                 else:
-                    print(f"⚠️ [ZEC Check] Помилка від біржі Bitget: {data}")
+                    print(f"⚠️ [ZEC Check] Помилка від біржі Bitget: {data}", flush=True)
     except Exception as e:
-        print(f"❌ [ZEC Check] Виняток під час запиту позиції: {e}")
+        print(f"❌ [ZEC Check] Виняток під час запиту позиції: {e}", flush=True)
 
 async def background_scanner():
     await asyncio.sleep(5)
+    print("🤖 [Scanner] Фоновий процес стартував!", flush=True)
     await send_discord_notification("🤖 **Бот оновлено!** Переведено на ендпоінти Єдиного акаунта Bitget для відстеження ZEC.")
     
     while True:
         try:
-            print("🔄 Запуск циклу перевірки позицій...")
+            print("🔄 Запуск циклу перевірки позицій...", flush=True)
             await check_zec_position()
         except Exception as e:
-            print(f"❌ Помилка в циклі: {e}")
+            print(f"❌ Помилка в циклі: {e}", flush=True)
             
         await asyncio.sleep(60)
 
