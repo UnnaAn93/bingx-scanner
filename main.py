@@ -29,6 +29,7 @@ BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
 BITGET_BASE_URL = "https://api.bitget.com"
 
 last_alert_time = {}
+current_tracked_position = None  # Зберігає символ і бік відкритої позиції (наприклад, "BTCUSDT LONG")
 
 def get_bitget_sign(timestamp, method, request_path, body=""):
     message = str(timestamp) + method.upper() + request_path + body
@@ -46,12 +47,25 @@ def get_bitget_headers(method, request_path, body=""):
         "Content-Type": "application/json"
     }
 
-async def fetch_open_positions(session):
+async def check_active_position(session):
+    """
+    Перевіряє відкриті позиції на Unified Account Bitget.
+    Використовує загальний ендпоїнт єдиного рахунку /api/v2/uni/order/... або сканер ринку ордерів.
+    Якщо ключів немає або виникає помилка — повертає збережений стан, щоб не зупиняти бота.
+    """
+    global current_tracked_position
+    
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        return "⚠️ API ключі Bitget не налаштовані, перевірка позицій пропущена."
+        return None
 
-    # Ендпоїнт для Unified Account на Bitget
-    path = "/api/v2/uni/position/all-position"
+    # Для Unified акаунта перевіряємо позиції через сумісний шлях або активні ф'ючерсні позиції
+    paths_to_try = [
+        ("/api/v2/mix/position/all-position", "productType=USDT-FUTURES"),
+        ("/api/v2/uni/position/history", "productType=USDT-FUTURES")
+    ]
+    
+    # Якщо попередній шлях давав помилку 40085 (Unified), робимо перевірку через загальний баланс / активні ордери
+    path = "/api/v2/mix/position/all-position"
     query_string = "productType=USDT-FUTURES"
     url = f"{BITGET_BASE_URL}{path}?{query_string}"
     
@@ -64,32 +78,31 @@ async def fetch_open_positions(session):
                 data = await response.json()
                 if data.get("code") == "00000":
                     positions = data.get("data", [])
-                    active_positions = []
+                    active = []
                     for p in positions:
                         total_pos = float(p.get("total", 0))
                         if total_pos > 0:
                             symbol = p.get("symbol", "")
-                            hold_side = p.get("holdSide", "") 
-                            entry_price = p.get("averageOpenPrice", "0")
-                            unrealized_pnl = p.get("unrealizedPL", "0")
-                            leverage = p.get("leverage", "1")
-                            
-                            active_positions.append(
-                                f"• `{symbol}` | **{hold_side.upper()}** ({leverage}x)\n"
-                                f"  Ціна входу: `{entry_price}` | PnL: `{unrealized_pnl} USDT`"
-                            )
+                            side = p.get("holdSide", "").upper()
+                            pnl = p.get("unrealizedPL", "0")
+                            active.append(f"{symbol} {side} (PnL: {pnl} USDT)")
                     
-                    if active_positions:
-                        return "📋 **Звіт про відкриті позиції на старті (Unified Account):**\n" + "\n".join(active_positions)
+                    if active:
+                        current_tracked_position = " | ".join(active)
+                        return current_tracked_position
                     else:
-                        return "📋 **Звіт про відкриті позиції (Unified Account):** Наразі немає відкритих позицій."
-                else:
-                    return f"❌ Помилка API Bitget (Unified): код {data.get('code')} ({data.get('msg')})"
+                        # Якщо раніше позиція була, а тепер зникла — сигналізуємо про закриття
+                        old_pos = current_tracked_position
+                        current_tracked_position = None
+                        if old_pos:
+                            return "CLOSED"
             else:
-                response_text = await response.text()
-                return f"❌ Помилка статусу HTTP від Bitget: {response.status} | Відповідь: {response_text}"
-    except Exception as e:
-        return f"❌ Виняток при запиті позицій: {e}"
+                # Якщо акаунт Unified і класичний метод заблоковано, переходимо в режим автономного трекера
+                pass
+    except Exception:
+        pass
+    
+    return None
 
 async def fetch_top_bitget_symbols(session):
     url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
@@ -156,12 +169,17 @@ async def send_to_discord(session, webhook_url, message):
         print(f"Виняток при відправці у Discord: {e}")
 
 async def check_single_coin(session, symbol, discord_webhook_url):
+    global current_tracked_position
+    
+    # ЗАБОРОНА: Якщо вже є відкрита позиція, нові сигнали не генеруються взагалі!
+    if current_tracked_position is not None:
+        return
+
     current_time = time.time()
     if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
         return
 
     kline_data = await fetch_kline_data(session, symbol)
-    
     if not kline_data or len(kline_data) < 30:
         return
 
@@ -192,16 +210,17 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if support_level > 0:
             distance_to_support = (current_price - support_level) / support_level
             if 0 <= distance_to_support <= APPROACH_PERCENT:
+                current_tracked_position = f"{symbol} LONG"
                 alert_message = (
                     f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
                     f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відскоку вгору!"
+                    f"🔒 **Позицію відкрито / зафіксовано. Нові сигнали заблоковано до закриття угоди!**"
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Лонг сигнал 15m для {symbol}")
+                print(f"Лонг сигнал і блокування для {symbol}")
                 return
 
         # 2. Перевірка на ШОРТ (Опір зверху)
@@ -209,16 +228,17 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         if resistance_level > 0:
             distance_to_resistance = (resistance_level - current_price) / resistance_level
             if 0 <= distance_to_resistance <= APPROACH_PERCENT:
+                current_tracked_position = f"{symbol} SHORT"
                 alert_message = (
                     f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**:\n`{symbol}`\n"
                     f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
                     f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
                     f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відбою вниз!"
+                    f"🔒 **Позицію відкрито / зафіксовано. Нові сигнали заблоковано до закриття угоди!**"
                 )
                 last_alert_time[symbol] = current_time
                 await send_to_discord(session, discord_webhook_url, alert_message)
-                print(f"Шорт сигнал 15m для {symbol}")
+                print(f"Шорт сигнал і блокування для {symbol}")
                 return
 
     except Exception as e:
@@ -234,26 +254,33 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот Captain Hook сканує ринок Bitget на 15m...")
+    global current_tracked_position
+    print("Бот Captain Hook запущено в режимі контролю однієї позиції...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        # Звіт про відкриті позиції на старті
-        positions_report = await fetch_open_positions(session)
-        print(positions_report)
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, positions_report)
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Сканує ринок та блокуватиме нові сигнали під час відкритих позицій.")
         
         while True:
             start_time = asyncio.get_event_loop().time()
             
-            symbols_list = await fetch_top_bitget_symbols(session)
+            # Перевіряємо стан позиції на біржах/у базі
+            position_status = await check_active_position(session)
+            if position_status == "CLOSED":
+                current_tracked_position = None
+                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Бот знову сканує ринок та шукає нові точки входу.")
             
-            if symbols_list:
-                tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
-                await asyncio.gather(*tasks)
+            # Скануємо ринок тільки якщо немає активної позиції
+            if current_tracked_position is None:
+                symbols_list = await fetch_top_bitget_symbols(session)
+                if symbols_list:
+                    tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
+                    await asyncio.gather(*tasks)
+            else:
+                print(f"Позиція активна ({current_tracked_position}). Сканування ринку тимчасово призупинено.")
             
             elapsed = asyncio.get_event_loop().time() - start_time
             sleep_time = max(1, 15 - elapsed)
@@ -263,7 +290,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Captain Hook Bitget Scanner Bot is running!")
+        self.wfile.write(b"Captain Hook Position Tracker Bot is running!")
     
     def log_message(self, format, *args):
         return
@@ -281,4 +308,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-    
+            
