@@ -9,18 +9,18 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 # --- НАЛАШТУВАННЯ ПАРАМЕТРІВ СКАНУВАННЯ ---
-VOLUME_MULTIPLIER_ENTRY = 2.2     # Сплеск для відкриття позиції
-VOLUME_MULTIPLIER_EXIT = 3.0      # Сильний сплеск (кульмінація) для виходу з позиції
-VOLUME_DECREASE_EXIT = 0.5        # Зниження об'єму (затухання) для виходу з позиції
+VOLUME_MULTIPLIER_ENTRY = 2.2     # Сплеск об'єму для входу
+VOLUME_MULTIPLIER_EXIT = 3.0      # Кульмінаційний сплеск для виходу
+VOLUME_DECREASE_EXIT = 0.5        # Затухання об'єму для виходу
 
-APPROACH_PERCENT = 0.002          # Зменшено до 0.2% для точного підходу до рівнів
-TIMEFRAME = "15m"                 
-LIMIT_CANDLES = 30                
-TOP_COINS_LIMIT = 150             
-MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 300            
+APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки/опору)
+TIMEFRAME = "15m"                 # Таймфрейм 15 хвилин
+LIMIT_CANDLES = 30                # Історія свічок
+TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
+MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
+COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1551243480989433927/cIcSwvFUvrh7vnRbXcCx9c8pRMBkyX6VBNVbsEQBp6PWc7aJmXZsYnLnU79Rh8JJaKMF")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 
 BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
@@ -36,12 +36,11 @@ def get_bitget_signature_v1(timestamp, method, request_path, body=""):
     """Формування підпису для Bitget API v1"""
     message = timestamp + method.upper() + request_path + body
     mac = hmac.new(bytes(BITGET_SECRET_KEY, encoding='utf-8'), bytes(message, encoding='utf-8'), digestmod=hashlib.sha256)
-    result = base64.b64encode(mac.digest()).decode('utf-8')
-    return result
+    return base64.b64encode(mac.digest()).decode('utf-8')
 
 
 async def fetch_open_positions(session):
-    """Отримує список відкритих ф'ючерсних позицій чітко для USDT-M ф'ючерсів Bitget v1"""
+    """Отримує список відкритих ф'ючерсних позицій USDT-M на Bitget"""
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return {} 
 
@@ -132,8 +131,9 @@ async def fetch_kline_data(session, symbol):
                     formatted = []
                     for item in raw_list:
                         formatted.append({
-                            "low": float(item[3]),
+                            "open": float(item[1]),
                             "high": float(item[2]),
+                            "low": float(item[3]),
                             "close": float(item[4]),
                             "volume": float(item[5])
                         })
@@ -165,10 +165,11 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
         return
 
     try:
-        volumes = [x['volume'] for x in kline_data]
-        lows = [x['low'] for x in kline_data]
+        opens = [x['open'] for x in kline_data]
         highs = [x['high'] for x in kline_data]
+        lows = [x['low'] for x in kline_data]
         closes = [x['close'] for x in kline_data]
+        volumes = [x['volume'] for x in kline_data]
         
         current_volume = volumes[-1]
         if current_volume <= 0:
@@ -179,9 +180,10 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
             return
         
         current_price = closes[-1]
+        current_open = opens[-1]
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
-        # --- СУВОРИЙ ПОШУК ТА КЛАСТЕРИЗАЦІЯ РІВНІВ ---
+        # --- РОЗРАХУНОК КЛАСТЕРІВ / РІВНІВ ---
         historical_prices = []
         for i in range(len(closes) - 1):
             historical_prices.append(lows[i])
@@ -202,14 +204,13 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
             if len(current_cluster) >= 2:
                 clusters.append(sum(current_cluster) / len(current_cluster))
 
-        # Жорстко розділяємо: нижче ціни — підтримка, вище ціни — опір
         lower_clusters = [c for c in clusters if c < current_price]
         upper_clusters = [c for c in clusters if c > current_price]
 
-        support_level = max(lower_clusters) if lower_clusters else 0
-        resistance_level = min(upper_clusters) if upper_clusters else 0
+        support_level = max(lower_clusters) if lower_clusters else min(lows[:-1])
+        resistance_level = min(upper_clusters) if upper_clusters else max(highs[:-1])
 
-        # ПЕРЕВІРКА ПОЗИЦІЇ ДЛЯ КОНКРЕТНОЇ МОНЕТИ (Вихід з позиції)
+        # --- 1. СУПРОВІД ВІДКРИТИХ ПОЗИЦІЙ (ВИХІД) ---
         if symbol in open_positions:
             pos_info = open_positions[symbol]
             pos_side = pos_info["side"].upper()
@@ -227,7 +228,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                 if 0 <= dist_to_res <= APPROACH_PERCENT and (is_volume_spike_exit or is_volume_drop_exit):
                     exit_reason = "Кульмінаційний сплеск об'єму (>=3x)" if is_volume_spike_exit else "Зниження об'ємів (затухання)"
                     alert_message = (
-                        f"🔔 МЕНЕДЖЕР ПОЗИЦІЙ [АКТИВНИЙ ЛОНГ]: `{symbol}` (Bitget)\n"
+                        f"🔔 МЕНЕДЖЕР ПОЗИЦІЙ [АКТИВНИЙ ЛОНГ 15m]: `{symbol}`\n"
                         f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
                         f"• Поточний PnL: {pnl_emoji} **{pnl_text}**\n"
                         f"• Сигнал на закриття: 🚨 **Підхід до опору (`{resistance_level}`) + {exit_reason}!**"
@@ -241,7 +242,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                 if 0 <= dist_to_sup <= APPROACH_PERCENT and (is_volume_spike_exit or is_volume_drop_exit):
                     exit_reason = "Кульмінаційний сплеск об'єму (>=3x)" if is_volume_spike_exit else "Зниження об'ємів (затухання)"
                     alert_message = (
-                        f"🔔 МЕНЕДЖЕР ПОЗИЦІЙ [АКТИВНИЙ ШОРТ]: `{symbol}` (Bitget)\n"
+                        f"🔔 МЕНЕДЖЕР ПОЗИЦІЙ [АКТИВНИЙ ШОРТ 15m]: `{symbol}`\n"
                         f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
                         f"• Поточний PnL: {pnl_emoji} **{pnl_text}**\n"
                         f"• Сигнал на закриття: 🚨 **Підхід до підтримки (`{support_level}`) + {exit_reason}!**"
@@ -250,36 +251,44 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-        # СТАНДАРТНИЙ ВХІД (працює ТІЛЬКИ якщо немає відкритих позицій)
+        # --- 2. ПОШУК НОВИХ СИГНАЛІВ (ВХІД НА 15m) ---
         else:
             is_volume_spike_entry = current_volume >= (avg_volume * VOLUME_MULTIPLIER_ENTRY)
             if not is_volume_spike_entry:
                 return
 
-            # Перевірка на ЛОНГ (ціна біля підтримки знизу)
-            if support_level > 0:
+            is_green_candle = current_price >= current_open
+
+            # Перевірка на ЛОНГ (Підтримка знизу + зелена свічка)
+            if support_level > 0 and is_green_candle:
                 distance_to_support = (current_price - support_level) / support_level
                 if 0 <= distance_to_support <= APPROACH_PERCENT:
                     alert_message = (
-                        f"🟢🎯 **СИГНАЛ НА ВІДКРИТТЯ [ЛОНГ 15m]**: `{symbol}` (Bitget)\n"
-                        f"• Підтримка: `{support_level}` (Поточна: `{current_price}`)\n"
-                        f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
+                        f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**: `{symbol}`\n"
+                        f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
+                        f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
+                        f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                        f"⏳ Готуйся до можливого відскоку вгору!"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
+                    print(f"Лонг сигнал 15m для {symbol}")
                     return
 
-            # Перевірка на ШОРТ (ціна біля опору зверху)
-            if resistance_level > 0:
+            # Перевірка на ШОРТ (Опір зверху + червона свічка)
+            if resistance_level > 0 and not is_green_candle:
                 distance_to_resistance = (resistance_level - current_price) / resistance_level
                 if 0 <= distance_to_resistance <= APPROACH_PERCENT:
                     alert_message = (
-                        f"🔴🎯 **СИГНАЛ НА ВІДКРИТТЯ [ШОРТ 15m]**: `{symbol}` (Bitget)\n"
-                        f"• Опір: `{resistance_level}` (Поточна: `{current_price}`)\n"
-                        f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
+                        f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**: `{symbol}`\n"
+                        f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
+                        f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
+                        f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                        f"⏳ Готуйся до можливого відбою вниз!"
                     )
                     last_alert_time[symbol] = current_time
                     await send_to_discord(session, discord_webhook_url, alert_message)
+                    print(f"Шорт сигнал 15m для {symbol}")
                     return
 
     except Exception as e:
@@ -297,7 +306,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот запущено: суворе розділення рівнів (підтримка/опір) + перевірка позицій Bitget (v1 API)...")
+    print("Бот сканує ринок на ЛОНГ та ШОРТ на таймфреймі 15m з супроводом позицій...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -306,21 +315,6 @@ async def main():
             start_time = asyncio.get_event_loop().time()
             
             open_positions = await fetch_open_positions(session)
-            
-            if open_positions and DISCORD_WEBHOOK_URL:
-                for symbol, pos in open_positions.items():
-                    pnl = pos["pnl"]
-                    pnl_emoji = "🟢" if pnl >= 0 else "🔴"
-                    pnl_text = f"+{pnl:.2f} USDT" if pnl >= 0 else f"{pnl:.2f} USDT"
-                    
-                    status_msg = (
-                        f"📊 **МОНІТОРИНГ ВІДКРИТОЇ ПОЗИЦІЇ**: `{symbol}` ({pos['side'].upper()})\n"
-                        f"• Ціна входу: `{pos['entry_price']}`\n"
-                        f"• Поточний результат (PnL): {pnl_emoji} **{pnl_text}**\n"
-                        f"🔒 *Режим сканування нових входів на паузі до закриття позиції.*"
-                    )
-                    await send_to_discord(session, DISCORD_WEBHOOK_URL, status_msg)
-            
             symbols_list = await fetch_top_bitget_symbols(session)
             
             if symbols_list and DISCORD_WEBHOOK_URL:
@@ -328,7 +322,7 @@ async def main():
                 await asyncio.gather(*tasks)
             
             elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 60 - elapsed)
+            sleep_time = max(1, 15 - elapsed)
             await asyncio.sleep(sleep_time)
 
 
@@ -336,7 +330,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bitget Position Manager & Scanner Bot is running!")
+        self.wfile.write(b"Long/Short Scanner Bot (15m + Position Manager) is running!")
     
     def log_message(self, format, *args):
         return
@@ -356,4 +350,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-                
+        
