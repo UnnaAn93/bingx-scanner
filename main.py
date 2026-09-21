@@ -1,94 +1,108 @@
+import asyncio
+import aiohttp
 import os
 import time
-import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
-# --- НАЛАШТУВАННЯ BYBIT ---
-VOLUME_MULTIPLIER = 2.2           
-APPROACH_PERCENT = 0.007          
+# --- НАЛАШТУВАННЯ ПАРАМЕТРІВ СКАНУВАННЯ ---
+VOLUME_MULTIPLIER = 2.2           # Сплеск об'єму у 2.2 рази
+APPROACH_PERCENT = 0.007          # 0.7% до рівня (підтримки або опору)
 TIMEFRAME = "15"                  # Таймфрейм 15 хвилин
-LIMIT_CANDLES = 30                
-TOP_COINS_LIMIT = 50              
-MIN_24H_VOLUME_USDT = 100_000     
+LIMIT_CANDLES = 30                # Історія свічок
+TOP_COINS_LIMIT = 150             # Кількість найактивніших пар
+MIN_24H_VOLUME_USDT = 5_000_000   # Мінімальний добовий об'єм у USDT
+COOLDOWN_SECONDS = 300            # Кулдаун 5 хвилин на одну монету
 
-# Використовуємо публічний API Bybit (працює і для Testnet/Mainnet для споту та ф'ючерсів)
-BYBIT_BASE_URL = "https://api.bybit.com"
+# Безпечне зчитування вебхука та посилання на Render із змінних середовища
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
+RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 
-def send_to_discord(message):
-    if not DISCORD_WEBHOOK_URL:
-        return
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=5)
-    except Exception:
-        pass
+BYBIT_BASE_URL = "https://api.bybit.com"
 
-def fetch_top_symbols():
-    # Отримання тікерів лінійки Linear (USDT Futures) від Bybit
+last_alert_time = {}
+
+
+async def fetch_top_bybit_symbols(session):
     url = f"{BYBIT_BASE_URL}/v5/market/tickers?category=linear"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("retCode") == 0:
-                list_tickers = data.get("result", {}).get("list", [])
-                usdt_tickers = []
-                
-                for t in list_tickers:
-                    symbol = t.get("symbol", "")
-                    if symbol.endswith("USDT"):
-                        try:
-                            turnover = float(t.get("turnover24h", 0))
-                            if turnover >= MIN_24H_VOLUME_USDT:
-                                usdt_tickers.append((symbol, turnover))
-                        except Exception:
-                            continue
-                            
-                usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-                return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("retCode") == 0:
+                    list_tickers = data.get("result", {}).get("list", [])
+                    
+                    usdt_tickers = []
+                    for t in list_tickers:
+                        symbol = t.get("symbol", "")
+                        if symbol.endswith("USDT"):
+                            try:
+                                quote_vol = float(t.get("turnover24h", 0))
+                                if quote_vol >= MIN_24H_VOLUME_USDT:
+                                    usdt_tickers.append((symbol, quote_vol))
+                            except Exception:
+                                continue
+                    
+                    usdt_tickers.sort(key=lambda x: x[1], reverse=True)
+                    top_symbols = [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
+                    return top_symbols
     except Exception as e:
-        print(f"❌ Помилка отримання списку монет Bybit: {e}")
+        print(f"Помилка при отриманні списку монет від Bybit: {e}")
     return []
 
-def fetch_kline_data(symbol):
-    # У Bybit таймфрейми задаються хвилинами (15) або рядками ("15")
-    url = f"{BYBIT_BASE_URL}/v5/market/kline?category=linear&symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT_CANDLES}"
+
+async def fetch_kline_data(session, symbol):
+    url = f"{BYBIT_BASE_URL}/v5/market/kline"
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": TIMEFRAME,
+        "limit": LIMIT_CANDLES
+    }
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("retCode") == 0:
-                raw_list = data.get("result", {}).get("list", [])
-                # Bybit повертає свічки від найновішої до найстарішої, тому розгортаємо ([::-1])
-                raw_list.reverse()
-                formatted = []
-                for item in raw_list:
-                    # Формат відповіді Bybit kline: [startTime, open, high, low, close, volume, turnover]
-                    formatted.append({
-                        "low": float(item[3]),
-                        "high": float(item[2]),
-                        "close": float(item[4]),
-                        "volume": float(item[5])
-                    })
-                return formatted
+        async with session.get(url, params=params, timeout=4) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("retCode") == 0:
+                    raw_list = data.get("result", {}).get("list", [])
+                    raw_list.reverse()
+                    formatted = []
+                    for item in raw_list:
+                        formatted.append({
+                            "low": float(item[3]),
+                            "high": float(item[2]),
+                            "close": float(item[4]),
+                            "volume": float(item[5])
+                        })
+                    return formatted
     except Exception:
         pass
     return None
 
-def main():
-    print("🚀 Запуск моніторингу Bybit (ТФ: 15хв)...")
-    
-    symbols_list = fetch_top_symbols()
-    if not symbols_list:
-        print("❌ Не вдалося отримати список монет від Bybit.")
+
+async def send_to_discord(session, webhook_url, message):
+    if not webhook_url:
+        return
+    payload = {"content": message}
+    try:
+        async with session.post(webhook_url, json=payload) as response:
+            if response.status != 200:
+                print(f"Помилка відправки у Discord: {response.status}")
+    except Exception as e:
+        print(f"Виняток при відправці у Discord: {e}")
+
+
+async def check_single_coin(session, symbol, discord_webhook_url):
+    current_time = time.time()
+    if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
         return
 
-    print(f"Перевіряємо топ монет Bybit: {len(symbols_list)}")
+    kline_data = await fetch_kline_data(session, symbol)
+    
+    if not kline_data or len(kline_data) < 20:
+        return
 
-    for symbol in symbols_list:
-        kline_data = fetch_kline_data(symbol)
-        if not kline_data or len(kline_data) < 20:
-            continue
-
+    try:
         volumes = [x['volume'] for x in kline_data]
         lows = [x['low'] for x in kline_data]
         highs = [x['high'] for x in kline_data]
@@ -96,45 +110,110 @@ def main():
         
         current_volume = volumes[-1]
         if current_volume <= 0:
-            continue
+            return
 
         avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
         if avg_volume <= 0:
-            continue
+            return
         
         current_price = closes[-1]
+        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
         
-        if current_volume < (avg_volume * VOLUME_MULTIPLIER):
-            continue
+        if not is_volume_spike:
+            return
 
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
-        # ЛОНГ (Підтримка на 15m)
+        # 1. Перевірка на ЛОНГ (Підтримка знизу)
         support_level = min(lows[:-1])
-        if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
-            alert_msg = (
-                f"🟢🎯 **СИГНАЛ НА ЛОНГ [Bybit 15m]**: `{symbol}`\n"
-                f"• Напрямок: 🚀 Підхід до дна / Відскок\n"
-                f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` від середнього!"
-            )
-            send_to_discord(alert_msg)
-            continue
+        if support_level > 0:
+            distance_to_support = (current_price - support_level) / support_level
+            if 0 <= distance_to_support <= APPROACH_PERCENT:
+                alert_message = (
+                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**: `{symbol}`\n"
+                    f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
+                    f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
+                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                    f"⏳ Готуйся до можливого відскоку вгору!"
+                )
+                last_alert_time[symbol] = current_time
+                await send_to_discord(session, discord_webhook_url, alert_message)
+                print(f"Лонг сигнал 15m для {symbol}")
+                return
 
-        # ШОРТ (Опір на 15m)
+        # 2. Перевірка на ШОРТ (Опір зверху)
         resistance_level = max(highs[:-1])
-        if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
-            alert_msg = (
-                f"🔴🎯 **СИГНАЛ НА ШОРТ [Bybit 15m]**: `{symbol}`\n"
-                f"• Напрямок: 📉 Підхід до хаю / Відбій\n"
-                f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                f"• Об'єм: `+{surge_percent}%` від середнього!"
-            )
-            send_to_discord(alert_msg)
-            continue
+        if resistance_level > 0:
+            distance_to_resistance = (resistance_level - current_price) / resistance_level
+            if 0 <= distance_to_resistance <= APPROACH_PERCENT:
+                alert_message = (
+                    f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**: `{symbol}`\n"
+                    f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
+                    f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
+                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
+                    f"⏳ Готуйся до можливого відбою вниз!"
+                )
+                last_alert_time[symbol] = current_time
+                await send_to_discord(session, discord_webhook_url, alert_message)
+                print(f"Шорт сигнал 15m для {symbol}")
+                return
 
-    print("🏁 Сканування Bybit завершено.")
+    except Exception as e:
+        pass
+
+
+async def self_ping_loop(session):
+    while True:
+        await asyncio.sleep(240)
+        try:
+            async with session.get(RENDER_URL, timeout=5) as response:
+                pass
+        except Exception:
+            pass
+
+
+async def main():
+    print("Бот сканує ринок Bybit на ЛОНГ (підтримка) та ШОРТ (опір) на 15m...")
+    
+    async with aiohttp.ClientSession() as session:
+        asyncio.create_task(self_ping_loop(session))
+        
+        while True:
+            start_time = asyncio.get_event_loop().time()
+            
+            symbols_list = await fetch_top_bybit_symbols(session)
+            
+            if symbols_list and DISCORD_WEBHOOK_URL:
+                tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
+                await asyncio.gather(*tasks)
+            
+            elapsed = asyncio.get_event_loop().time() - start_time
+            sleep_time = max(1, 15 - elapsed)
+            await asyncio.sleep(sleep_time)
+
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bybit Long/Short 15m Scanner Bot is running!")
+    
+    def log_message(self, format, *args):
+        return
+
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+
 
 if __name__ == "__main__":
-    main()
-    
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Бот зупинений користувачем.")
+                              
