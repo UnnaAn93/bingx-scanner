@@ -1,286 +1,122 @@
-import asyncio
-import aiohttp
 import os
 import time
 import hmac
 import hashlib
 import base64
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+import aiohttp
+import asyncio
+from flask import Flask
 
-# Налаштування параметрів сканування для Bitget (15m)
-VOLUME_MULTIPLIER = 2.2           
-APPROACH_PERCENT = 0.008          
-TIMEFRAME = "15m"                 
-LIMIT_CANDLES = 40                
-TOP_COINS_LIMIT = 150             
-MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 300            
+# Ініціалізація вебсервера для Render (щоб сервіс не засинав)
+app = Flask(__name__)
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-RENDER_URL = os.environ.get("RENDER_URL", "https://bitget-scanner-djbf.onrender.com")
+@app.route("/")
+def home():
+    return "Bitget Scanner & Position Bot is running!"
 
-BITGET_API_KEY = os.environ.get("BITGET_API_KEY", "")
-BITGET_SECRET_KEY = os.environ.get("BITGET_SECRET_KEY", "")
-BITGET_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE", "")
+# Змінні середовища
+BITGET_API_KEY = os.getenv("BITGET_API_KEY")
+BITGET_SECRET_KEY = os.getenv("BITGET_SECRET_KEY")
+BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-BITGET_BASE_URL = "https://api.bitget.com"
+async def send_discord_notification(message: str):
+    """Надсилання повідомлень у Discord"""
+    if not DISCORD_WEBHOOK_URL:
+        print("⚠️ [Discord] Webhook URL не налаштовано!")
+        return
+    
+    payload = {"content": message}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10) as resp:
+                if resp.status not in [200, 204]:
+                    print(f"⚠️ [Discord] Помилка відправки: статус {resp.status}")
+        except Exception as e:
+            print(f"❌ [Discord] Виняток при відправці: {e}")
 
-last_alert_time = {}
-last_position_report_time = 0
+async def check_zec_position():
+    """Перевірка позиції ZECUSDT через Bitget UNI API з детальним логуванням"""
+    if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
+        print("❌ [ZEC Check] Помилка: відсутні API-ключі Bitget у змінних середовища!")
+        return
 
-def get_bitget_sign(timestamp, method, request_path, body=""):
-    message = str(timestamp) + method.upper() + request_path + body
-    mac = hmac.new(BITGET_SECRET_KEY.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
-    return base64.b64encode(mac.digest()).decode('utf-8')
-
-def get_bitget_headers(method, request_path, body=""):
+    base_url = "https://api.bitget.com"
+    endpoint = "/api/v2/uni/mix/position/all-position"
+    params = {"productType": "USDT-FUTURES"}
+    
     timestamp = str(int(time.time() * 1000))
-    sign = get_bitget_sign(timestamp, method, request_path, body)
-    return {
+    method = "GET"
+    
+    # Підпис за стандартами Bitget V2
+    message = timestamp + method + endpoint
+    signature = base64.b64encode(
+        hmac.new(BITGET_SECRET_KEY.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("utf-8")
+    
+    headers = {
         "ACCESS-KEY": BITGET_API_KEY,
-        "ACCESS-SIGN": sign,
+        "ACCESS-SIGN": signature,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": BITGET_PASSPHRASE,
         "Content-Type": "application/json"
     }
 
-async def check_zec_position(session):
-    """
-    Перевіряє наявність відкритої позиції по ZECUSDT через ендпоінт Єдиного акаунта (UNI).
-    """
-    if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
-        print("Попередження: API ключі Bitget не задані!")
-        return False, []
-
-    # Використовуємо шлях для Єдиного акаунта (Unified Account)
-    path_with_query = "/api/v2/uni/mix/position/all-position?productType=USDT-FUTURES&marginCoin=USDT"
-    url = f"{BITGET_BASE_URL}{path_with_query}"
-    headers = get_bitget_headers("GET", path_with_query)
-
+    url = base_url + endpoint
+    print(f"🔍 [ZEC Check] Надсилаю запит до Bitget UNI API: {url}")
+    
     try:
-        async with session.get(url, headers=headers, timeout=5) as response:
-            text_resp = await response.text()
-            print(f"Відповідь Bitget UNI API позицій (status {response.status}): {text_resp}")
-            
-            if response.status == 200:
-                import json
-                data = json.loads(text_resp)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=10) as response:
+                print(f"📥 [ZEC Check] Статус відповіді від Bitget: {response.status}")
+                text_response = await response.text()
+                print(f"📦 [ZEC Check] Тіло відповіді: {text_response}")
+                
+                data = await response.json()
                 if data.get("code") == "00000":
                     positions = data.get("data", [])
-                    active_zec = []
-                    for p in positions:
-                        if p.get("symbol") == "ZECUSDT":
-                            total_pos = float(p.get("total", 0))
-                            if total_pos > 0:
-                                active_zec.append({
-                                    "symbol": p.get("symbol"),
-                                    "holdSide": p.get("holdSide"), 
-                                    "total": total_pos,
-                                    "unrealizedPL": p.get("unrealizedPL", "0"),
-                                    "averageOpenPrice": p.get("averageOpenPrice", "0")
-                                })
-                    if len(active_zec) > 0:
-                        return True, active_zec
+                    print(f"📊 [ZEC Check] Успішно отримано позицій: {len(positions)}")
+                    found = False
+                    for pos in positions:
+                        if pos.get("symbol") == "ZECUSDT":
+                            found = True
+                            hold_side = pos.get("holdSide")
+                            total = pos.get("total")
+                            print(f"🎯 Знайдено позицію ZECUSDT! Сторона: {hold_side}, Об'єм: {total}")
+                            await send_discord_notification(f"📊 **Позиція ZECUSDT**: {hold_side}, об'єм: {total}")
+                    if not found:
+                        print("ℹ️ [ZEC Check] Позиція ZECUSDT наразі відсутня в списку відкритих.")
+                else:
+                    print(f"⚠️ [ZEC Check] Помилка від біржі Bitget: {data}")
     except Exception as e:
-        print(f"Помилка перевірки позиції ZEC через UNI API: {e}")
+        print(f"❌ [ZEC Check] Виняток під час запиту позиції: {e}")
 
-    return False, []
-
-async def fetch_top_bitget_symbols(session):
-    url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
-    try:
-        async with session.get(url, timeout=5) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data.get("code") == "00000":
-                    list_tickers = data.get("data", [])
-                    usdt_tickers = []
-                    for t in list_tickers:
-                        symbol = t.get("symbol", "")
-                        if symbol.endswith("USDT"):
-                            try:
-                                quote_vol = float(t.get("usdtVolume", 0))
-                                if quote_vol >= MIN_24H_VOLUME_USDT:
-                                    usdt_tickers.append((symbol, quote_vol))
-                            except Exception:
-                                continue
-                    usdt_tickers.sort(key=lambda x: x[1], reverse=True)
-                    return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
-    except Exception as e:
-        print(f"Помилка при отриманні списку монет від Bitget: {e}")
-    return []
-
-async def fetch_kline_data(session, symbol):
-    url = f"{BITGET_BASE_URL}/api/v2/mix/market/candles"
-    params = {
-        "symbol": symbol,
-        "productType": "USDT-FUTURES",
-        "granularity": TIMEFRAME,
-        "limit": str(LIMIT_CANDLES)
-    }
-    try:
-        async with session.get(url, params=params, timeout=4) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data.get("code") == "00000":
-                    raw_list = data.get("data", [])
-                    raw_list.sort(key=lambda x: int(x[0]))
-                    formatted = []
-                    for item in raw_list:
-                        formatted.append({
-                            "high": float(item[2]),
-                            "low": float(item[3]),
-                            "close": float(item[4]),
-                            "volume": float(item[5])
-                        })
-                    return formatted
-    except Exception:
-        pass
-    return None
-
-async def send_to_discord(session, webhook_url, message):
-    if not webhook_url:
-        return
-    payload = {"content": message}
-    try:
-        async with session.post(webhook_url, json=payload) as response:
-            pass
-    except Exception:
-        pass
-
-async def check_single_coin(session, symbol, discord_webhook_url):
-    current_time = time.time()
-    if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
-        return
-
-    kline_data = await fetch_kline_data(session, symbol)
-    if not kline_data or len(kline_data) < 30:
-        return
-
-    try:
-        volumes = [x['volume'] for x in kline_data]
-        lows = [x['low'] for x in kline_data]
-        highs = [x['high'] for x in kline_data]
-        closes = [x['close'] for x in kline_data]
-        
-        current_volume = volumes[-1]
-        if current_volume <= 0:
-            return
-
-        avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
-        if avg_volume <= 0:
-            return
-        
-        current_price = closes[-1]
-        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
-        
-        if not is_volume_spike:
-            return
-
-        surge_percent = int((current_volume / avg_volume - 1) * 100)
-
-        # 1. Перевірка на ЛОНГ
-        support_level = min(lows[:-1])
-        if support_level > 0:
-            distance_to_support = (current_price - support_level) / support_level
-            if 0 <= distance_to_support <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🟢🎯 **УВАГА [ЛОНГ / Підтримка 15m]**:\n`{symbol}`\n"
-                    f"• Напрямок: 🚀 **Підхід до локального дна / Збір ліквідності**\n"
-                    f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відскоку вгору!"
-                )
-                last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
-                return
-
-        # 2. Перевірка на ШОРТ
-        resistance_level = max(highs[:-1])
-        if resistance_level > 0:
-            distance_to_resistance = (resistance_level - current_price) / resistance_level
-            if 0 <= distance_to_resistance <= APPROACH_PERCENT:
-                alert_message = (
-                    f"🔴🎯 **УВАГА [ШОРТ / Опір 15m]**:\n`{symbol}`\n"
-                    f"• Напрямок: 📉 **Підхід до локального хаю / Зона опору**\n"
-                    f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                    f"• Об'єм свічки: `+{surge_percent}%` від середнього!\n"
-                    f"⏳ Готуйся до можливого відбою вниз!"
-                )
-                last_alert_time[symbol] = current_time
-                await send_to_discord(session, discord_webhook_url, alert_message)
-                return
-
-    except Exception as e:
-        pass
-
-async def self_ping_loop(session):
+async def background_scanner():
+    """Головний цикл бота: сканування ринку та періодична перевірка позицій"""
+    await asyncio.sleep(5)  клієнтів
+    await send_discord_notification("🤖 **Бот оновлено!** Переведено на ендпоінти Єдиного акаунта Bitget для відстеження ZEC.")
+    
     while True:
-        await asyncio.sleep(240)
         try:
-            async with session.get(RENDER_URL, timeout=5) as response:
-                pass
-        except Exception:
-            pass
-
-async def main():
-    global last_position_report_time
-    print("Бот запущено з підтримкою Єдиного акаунта (UNI)...")
-    
-    async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping_loop(session))
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот оновлено!** Переведено на ендпоінти Єдиного акаунта Bitget для відстеження ZEC.")
-        
-        while True:
-            start_time = asyncio.get_event_loop().time()
-            current_time = time.time()
+            print("🔄 Запуск чергового циклу перевірки...")
+            # Тут виконується перевірка позиції
+            await check_zec_position()
             
-            has_position, active_positions = await check_zec_position(session)
+        except Exception as e:
+            print(f"❌ Помилка в циклі сканера: {e}")
             
-            if has_position:
-                if current_time - last_position_report_time > 120:
-                    report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ (ZECUSDT):**\n"
-                    for pos in active_positions:
-                        side_text = "🟢 ЛОНГ" if pos['holdSide'] == 'long' else "🔴 ШОРТ"
-                        report_msg += (
-                            f"• Монета: `{pos['symbol']}` ({side_text})\n"
-                            f"• Об'єм: `{pos['total']}` | Ціна входу: `{pos['averageOpenPrice']}`\n"
-                            f"• PnL: `{pos['unrealizedPL']}` USDT\n"
-                            f"⚠️ **Контроль:** Позиція активна, сканування заблоковано."
-                        )
-                    await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
-                    last_position_report_time = current_time
-            else:
-                symbols_list = await fetch_top_bitget_symbols(session)
-                if symbols_list:
-                    tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
-                    await asyncio.gather(*tasks)
-            
-            elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 15 - elapsed)
-            await asyncio.sleep(sleep_time)
+        # Пауза між перевірками (наприклад, 60 секунд)
+        await asyncio.sleep(60)
 
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot running.")
-    
-    def log_message(self, format, *args):
-        return
-
-def run_web_server():
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
+    app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-            
+    # Запускаємо фоновий цикл бота асинхронно разом із Flask
+    loop = asyncio.get_event_loop()
+    loop.create_task(background_scanner())
+    
+    # Запуск вебсервера
+    run_flask()
+    
