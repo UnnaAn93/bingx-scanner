@@ -13,9 +13,9 @@ VOLUME_MULTIPLIER_ENTRY = 2.0
 VOLUME_MULTIPLIER_EXIT = 3.0      
 VOLUME_DECREASE_EXIT = 0.5        
 
-APPROACH_PERCENT = 0.003          
+APPROACH_PERCENT = 0.007          # Повернуто на 0.7% для стабільнішої генерації сигналів
 TIMEFRAME = "15m"                 
-LIMIT_CANDLES = 60                # Збільшено історію для коректного розрахунку EMA 50
+LIMIT_CANDLES = 60                
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
@@ -270,7 +270,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
 
             is_green_candle = current_price >= current_open
 
-            # СИГНАЛ НА ЛОНГ: тільки якщо ціна вище EMA 50 (висхідний/флєтовий контекст)
+            # СИГНАЛ НА ЛОНГ: ціна вище EMA 50 + підхід до підтримки в межах 0.7%
             if support_level > 0 and is_green_candle and current_price > ema_50:
                 distance_to_support = (current_price - support_level) / support_level
                 if 0 <= distance_to_support <= APPROACH_PERCENT:
@@ -285,7 +285,7 @@ async def check_single_coin(session, symbol, open_positions, discord_webhook_url
                     await send_to_discord(session, discord_webhook_url, alert_message)
                     return
 
-            # СИГНАЛ НА ШОРТ: тільки якщо ціна нижче EMA 50 (низхідний/флєтовий контекст)
+            # СИГНАЛ НА ШОРТ: ціна нижче EMA 50 + підхід до опору в межах 0.7%
             if resistance_level > 0 and not is_green_candle and current_price < ema_50:
                 distance_to_resistance = (resistance_level - current_price) / resistance_level
                 if 0 <= distance_to_resistance <= APPROACH_PERCENT:
@@ -315,7 +315,7 @@ async def self_ping_loop(session):
 
 
 async def main():
-    print("Бот сканує ринок (фільтр EMA 50 + ранній вхід на рівнях 15m)...")
+    print("Бот сканує ринок (EMA 50 + APPROACH_PERCENT = 0.007 на 15m)...")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
@@ -339,7 +339,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"EMA Filtered Scanner Bot (15m) is running!")
+        self.wfile.write(b"EMA Filtered Scanner Bot (0.7% Approach) is running!")
     
     def log_message(self, format, *args):
         return
@@ -359,4 +359,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
