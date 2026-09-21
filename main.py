@@ -49,39 +49,44 @@ def get_bitget_headers(method, request_path, body=""):
 
 async def get_active_positions_details(session):
     """
-    Отримує деталі відкритих позицій для звіту та сигналів закриття.
+    Отримує деталі відкритих позицій для Unified / USDT-FUTURES акаунта.
     """
     if not BITGET_API_KEY or not BITGET_SECRET_KEY or not BITGET_PASSPHRASE:
         return []
 
-    path = "/api/v2/mix/position/all-position"
-    query_string = "productType=USDT-FUTURES"
-    request_path = f"{path}?{query_string}"
-    url = f"{BITGET_BASE_URL}{request_path}"
-    
-    headers = get_bitget_headers("GET", request_path)
+    # Перевіряємо обидва можливі типи для покриття Unified та USDT-FUTURES
+    endpoints = [
+        "/api/v2/mix/position/all-position?productType=USDT-FUTURES",
+        "/api/v2/mix/position/all-position?productType=COIN-FUTURES"
+    ]
 
-    try:
-        async with session.get(url, headers=headers, timeout=5) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data.get("code") == "00000":
-                    active_positions = []
-                    for p in data.get("data", []):
-                        total_pos = float(p.get("total", 0))
-                        if total_pos > 0:
-                            active_positions.append({
-                                "symbol": p.get("symbol"),
-                                "holdSide": p.get("holdSide"), # long / short
-                                "total": total_pos,
-                                "unrealizedPL": p.get("unrealizedPL", "0"),
-                                "averageOpenPrice": p.get("averageOpenPrice", "0")
-                            })
-                    return active_positions
-    except Exception as e:
-        print(f"Помилка при отриманні деталей позицій: {e}")
-    
-    return []
+    active_positions = []
+
+    for path_with_query in endpoints:
+        url = f"{BITGET_BASE_URL}{path_with_query}"
+        headers = get_bitget_headers("GET", path_with_query)
+
+        try:
+            async with session.get(url, headers=headers, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get("code") == "00000":
+                        for p in data.get("data", []):
+                            total_pos = float(p.get("total", 0))
+                            if total_pos > 0:
+                                active_positions.append({
+                                    "symbol": p.get("symbol"),
+                                    "holdSide": p.get("holdSide"), 
+                                    "total": total_pos,
+                                    "unrealizedPL": p.get("unrealizedPL", "0"),
+                                    "averageOpenPrice": p.get("averageOpenPrice", "0")
+                                })
+        except Exception as e:
+            print(f"Помилка запиту позицій ({path_with_query}): {e}")
+
+    # Видаляємо можливі дублікати за символом
+    unique_positions = {p['symbol']: p for p in active_positions}.values()
+    return list(unique_positions)
 
 async def fetch_top_bitget_symbols(session):
     url = f"{BITGET_BASE_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES"
@@ -224,14 +229,14 @@ async def self_ping_loop(session):
 
 async def main():
     global last_position_report_time
-    print("Бот Captain Hook запущено в режимі звітності по позиціях...")
+    print("Бот Captain Hook запущено з розширеним пошуком позицій...")
     if not DISCORD_WEBHOOK_URL:
         print("УВАГА: Змінна середовища DISCORD_WEBHOOK_URL не налаштована!")
     
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Надсилає звіти по відкритих позиціях та сигнали на закриття.")
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🤖 **Бот Captain Hook активний!** Жодних сигналів під час відкритих позицій.")
         
         previous_had_position = False
         
@@ -239,16 +244,17 @@ async def main():
             start_time = asyncio.get_event_loop().time()
             current_time = time.time()
             
-            # Отримуємо поточні позиції
+            # Крок 1: Перевіряємо наявність відкритих позицій на біржі
             active_positions = await get_active_positions_details(session)
             has_position = len(active_positions) > 0
             
-            # Якщо позиція щойно зникла (закрита)
+            # Якщо позиція щойно закрита
             if previous_had_position and not has_position:
-                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Звіт зафіксовано. Поновлюю пошук нових сигналів на ринку.")
+                await send_to_discord(session, DISCORD_WEBHOOK_URL, "✅ **Позицію закрито!** Сканування ринку та пошук нових сигналів відновлено.")
             
             if has_position:
-                # Якщо є відкрита позиція — НЕ шукаємо нові входи, а даємо звіт та сигнал на закриття/контроль (кожні 3 хвилини)
+                # Позиція є — блокуємо нові сигнали входу, надсилаємо звіт кожні 3 хвилини
+                print(f"Знайдено активну позицію. Сканування на паузі.")
                 if current_time - last_position_report_time > 180:
                     report_msg = "📊 **ЗВІТ ПО ВІДКРИТІЙ ПОЗИЦІЇ:**\n"
                     for pos in active_positions:
@@ -256,15 +262,13 @@ async def main():
                         report_msg += (
                             f"• Монета: `{pos['symbol']}` ({side_text})\n"
                             f"• Об'єм: `{pos['total']}` | Ціна входу: `{pos['averageOpenPrice']}`\n"
-                            f"• PnL (Нерозподілений прибуток): `{pos['unrealizedPL']}` USDT\n"
-                            f"⚠️ **Рекомендація:** Перевір ситуацію в стакані. Час фіксувати результат або підтягнути стоп у б/у!"
+                            f"• PnL: `{pos['unrealizedPL']}` USDT\n"
+                            f"⚠️ **Контроль:** Перевір стакан. Час фіксувати результат або переносити стоп у б/у!"
                         )
                     await send_to_discord(session, DISCORD_WEBHOOK_URL, report_msg)
                     last_position_report_time = current_time
-                else:
-                    print("Позиція активна. Надсилаємо періодичний звіт згідно з таймером...")
             else:
-                # Позицій немає — скануємо ринок у пошуку нових входів
+                # Позицій немає — шукаємо нові сигнали
                 symbols_list = await fetch_top_bitget_symbols(session)
                 if symbols_list:
                     tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
@@ -280,7 +284,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot running in position-reporting mode.")
+        self.wfile.write(b"Bot running.")
     
     def log_message(self, format, *args):
         return
@@ -298,4 +302,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений користувачем.")
-            
+                        
