@@ -99,6 +99,7 @@ async def fetch_kline_data(session, symbol):
                     formatted = []
                     for item in raw_list:
                         formatted.append({
+                            "open": float(item.get("open", 0)),
                             "high": float(item.get("high", 0)),
                             "low": float(item.get("low", 0)),
                             "close": float(item.get("close", 0)),
@@ -176,32 +177,42 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     if not kline_data or len(kline_data) < 10:
         return
 
-    current_volume = kline_data[-1]['volume']
+    last_candle = kline_data[-1]
+    current_volume = last_candle['volume']
+    current_price = last_candle['close']
+    open_price = last_candle['open']
+    
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
-    current_price = kline_data[-1]['close']
 
-    # Зробили умову падіння об'ємів більш м'якою (0.25 від середнього)
+    # Перевірка на великий об'єм у протилежному напрямку
+    is_opposite_volume = False
+    if current_volume >= (prev_avg_volume * 1.5):
+        if side == "LONG" and current_price < open_price:  # Червона свічка на об'ємі в лонзі
+            is_opposite_volume = True
+        elif side == "SHORT" and current_price > open_price: # Зелена свічка на об'ємі в шорті
+            is_opposite_volume = True
+
     is_volume_dropped = current_volume < (prev_avg_volume * 0.25)
     
     is_reversal = False
-    if side == "LONG" and current_price < entry_price * 0.985:  # трохи ширший запас для просадки
+    if side == "LONG" and current_price < entry_price * 0.985:
         is_reversal = True
     elif side == "SHORT" and current_price > entry_price * 1.015:
         is_reversal = True
 
     current_time = time.time()
+    alert_interval = 600 if not (is_volume_dropped or is_opposite_volume) else 180
     
-    # Збільшили інтервал сповіщень по позиції до 10 хвилин (600 секунд), якщо немає екстреного розвороту
-    alert_interval = 600 if not is_volume_dropped else 300
-    
-    if is_reversal or (current_time - last_position_alert_time >= alert_interval):
+    if is_reversal or is_opposite_volume or (current_time - last_position_alert_time >= alert_interval):
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
             f"• PnL: `{pnl} USDT`"
         )
 
-        if is_volume_dropped:
+        if is_opposite_volume:
+            report_msg += f"\n⚠️ **УВАГА: Зайшов великий об'єм у ПРОТИЛЕЖНОМУ напрямку! Можливий розворот.**"
+        elif is_volume_dropped:
             report_msg += f"\n⚠️ **УВАГА: Об'єми сильно впали! Згасання імпульсу.**"
         elif is_reversal:
             report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується закрити угоду.**"
@@ -239,7 +250,6 @@ async def main():
                     await asyncio.gather(*tasks)
 
             elapsed = asyncio.get_event_loop().time() - start_time
-            # Збільшили цикл очікування для супроводу позиції до 60 секунд
             sleep_time = max(1, 60 - elapsed)
             await asyncio.sleep(sleep_time)
 
@@ -264,4 +274,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-    
+        
