@@ -70,6 +70,11 @@ async def fetch_top_bingx_symbols(session):
                     usdt_tickers = []
                     for t in list_tickers:
                         symbol = t.get("symbol", "")
+                        
+                        # ФІЛЬТР: Відсікаємо індекси NCFX та все, що не є стандартною криптою з -USDT
+                        if "NCFX" in symbol or not symbol.endswith("-USDT"):
+                            continue
+                            
                         if symbol.endswith("-USDT") or symbol.endswith("USDT"):
                             try:
                                 quote_vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
@@ -164,7 +169,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         pass
 
 async def monitor_active_position(session, pos, discord_webhook_url):
-    """Стежить за відкритою позицією, аналізує об'єми та дає сигнал на закриття"""
     sym = pos.get("symbol")
     amt = float(pos.get("positionAmt", 0))
     entry_price = float(pos.get("avgPrice", 0))
@@ -179,17 +183,13 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
     current_price = kline_data[-1]['close']
 
-    # Умова 1: Впали об'єми (ліквідність згасла нижче середнього)
     is_volume_dropped = current_volume < (prev_avg_volume * 0.6)
-
-    # Умова 2: Зміна напрямку / різкий протилежний рух
     is_reversal = False
-    if side == "LONG" and current_price < entry_price * 0.992:  # наприклад, пробиття вниз більше ніж на 0.8%
+    if side == "LONG" and current_price < entry_price * 0.992:
         is_reversal = True
     elif side == "SHORT" and current_price > entry_price * 1.008:
         is_reversal = True
 
-    # Формуємо звіт та перевіряємо сигнал на вихід
     report_msg = (
         f"📊 **Супровід позиції `{sym}` ({side})**:\n"
         f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
@@ -223,11 +223,9 @@ async def main():
             open_positions = await fetch_open_positions(session)
             
             if open_positions:
-                # Якщо є відкрита позиція — супроводжуємо її та шукаємо сигнал на закриття
                 pos = open_positions[0]
                 await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
             else:
-                # Якщо позицій немає — скануємо ринок на нові входи
                 print("Активних позицій немає. Скануємо ринок...")
                 symbols_list = await fetch_top_bingx_symbols(session)
                 if symbols_list:
@@ -259,4 +257,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-    
+                    
