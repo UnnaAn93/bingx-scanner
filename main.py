@@ -180,19 +180,21 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
     current_price = kline_data[-1]['close']
 
-    # Зменшили поріг до 0.4 (критичне падіння об'ємів) замість 0.6
-    is_volume_dropped = current_volume < (prev_avg_volume * 0.4)
+    # Зробили умову падіння об'ємів більш м'якою (0.25 від середнього)
+    is_volume_dropped = current_volume < (prev_avg_volume * 0.25)
     
     is_reversal = False
-    if side == "LONG" and current_price < entry_price * 0.990:  # трохи ширший запас
+    if side == "LONG" and current_price < entry_price * 0.985:  # трохи ширший запас для просадки
         is_reversal = True
-    elif side == "SHORT" and current_price > entry_price * 1.010:
+    elif side == "SHORT" and current_price > entry_price * 1.015:
         is_reversal = True
 
     current_time = time.time()
-    # Надсилаємо звіт про позицію або попередження не частіше ніж раз на 3 хвилини (180 секунд)
-    # Але якщо є екстрений розворот — відправляємо одразу
-    if is_reversal or (current_time - last_position_alert_time >= 180):
+    
+    # Збільшили інтервал сповіщень по позиції до 10 хвилин (600 секунд), якщо немає екстреного розвороту
+    alert_interval = 600 if not is_volume_dropped else 300
+    
+    if is_reversal or (current_time - last_position_alert_time >= alert_interval):
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
@@ -200,9 +202,9 @@ async def monitor_active_position(session, pos, discord_webhook_url):
         )
 
         if is_volume_dropped:
-            report_msg += f"\n⚠️ **УВАГА: Об'єми суттєво впали! Рекомендується закрити угоду (згасання імпульсу).**"
+            report_msg += f"\n⚠️ **УВАГА: Об'єми сильно впали! Згасання імпульсу.**"
         elif is_reversal:
-            report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується терміново закрити угоду.**"
+            report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується закрити угоду.**"
 
         await send_to_discord(session, discord_webhook_url, report_msg)
         last_position_alert_time = current_time
@@ -237,7 +239,8 @@ async def main():
                     await asyncio.gather(*tasks)
 
             elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 30 - elapsed)
+            # Збільшили цикл очікування для супроводу позиції до 60 секунд
+            sleep_time = max(1, 60 - elapsed)
             await asyncio.sleep(sleep_time)
 
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -261,4 +264,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-        
+    
