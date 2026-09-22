@@ -287,14 +287,16 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # 1. Перевірка на перетин K і J у зоні перекупленості + ціна вища за вхід мінімум на 1% (для LONG)
-    is_kdj_peak_reversal = False
+    # 1. Перевірка умов для часткового тейку (75%) + безубиток
+    is_kdj_take_profit = False
     if side == "LONG":
+        # Лонг: фіксуємо зверху на перекупленості (J > 85) при зростанні ціни від входу на +1%
         if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k) and current_price >= entry_price * 1.01:
-            is_kdj_peak_reversal = True
+            is_kdj_take_profit = True
     elif side == "SHORT":
-        if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k) and current_price <= entry_price * 0.99:
-            is_kdj_peak_reversal = True
+        # Шорт: фіксуємо знизу на перепроданості (J < 15) при падінні ціни від входу на +1% (нижче входу)
+        if prev_j < 15 and (curr_j > curr_k and prev_j <= prev_k) and current_price <= entry_price * 0.99:
+            is_kdj_take_profit = True
 
     # 2. Перевірка на протилежний великий об'єм
     is_opposite_volume = False
@@ -307,7 +309,7 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     current_time = time.time()
 
     # Виконання часткового тейку (75%) + безубиток
-    if is_kdj_peak_reversal and handled_partial_position != sym:
+    if is_kdj_take_profit and handled_partial_position != sym:
         partial_qty = round(abs_amt * 0.75, 4)
         if partial_qty > 0:
             success_close = await close_partial_position_on_exchange(session, sym, side, partial_qty)
@@ -316,7 +318,7 @@ async def monitor_active_position(session, pos, discord_webhook_url):
                 handled_partial_position = sym
                 
                 report_msg = (
-                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% [KDJ ПІК + ПЛЮС > 1%] `{sym}` ({side})**:\n"
+                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% [KDJ СИГНАЛ + ПЛЮС > 1%] `{sym}` ({side})**:\n"
                     f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
                     f"• Закрито: `75%` об'єму | PnL: `{pnl} USDT`\n"
                     f"🛡️ **Стоп залишку перенесено в безубиток (`{entry_price}`)!**"
@@ -357,7 +359,7 @@ async def self_ping_loop(session):
 
 async def main():
     global handled_partial_position
-    print("Бот повного циклу (Частковий тейк + Безубиток + Захист по ціні) запущено...")
+    print("Бот повного циклу (Фінальна логіка Long/Short KDJ + 1% профіт) запущено...")
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
