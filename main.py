@@ -40,6 +40,47 @@ async def send_to_discord(session, webhook_url, message):
     except Exception as e:
         print(f"Помилка Discord: {e}", flush=True)
 
+def calculate_kdj(kline_data, n=9, m1=3, m2=3):
+    """
+    Розрахунок індикатора KDJ за класичним алгоритмом.
+    """
+    if len(kline_data) < n:
+        return None, None, None
+
+    k_list = []
+    d_list = []
+    j_list = []
+
+    k = 50.0
+    d = 50.0
+
+    for i in range(len(kline_data)):
+        if i < n - 1:
+            k_list.append(50.0)
+            d_list.append(50.0)
+            j_list.append(50.0)
+            continue
+
+        window = kline_data[i - n + 1 : i + 1]
+        highest_high = max(x['high'] for x in window)
+        lowest_low = min(x['low'] for x in window)
+        close_price = kline_data[i]['close']
+
+        if highest_high == lowest_low:
+            rsv = 50.0
+        else:
+            rsv = (close_price - lowest_low) / (highest_high - lowest_low) * 100
+
+        k = ( (m1 - 1) * k + rsv ) / m1
+        d = ( (m2 - 1) * d + k ) / m2
+        j = 3 * k - 2 * d
+
+        k_list.append(k)
+        d_list.append(d)
+        j_list.append(j)
+
+    return k_list, d_list, j_list
+
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET:
         return []
@@ -59,6 +100,40 @@ async def fetch_open_positions(session):
     except Exception:
         pass
     return []
+
+async def close_position_on_exchange(session, symbol, side, position_amt):
+    """
+    Автоматично закриває відкриту позицію ринковим ордером на біржі BingX
+    """
+    if not API_KEY or not API_SECRET:
+        print("Помилка: Відсутні API-ключі для закриття позиції!", flush=True)
+        return False
+
+    path = "/openApi/swap/v2/trade/order"
+    timestamp = str(int(time.time() * 1000))
+    
+    # Для закриття LONG (amt > 0) робимо SELL; для SHORT (amt < 0) робимо BUY
+    close_side = "SELL" if side == "LONG" else "BUY"
+    position_side_param = "LONG" if side == "LONG" else "SHORT"
+    
+    param_str = f"positionSide={position_side_param}&quantity={position_amt}&side={close_side}&symbol={symbol}&timestamp={timestamp}&type=MARKET"
+    signature = get_sign(API_SECRET, param_str)
+    
+    url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
+    
+    try:
+        async with session.post(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                res_data = await response.json()
+                if res_data.get("code") == 0:
+                    print(f"Позиція {symbol} ({side}) успішно закрита на біржі за сигналом KDJ!", flush=True)
+                    return True
+                else:
+                    print(f"Помилка закриття від біржі: {res_data}", flush=True)
+    except Exception as e:
+        print(f"Помилка запиту на закриття позиції: {e}", flush=True)
+    return False
 
 async def fetch_top_bingx_symbols(session):
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
@@ -170,33 +245,46 @@ async def check_single_coin(session, symbol, discord_webhook_url):
 async def monitor_active_position(session, pos, discord_webhook_url):
     global last_position_alert_time, last_opposite_alert_time
     sym = pos.get("symbol")
-    amt = float(pos.get("positionAmt", 0))
+    amt_raw = float(pos.get("positionAmt", 0))
     entry_price = float(pos.get("avgPrice", 0))
     pnl = pos.get("unrealizedProfit", "0")
-    side = "LONG" if amt > 0 else "SHORT"
+    side = "LONG" if amt_raw > 0 else "SHORT"
+    abs_amt = abs(amt_raw)
 
     kline_data = await fetch_kline_data(session, sym)
-    if not kline_data or len(kline_data) < 10:
+    if not kline_data or len(kline_data) < 15:
         return
+
+    # Розрахунок KDJ
+    k_vals, d_vals, j_vals = calculate_kdj(kline_data)
+    if not j_vals or len(j_vals) < 2:
+        return
+
+    curr_j = j_vals[-1]
+    prev_j = j_vals[-2]
+    curr_k = k_vals[-1]
+    prev_k = k_vals[-2]
 
     last_candle = kline_data[-1]
     current_volume = last_candle['volume']
     current_price = last_candle['close']
     open_price = last_candle['open']
-    last_candle_time = last_candle['time']
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # 1. Перевірка на протилежний великий об'єм (частота: кожні 3 хвилини / 180 сек)
+    # 1. Сигнал KDJ: перетин J та K у верхній зоні перекупленості (для лонгу)
+    is_kdj_peak_reversal = False
+    if side == "LONG":
+        if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k):
+            is_kdj_peak_reversal = True
+
+    # 2. Перевірка на протилежний великий об'єм
     is_opposite_volume = False
     if current_volume >= (prev_avg_volume * 1.5):
         if side == "LONG" and current_price < open_price:  
             is_opposite_volume = True
         elif side == "SHORT" and current_price > open_price: 
             is_opposite_volume = True
-
-    # 2. Перевірка на згасання об'ємів саме по закриттю 15хв свічки
-    is_volume_dropped = current_volume < (prev_avg_volume * 0.25)
 
     # 3. Злам структури / ціновий розворот
     is_reversal = False
@@ -207,8 +295,20 @@ async def monitor_active_position(session, pos, discord_webhook_url):
 
     current_time = time.time()
 
-    # Логіка відправки сповіщень з різними інтервалами
-    if is_opposite_volume and (current_time - last_opposite_alert_time >= 180):
+    if is_kdj_peak_reversal:
+        # Автоматично закриваємо позицію на біржі
+        success_closed = await close_position_on_exchange(session, sym, side, abs_amt)
+        status_text = "✅ Позицію закрито автоматично на біржі!" if success_closed else "❌ Помилка автозакриття через API!"
+        
+        report_msg = (
+            f"🎯 **АВТО-ТЕЙК [KDJ ПІК] `{sym}` ({side})**:\n"
+            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+            f"• PnL: `{pnl} USDT`\n"
+            f"⚡ **KDJ СИГНАЛ (`J: {curr_j:.1f}` перетнув `K`)**. {status_text}"
+        )
+        await send_to_discord(session, discord_webhook_url, report_msg)
+
+    elif is_opposite_volume and (current_time - last_opposite_alert_time >= 180):
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
@@ -227,26 +327,13 @@ async def monitor_active_position(session, pos, discord_webhook_url):
         )
         await send_to_discord(session, discord_webhook_url, report_msg)
 
-    elif is_volume_dropped:
-        # Перевіряємо, чи минуло вже 15 хвилин (900 секунд) або чи змінилася часова мітка свічки, 
-        # щоб сповіщення приходило лише раз на закриття 15м свічки
-        if current_time - last_position_alert_time >= 900:
-            report_msg = (
-                f"📊 **Супровід позиції `{sym}` ({side})**:\n"
-                f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-                f"• PnL: `{pnl} USDT`\n"
-                f"⚠️ **УВАГА: На закритті 15м свічки об'єми сильно впали! Згасання імпульсу.**"
-            )
-            await send_to_discord(session, discord_webhook_url, report_msg)
-            last_position_alert_time = current_time
-
     else:
-        # Звичайний звіт раз на 15 хвилин, якщо все спокійно
         if current_time - last_position_alert_time >= 900:
             report_msg = (
                 f"📊 **Супровід позиції `{sym}` ({side})**:\n"
                 f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
                 f"• PnL: `{pnl} USDT`\n"
+                f"• KDJ Status -> J: `{curr_j:.1f}`, K: `{curr_k:.1f}`\n"
                 f"✅ Позиція в роботі, структура ціни стабільна."
             )
             await send_to_discord(session, discord_webhook_url, report_msg)
@@ -262,7 +349,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот супроводу та аналізу сигналів BingX запущено...")
+    print("Бот супроводу та автоматичного закриття за KDJ запущено...")
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -289,7 +376,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Smart Position Bot is running!")
+        self.wfile.write(b"BingX KDJ Auto-Close Bot is running!")
     def log_message(self, format, *args):
         return
 
@@ -306,4 +393,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-        
+    
