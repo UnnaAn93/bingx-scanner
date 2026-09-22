@@ -24,7 +24,7 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
-active_position = None  # {'symbol': ..., 'side': 'LONG'/'SHORT', 'entryPrice': ...}
+last_position_alert_time = 0  # Кулдаун для сповіщень по позиції
 
 def get_sign(api_secret, payload):
     return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -71,7 +71,6 @@ async def fetch_top_bingx_symbols(session):
                     for t in list_tickers:
                         symbol = t.get("symbol", "")
                         
-                        # ТОЧНИЙ ФІЛЬТР: Прибираємо індекси за префіксом "NC" або специфічними закінченнями
                         if symbol.startswith("NC") or "2USD" in symbol or not symbol.endswith("-USDT"):
                             continue
                             
@@ -140,7 +139,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
 
         surge_percent = int((current_volume / avg_volume - 1) * 100)
 
-        # 1. Сигнал на ЛОНГ
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             alert_message = (
@@ -152,7 +150,6 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             await send_to_discord(session, discord_webhook_url, alert_message)
             return
 
-        # 2. Сигнал на ШОРТ
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             alert_message = (
@@ -168,6 +165,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         pass
 
 async def monitor_active_position(session, pos, discord_webhook_url):
+    global last_position_alert_time
     sym = pos.get("symbol")
     amt = float(pos.get("positionAmt", 0))
     entry_price = float(pos.get("avgPrice", 0))
@@ -182,25 +180,32 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
     current_price = kline_data[-1]['close']
 
-    is_volume_dropped = current_volume < (prev_avg_volume * 0.6)
+    # Зменшили поріг до 0.4 (критичне падіння об'ємів) замість 0.6
+    is_volume_dropped = current_volume < (prev_avg_volume * 0.4)
+    
     is_reversal = False
-    if side == "LONG" and current_price < entry_price * 0.992:
+    if side == "LONG" and current_price < entry_price * 0.990:  # трохи ширший запас
         is_reversal = True
-    elif side == "SHORT" and current_price > entry_price * 1.008:
+    elif side == "SHORT" and current_price > entry_price * 1.010:
         is_reversal = True
 
-    report_msg = (
-        f"📊 **Супровід позиції `{sym}` ({side})**:\n"
-        f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-        f"• PnL: `{pnl} USDT`"
-    )
+    current_time = time.time()
+    # Надсилаємо звіт про позицію або попередження не частіше ніж раз на 3 хвилини (180 секунд)
+    # Але якщо є екстрений розворот — відправляємо одразу
+    if is_reversal or (current_time - last_position_alert_time >= 180):
+        report_msg = (
+            f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+            f"• PnL: `{pnl} USDT`"
+        )
 
-    if is_volume_dropped:
-        report_msg += f"\n⚠️ **УВАГА: Об'єми впали! Рекомендується закрити угоду (згасання імпульсу).**"
-    elif is_reversal:
-        report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується терміново закрити угоду.**"
+        if is_volume_dropped:
+            report_msg += f"\n⚠️ **УВАГА: Об'єми суттєво впали! Рекомендується закрити угоду (згасання імпульсу).**"
+        elif is_reversal:
+            report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується терміново закрити угоду.**"
 
-    await send_to_discord(session, discord_webhook_url, report_msg)
+        await send_to_discord(session, discord_webhook_url, report_msg)
+        last_position_alert_time = current_time
 
 async def self_ping_loop(session):
     while True:
