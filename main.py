@@ -16,6 +16,10 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 
+# Налаштування для авто-торгівлі ботом
+LEVERAGE = 10                     # 10x плече
+BOT_MARGIN_USDT = 0.06            # Чиста маржа 0.06 USDT (загальна вартість позиції з плечем 10x буде 0.6 USDT)
+
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -24,9 +28,9 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
-last_position_alert_time = 0      
-last_opposite_alert_time = 0      
-handled_partial_position = None   # Запам'ятовуємо позицію, по якій вже зробили частковий тейк
+last_position_alert_time = {}     
+last_opposite_alert_time = {}     
+handled_partial_positions = set() 
 
 def get_sign(api_secret, payload):
     return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -45,12 +49,8 @@ def calculate_kdj(kline_data, n=9, m1=3, m2=3):
     if len(kline_data) < n:
         return None, None, None
 
-    k_list = []
-    d_list = []
-    j_list = []
-
-    k = 50.0
-    d = 50.0
+    k_list, d_list, j_list = [], [], []
+    k, d = 50.0, 50.0
 
     for i in range(len(kline_data)):
         if i < n - 1:
@@ -99,19 +99,39 @@ async def fetch_open_positions(session):
         pass
     return []
 
-async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close):
-    if not API_KEY or not API_SECRET:
-        return False
+async def set_leverage(session, symbol, leverage, side):
+    path = "/openApi/swap/v2/trade/leverage"
+    timestamp = str(int(time.time() * 1000))
+    position_side = "LONG" if side == "LONG" else "SHORT"
+    param_str = f"leverage={leverage}&positionSide={position_side}&symbol={symbol}&timestamp={timestamp}"
+    signature = get_sign(API_SECRET, param_str)
+    url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
+    try:
+        async with session.post(url, headers=headers, timeout=5) as response:
+            pass
+    except Exception:
+        pass
 
+async def open_bot_position(session, symbol, side, current_price, discord_webhook_url):
+    if not API_KEY or not API_SECRET:
+        return
+    
+    await set_leverage(session, symbol, LEVERAGE, side)
+    
     path = "/openApi/swap/v2/trade/order"
     timestamp = str(int(time.time() * 1000))
     
-    close_side = "SELL" if side == "LONG" else "BUY"
+    position_value_usdt = BOT_MARGIN_USDT * LEVERAGE
+    quantity = round(position_value_usdt / current_price, 4)
+    if quantity <= 0:
+        return
+
+    order_side = "BUY" if side == "LONG" else "SELL"
     position_side_param = "LONG" if side == "LONG" else "SHORT"
     
-    param_str = f"positionSide={position_side_param}&quantity={quantity_to_close}&side={close_side}&symbol={symbol}&timestamp={timestamp}&type=MARKET"
+    param_str = f"positionSide={position_side_param}&quantity={quantity}&side={order_side}&symbol={symbol}&timestamp={timestamp}&type=MARKET"
     signature = get_sign(API_SECRET, param_str)
-    
     url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
     headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
     
@@ -120,37 +140,55 @@ async def close_partial_position_on_exchange(session, symbol, side, quantity_to_
             if response.status == 200:
                 res_data = await response.json()
                 if res_data.get("code") == 0:
-                    print(f"Частково закрито 75% по {symbol} ({side})", flush=True)
-                    return True
+                    msg = (
+                        f"🤖🚀 **БОТ ВІДКРИВ УГОДУ [{side}]**:\n`{symbol}`\n"
+                        f"• Ціна входу: `{current_price}` | Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`, Вартість: `{position_value_usdt} USDT`)\n"
+                        f"• Кількість: `{quantity}`"
+                    )
+                    await send_to_discord(session, discord_webhook_url, msg)
     except Exception as e:
-        print(f"Помилка часткового закриття: {e}", flush=True)
+        print(f"Помилка відкриття позиції ботом: {e}", flush=True)
+
+async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close):
+    if not API_KEY or not API_SECRET:
+        return False
+    path = "/openApi/swap/v2/trade/order"
+    timestamp = str(int(time.time() * 1000))
+    close_side = "SELL" if side == "LONG" else "BUY"
+    position_side_param = "LONG" if side == "LONG" else "SHORT"
+    param_str = f"positionSide={position_side_param}&quantity={quantity_to_close}&side={close_side}&symbol={symbol}&timestamp={timestamp}&type=MARKET"
+    signature = get_sign(API_SECRET, param_str)
+    url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
+    try:
+        async with session.post(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                res_data = await response.json()
+                if res_data.get("code") == 0:
+                    return True
+    except Exception:
+        pass
     return False
 
 async def set_break_even_stop(session, symbol, side, entry_price):
     if not API_KEY or not API_SECRET:
         return False
-
     path = "/openApi/swap/v2/trade/stopOrder"
     timestamp = str(int(time.time() * 1000))
-    
     stop_side = "SELL" if side == "LONG" else "BUY"
     position_side_param = "LONG" if side == "LONG" else "SHORT"
-    
     param_str = f"positionSide={position_side_param}&side={stop_side}&stopPrice={entry_price}&symbol={symbol}&timestamp={timestamp}&type=STOP_MARKET"
     signature = get_sign(API_SECRET, param_str)
-    
     url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
     headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
-    
     try:
         async with session.post(url, headers=headers, timeout=5) as response:
             if response.status == 200:
                 res_data = await response.json()
                 if res_data.get("code") == 0:
-                    print(f"Стоп перенесено в безубиток на {entry_price} для {symbol}", flush=True)
                     return True
-    except Exception as e:
-        print(f"Помилка встановлення безубитку: {e}", flush=True)
+    except Exception:
+        pass
     return False
 
 async def fetch_top_bingx_symbols(session):
@@ -203,7 +241,10 @@ async def fetch_kline_data(session, symbol):
         pass
     return None
 
-async def check_single_coin(session, symbol, discord_webhook_url):
+async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open_count):
+    if current_open_count >= 2:
+        return
+
     current_time = time.time()
     if symbol in last_alert_time and current_time - last_alert_time[symbol] < COOLDOWN_SECONDS:
         return
@@ -227,39 +268,26 @@ async def check_single_coin(session, symbol, discord_webhook_url):
             return
         
         current_price = closes[-1]
-        is_volume_spike = current_volume >= (avg_volume * VOLUME_MULTIPLIER)
-        if not is_volume_spike:
+        if current_volume < (avg_volume * VOLUME_MULTIPLIER):
             return
-
-        surge_percent = int((current_volume / avg_volume - 1) * 100)
 
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
-            alert_message = (
-                f"🟢🎯 **ВІДКРИТИ ЛОНГ [Підтримка 15m]**:\n`{symbol}`\n"
-                f"• Ціна: `{current_price}` (Підтримка: `{support_level}`)\n"
-                f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
-            )
             last_alert_time[symbol] = current_time
-            await send_to_discord(session, discord_webhook_url, alert_message)
+            await open_bot_position(session, symbol, "LONG", current_price, discord_webhook_url)
             return
 
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
-            alert_message = (
-                f"🔴🎯 **ВІДКРИТИ ШОРТ [Опір 15m]**:\n`{symbol}`\n"
-                f"• Ціна: `{current_price}` (Опір: `{resistance_level}`)\n"
-                f"• Об'єм свічки: `+{surge_percent}%` від середнього!"
-            )
             last_alert_time[symbol] = current_time
-            await send_to_discord(session, discord_webhook_url, alert_message)
+            await open_bot_position(session, symbol, "SHORT", current_price, discord_webhook_url)
             return
 
     except Exception:
         pass
 
 async def monitor_active_position(session, pos, discord_webhook_url):
-    global last_position_alert_time, last_opposite_alert_time, handled_partial_position
+    global last_position_alert_time, last_opposite_alert_time, handled_partial_positions
     sym = pos.get("symbol")
     amt_raw = float(pos.get("positionAmt", 0))
     entry_price = float(pos.get("avgPrice", 0))
@@ -275,10 +303,8 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     if not j_vals or len(j_vals) < 2:
         return
 
-    curr_j = j_vals[-1]
-    prev_j = j_vals[-2]
-    curr_k = k_vals[-1]
-    prev_k = k_vals[-2]
+    curr_j, prev_j = j_vals[-1], j_vals[-2]
+    curr_k, prev_k = k_vals[-1], k_vals[-2]
 
     last_candle = kline_data[-1]
     current_volume = last_candle['volume']
@@ -287,18 +313,14 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # 1. Перевірка умов для часткового тейку (75%) + безубиток
     is_kdj_take_profit = False
     if side == "LONG":
-        # Лонг: фіксуємо зверху на перекупленості (J > 85) при зростанні ціни від входу на +1%
         if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k) and current_price >= entry_price * 1.01:
             is_kdj_take_profit = True
     elif side == "SHORT":
-        # Шорт: фіксуємо знизу на перепроданості (J < 15) при падінні ціни від входу на +1% (нижче входу)
         if prev_j < 15 and (curr_j > curr_k and prev_j <= prev_k) and current_price <= entry_price * 0.99:
             is_kdj_take_profit = True
 
-    # 2. Перевірка на протилежний великий об'єм
     is_opposite_volume = False
     if current_volume >= (prev_avg_volume * 1.5):
         if side == "LONG" and current_price < open_price:  
@@ -307,46 +329,45 @@ async def monitor_active_position(session, pos, discord_webhook_url):
             is_opposite_volume = True
 
     current_time = time.time()
+    last_pos_time = last_position_alert_time.get(sym, 0)
+    last_opp_time = last_opposite_alert_time.get(sym, 0)
 
-    # Виконання часткового тейку (75%) + безубиток
-    if is_kdj_take_profit and handled_partial_position != sym:
+    if is_kdj_take_profit and sym not in handled_partial_positions:
         partial_qty = round(abs_amt * 0.75, 4)
         if partial_qty > 0:
             success_close = await close_partial_position_on_exchange(session, sym, side, partial_qty)
             if success_close:
                 await set_break_even_stop(session, sym, side, entry_price)
-                handled_partial_position = sym
+                handled_partial_positions.add(sym)
                 
                 report_msg = (
-                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% [KDJ СИГНАЛ + ПЛЮС > 1%] `{sym}` ({side})**:\n"
+                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% [KDJ + ПЛЮС > 1%] `{sym}` ({side})**:\n"
                     f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-                    f"• Закрито: `75%` об'єму | PnL: `{pnl} USDT`\n"
-                    f"🛡️ **Стоп залишку перенесено в безубиток (`{entry_price}`)!**"
+                    f"• Закрито: `75%` | PnL: `{pnl} USDT`\n"
+                    f"🛡️ **Стоп перенесено в безубиток!**"
                 )
                 await send_to_discord(session, discord_webhook_url, report_msg)
 
-    # Сповіщення про протилежні об'єми
-    elif is_opposite_volume and (current_time - last_opposite_alert_time >= 180):
+    elif is_opposite_volume and (current_time - last_opp_time >= 180):
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
             f"• PnL: `{pnl} USDT`\n"
-            f"⚠️ **УВАГА: Зайшов великий об'єм у ПРОТИЛЕЖНОМУ напрямку!**"
+            f"⚠️ **УВАГА: Великий об'єм у ПРОТИЛЕЖНОМУ напрямку!**"
         )
         await send_to_discord(session, discord_webhook_url, report_msg)
-        last_opposite_alert_time = current_time
+        last_opposite_alert_time[sym] = current_time
 
-    # Звичайний звіт раз на 15 хвилин
-    elif current_time - last_position_alert_time >= 900:
+    elif current_time - last_pos_time >= 900:
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
             f"• PnL: `{pnl} USDT`\n"
-            f"• KDJ Status -> J: `{curr_j:.1f}`, K: `{curr_k:.1f}`\n"
-            f"✅ Позиція в роботі, очікуємо імпульс."
+            f"• KDJ -> J: `{curr_j:.1f}`, K: `{curr_k:.1f}`\n"
+            f"✅ Позиція в роботі."
         )
         await send_to_discord(session, discord_webhook_url, report_msg)
-        last_position_alert_time = current_time
+        last_position_alert_time[sym] = current_time
 
 async def self_ping_loop(session):
     while True:
@@ -358,8 +379,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    global handled_partial_position
-    print("Бот повного циклу (Фінальна логіка Long/Short KDJ + 1% профіт) запущено...")
+    print("Бот мультипозиційного авто-ведення (0.06 маржа) запущено...")
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -367,17 +387,20 @@ async def main():
             start_time = asyncio.get_event_loop().time()
             
             open_positions = await fetch_open_positions(session)
+            open_symbols = [p.get("symbol") for p in open_positions]
             
+            if not open_positions:
+                handled_partial_positions.clear()
+
             if open_positions:
-                pos = open_positions[0]
-                handled_partial_position = pos.get("symbol")
-                await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
-            else:
-                handled_partial_position = None
-                print("Активних позицій немає. Скануємо ринок...")
+                for pos in open_positions:
+                    await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
+
+            if len(open_positions) < 2:
                 symbols_list = await fetch_top_bingx_symbols(session)
                 if symbols_list:
-                    tasks = [check_single_coin(session, symbol, DISCORD_WEBHOOK_URL) for symbol in symbols_list]
+                    filtered_symbols = [s for s in symbols_list if s not in open_symbols]
+                    tasks = [scan_and_trade_coin(session, symbol, DISCORD_WEBHOOK_URL, len(open_positions)) for symbol in filtered_symbols]
                     await asyncio.gather(*tasks)
 
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -388,7 +411,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Smart Bot is running!")
+        self.wfile.write(b"BingX Bot (0.06 Margin) is running!")
     def log_message(self, format, *args):
         return
 
