@@ -71,17 +71,16 @@ async def fetch_top_bingx_symbols(session):
                     for t in list_tickers:
                         symbol = t.get("symbol", "")
                         
-                        # ФІЛЬТР: Відсікаємо індекси NCFX та все, що не є стандартною криптою з -USDT
-                        if "NCFX" in symbol or not symbol.endswith("-USDT"):
+                        # ФІЛЬТР: Повністю відсікаємо індекси з "NC" у назві та все, що не закінчується на -USDT
+                        if "NC" in symbol or not symbol.endswith("-USDT"):
                             continue
                             
-                        if symbol.endswith("-USDT") or symbol.endswith("USDT"):
-                            try:
-                                quote_vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
-                                if quote_vol >= MIN_24H_VOLUME_USDT:
-                                    usdt_tickers.append((symbol, quote_vol))
-                            except Exception:
-                                continue
+                        try:
+                            quote_vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
+                            if quote_vol >= MIN_24H_VOLUME_USDT:
+                                usdt_tickers.append((symbol, quote_vol))
+                        except Exception:
+                            continue
                     usdt_tickers.sort(key=lambda x: x[1], reverse=True)
                     return [item[0] for item in usdt_tickers[:TOP_COINS_LIMIT]]
     except Exception:
@@ -257,4 +256,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-                    
+                              
