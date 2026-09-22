@@ -24,7 +24,8 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
-last_position_alert_time = 0  # Кулдаун для сповіщень по позиції
+last_position_alert_time = 0      # Кулдаун для звичайних звітів / спадання об'ємів (15 хв)
+last_opposite_alert_time = 0      # Кулдаун для агресивних протилежних об'ємів (3 хв)
 
 def get_sign(api_secret, payload):
     return hmac.new(api_secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -103,7 +104,8 @@ async def fetch_kline_data(session, symbol):
                             "high": float(item.get("high", 0)),
                             "low": float(item.get("low", 0)),
                             "close": float(item.get("close", 0)),
-                            "volume": float(item.get("volume", 0))
+                            "volume": float(item.get("volume", 0)),
+                            "time": int(item.get("time", item.get("openTime", 0)))
                         })
                     return formatted
     except Exception:
@@ -166,7 +168,7 @@ async def check_single_coin(session, symbol, discord_webhook_url):
         pass
 
 async def monitor_active_position(session, pos, discord_webhook_url):
-    global last_position_alert_time
+    global last_position_alert_time, last_opposite_alert_time
     sym = pos.get("symbol")
     amt = float(pos.get("positionAmt", 0))
     entry_price = float(pos.get("avgPrice", 0))
@@ -181,19 +183,22 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     current_volume = last_candle['volume']
     current_price = last_candle['close']
     open_price = last_candle['open']
+    last_candle_time = last_candle['time']
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # Перевірка на великий об'єм у протилежному напрямку
+    # 1. Перевірка на протилежний великий об'єм (частота: кожні 3 хвилини / 180 сек)
     is_opposite_volume = False
     if current_volume >= (prev_avg_volume * 1.5):
-        if side == "LONG" and current_price < open_price:  # Червона свічка на об'ємі в лонзі
+        if side == "LONG" and current_price < open_price:  
             is_opposite_volume = True
-        elif side == "SHORT" and current_price > open_price: # Зелена свічка на об'ємі в шорті
+        elif side == "SHORT" and current_price > open_price: 
             is_opposite_volume = True
 
+    # 2. Перевірка на згасання об'ємів саме по закриттю 15хв свічки
     is_volume_dropped = current_volume < (prev_avg_volume * 0.25)
-    
+
+    # 3. Злам структури / ціновий розворот
     is_reversal = False
     if side == "LONG" and current_price < entry_price * 0.985:
         is_reversal = True
@@ -201,24 +206,51 @@ async def monitor_active_position(session, pos, discord_webhook_url):
         is_reversal = True
 
     current_time = time.time()
-    alert_interval = 600 if not (is_volume_dropped or is_opposite_volume) else 180
-    
-    if is_reversal or is_opposite_volume or (current_time - last_position_alert_time >= alert_interval):
+
+    # Логіка відправки сповіщень з різними інтервалами
+    if is_opposite_volume and (current_time - last_opposite_alert_time >= 180):
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-            f"• PnL: `{pnl} USDT`"
+            f"• PnL: `{pnl} USDT`\n"
+            f"⚠️ **УВАГА: Зайшов великий об'єм у ПРОТИЛЕЖНОМУ напрямку! Можливий розворот.**"
         )
-
-        if is_opposite_volume:
-            report_msg += f"\n⚠️ **УВАГА: Зайшов великий об'єм у ПРОТИЛЕЖНОМУ напрямку! Можливий розворот.**"
-        elif is_volume_dropped:
-            report_msg += f"\n⚠️ **УВАГА: Об'єми сильно впали! Згасання імпульсу.**"
-        elif is_reversal:
-            report_msg += f"\n🚨 **УВАГА: Зміна напрямку ринку! Рекомендується закрити угоду.**"
-
         await send_to_discord(session, discord_webhook_url, report_msg)
-        last_position_alert_time = current_time
+        last_opposite_alert_time = current_time
+
+    elif is_reversal:
+        report_msg = (
+            f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+            f"• PnL: `{pnl} USDT`\n"
+            f"🚨 **УВАГА: Зміна напрямку ринку! Рекомендується закрити угоду.**"
+        )
+        await send_to_discord(session, discord_webhook_url, report_msg)
+
+    elif is_volume_dropped:
+        # Перевіряємо, чи минуло вже 15 хвилин (900 секунд) або чи змінилася часова мітка свічки, 
+        # щоб сповіщення приходило лише раз на закриття 15м свічки
+        if current_time - last_position_alert_time >= 900:
+            report_msg = (
+                f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+                f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+                f"• PnL: `{pnl} USDT`\n"
+                f"⚠️ **УВАГА: На закритті 15м свічки об'єми сильно впали! Згасання імпульсу.**"
+            )
+            await send_to_discord(session, discord_webhook_url, report_msg)
+            last_position_alert_time = current_time
+
+    else:
+        # Звичайний звіт раз на 15 хвилин, якщо все спокійно
+        if current_time - last_position_alert_time >= 900:
+            report_msg = (
+                f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+                f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+                f"• PnL: `{pnl} USDT`\n"
+                f"✅ Позиція в роботі, структура ціни стабільна."
+            )
+            await send_to_discord(session, discord_webhook_url, report_msg)
+            last_position_alert_time = current_time
 
 async def self_ping_loop(session):
     while True:
