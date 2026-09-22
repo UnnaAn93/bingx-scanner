@@ -268,22 +268,26 @@ async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open
             return
         
         current_price = closes[-1]
+        
         if current_volume < (avg_volume * VOLUME_MULTIPLIER):
             return
 
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
+            print(f"[SCANNER] Знайдено сигнал LONG для {symbol} за ціною {current_price}!", flush=True)
             await open_bot_position(session, symbol, "LONG", current_price, discord_webhook_url)
             return
 
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
+            print(f"[SCANNER] Знайдено сигнал SHORT для {symbol} за ціною {current_price}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", current_price, discord_webhook_url)
             return
 
-    except Exception:
+    except Exception as e:
+        print(f"Помилка сканування {symbol}: {e}", flush=True)
         pass
 
 async def monitor_active_position(session, pos, discord_webhook_url):
@@ -379,7 +383,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот мультипозиційного авто-ведення (0.06 маржа) запущено...")
+    print("Бот мультипозиційного авто-ведення (0.06 маржа) запущено...", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -400,6 +404,7 @@ async def main():
                 symbols_list = await fetch_top_bingx_symbols(session)
                 if symbols_list:
                     filtered_symbols = [s for s in symbols_list if s not in open_symbols]
+                    print(f"[SCANNER] Перевіряю топ монет, в роботі відкритих: {len(open_positions)}. Сканую активів: {len(filtered_symbols)}", flush=True)
                     tasks = [scan_and_trade_coin(session, symbol, DISCORD_WEBHOOK_URL, len(open_positions)) for symbol in filtered_symbols]
                     await asyncio.gather(*tasks)
 
