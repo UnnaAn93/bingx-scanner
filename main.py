@@ -100,9 +100,6 @@ async def fetch_open_positions(session):
     return []
 
 async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close):
-    """
-    Закриває частину позиції (наприклад, 75%) ринковим ордером
-    """
     if not API_KEY or not API_SECRET:
         return False
 
@@ -123,16 +120,13 @@ async def close_partial_position_on_exchange(session, symbol, side, quantity_to_
             if response.status == 200:
                 res_data = await response.json()
                 if res_data.get("code") == 0:
-                    print(f"Частково закритовано {quantity_to5:=} по {symbol} ({side})", flush=True)
+                    print(f"Частково закрито 75% по {symbol} ({side})", flush=True)
                     return True
     except Exception as e:
         print(f"Помилка часткового закриття: {e}", flush=True)
     return False
 
 async def set_break_even_stop(session, symbol, side, entry_price):
-    """
-    Встановлює стоп-лосс на ціну входу (безубиток) для залишку позиції
-    """
     if not API_KEY or not API_SECRET:
         return False
 
@@ -293,22 +287,28 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # Перевірка на перший перетин K і J у зоні перекупленості для часткового тейку
+    # 1. Перевірка на перший перетин K і J у зоні перекупленості для часткового тейку (75%)
     is_kdj_peak_reversal = False
     if side == "LONG":
         if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k):
             is_kdj_peak_reversal = True
 
+    # 2. Перевірка на протилежний великий об'єм
+    is_opposite_volume = False
+    if current_volume >= (prev_avg_volume * 1.5):
+        if side == "LONG" and current_price < open_price:  
+            is_opposite_volume = True
+        elif side == "SHORT" and current_price > open_price: 
+            is_opposite_volume = True
+
     current_time = time.time()
 
-    # Якщо зловили пік і ще не робили частковий тейк для цієї позиції
+    # Виконання часткового тейку (75%) + безубиток
     if is_kdj_peak_reversal and handled_partial_position != sym:
-        # Рахуємо 75% від об'єму
         partial_qty = round(abs_amt * 0.75, 4)
         if partial_qty > 0:
             success_close = await close_partial_position_on_exchange(session, sym, side, partial_qty)
             if success_close:
-                # Переносимо стоп решти у безубиток
                 await set_break_even_stop(session, sym, side, entry_price)
                 handled_partial_position = sym
                 
@@ -320,7 +320,18 @@ async def monitor_active_position(session, pos, discord_webhook_url):
                 )
                 await send_to_discord(session, discord_webhook_url, report_msg)
 
-    # Звичайні звіти супроводу
+    # Сповіщення про протилежні об'єми
+    elif is_opposite_volume and (current_time - last_opposite_alert_time >= 180):
+        report_msg = (
+            f"📊 **Супровід позиції `{sym}` ({side})**:\n"
+            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
+            f"• PnL: `{pnl} USDT`\n"
+            f"⚠️ **УВАГА: Зайшов великий об'єм у ПРОТИЛЕЖНОМУ напрямку!**"
+        )
+        await send_to_discord(session, discord_webhook_url, report_msg)
+        last_opposite_alert_time = current_time
+
+    # Звичайний звіт раз на 15 хвилин
     elif current_time - last_position_alert_time >= 900:
         report_msg = (
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
@@ -343,7 +354,7 @@ async def self_ping_loop(session):
 
 async def main():
     global handled_partial_position
-    print("Бот часткового тейку та безубитку за KDJ запущено...")
+    print("Бот повного циклу (Частковий тейк + Безубиток + KDJ) запущено...")
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -354,7 +365,6 @@ async def main():
             
             if open_positions:
                 pos = open_positions[0]
-                # Скидаємо флаг, якщо позиція повністю закрита
                 handled_partial_position = pos.get("symbol")
                 await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
             else:
@@ -373,7 +383,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Partial TP Bot is running!")
+        self.wfile.write(b"BingX Smart Bot is running!")
     def log_message(self, format, *args):
         return
 
