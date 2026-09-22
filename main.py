@@ -71,8 +71,8 @@ async def fetch_top_bingx_symbols(session):
                     for t in list_tickers:
                         symbol = t.get("symbol", "")
                         
-                        # ФІЛЬТР: Повністю відсікаємо індекси з "NC" у назві та все, що не закінчується на -USDT
-                        if "NC" in symbol or not symbol.endswith("-USDT"):
+                        # ТОЧНИЙ ФІЛЬТР: Прибираємо індекси за префіксом "NC" або специфічними закінченнями
+                        if symbol.startswith("NC") or "2USD" in symbol or not symbol.endswith("-USDT"):
                             continue
                             
                         try:
@@ -256,4 +256,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-                              
+        
