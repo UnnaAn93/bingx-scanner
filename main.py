@@ -27,9 +27,9 @@ last_alert_time = {}
 last_position_alert_time = {}     
 last_opposite_alert_time = {}     
 handled_partial_positions = set() 
-partial_exit_prices = {}          # Зберігаємо ціну першого часткового виходу для кожної монети
+partial_exit_prices = {}          
 
-# Лічильники торкань ключових рівнів (для подвійного дотику)
+# Лічильники торкань ключових рівнів
 support_touches_count = {}        
 resistance_touches_count = {}     
 
@@ -258,47 +258,45 @@ async def monitor_pos(session, pos, webhook):
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
-    # Визначаємо локальні рівні підтримки/опору для перевірки дотиків
+    # Визначаємо локальні рівні підтримки/опору
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
     
-    # Ініціалізація лічильників дотиків для активного символу
+    # Ініціалізація лічильників
     if sym not in support_touches_count:
         support_touches_count[sym] = 0
     if sym not in resistance_touches_count:
         resistance_touches_count[sym] = 0
         
-    # Фіксація повторних дотиків (якщо ціна торкається або заходить у зону рівня)
-    if side == "SHORT" and cur_low <= support_level * 1.002:
+    # Перевірка повторного дотику рівня з використанням того ж відступу APPROACH_PERCENT (0.8%)
+    if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
         support_touches_count[sym] += 1
-        print(f"[{sym}] Шорт: зафіксовано дотик підтримки №{support_touches_count[sym]}", flush=True)
-    elif side == "LONG" and cur_high >= resistance_level * 0.998:
+        print(f"[{sym}] Шорт: зафіксовано повторний дотик підтримки №{support_touches_count[sym]} (в межах 0.8%)", flush=True)
+    elif side == "LONG" and resistance_level > 0 and 0 <= (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT:
         resistance_touches_count[sym] += 1
-        print(f"[{sym}] Лонг: зафіксовано дотик опору №{resistance_touches_count[sym]}", flush=True)
+        print(f"[{sym}] Лонг: зафіксовано повторний дотик опору №{resistance_touches_count[sym]} (в межах 0.8%)", flush=True)
 
     tp, full_close = False, False
     
     if side == "LONG":
         if sym in handled_partial_positions:
-            # Повне закриття залишку: якщо ціна пішла вище мінімум на 1% від ціни першого тейку АБО пробила EMA вниз
             prev_exit_p = partial_exit_prices.get(sym, entry)
             if cur_c >= prev_exit_p * 1.01 or cur_c < ema:
                 full_close = True
         else:
-            # Умова для часткового тейку в Лонзі: або стандартний KDJ (> 85), або другий дотик опору
+            # Умова: або перекупленість KDJ (> 85), або другий дотик опору (в межах 0.8%)
             if (prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01) or (resistance_touches_count[sym] >= 2):
                 tp = True
                 
     elif side == "SHORT":
         if sym in handled_partial_positions:
-            # Повне закриття залишку: якщо ціна нижче мінімум на 1% від ціни першого тейку АБО пробила EMA вгору
             prev_exit_p = partial_exit_prices.get(sym, entry)
             if cur_c <= prev_exit_p * 0.99 or cur_c > ema:
                 full_close = True
         else:
-            # Умова для часткового тейку в Шорті: або стандартний KDJ (< 15), або другий дотик підтримки
+            # Умова: або перепроданість KDJ (< 15), або другий дотик підтримки (в межах 0.8%)
             if (prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99) or (support_touches_count[sym] >= 2):
                 tp = True
         
@@ -307,7 +305,7 @@ async def monitor_pos(session, pos, webhook):
         if part_q > 0 and await close_partial(session, sym, side, part_q, webhook):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            partial_exit_prices[sym] = cur_c  # Зберігаємо ціну першого виходу
+            partial_exit_prices[sym] = cur_c  
             msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
@@ -336,7 +334,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та сканує ринок (з підтримкою подвійних тестів рівнів)!", flush=True)
+    print("Бот запущено успішно та сканує ринок (з урахуванням 0.8% зони для тестів рівнів)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -376,4 +374,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-            
+    
