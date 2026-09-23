@@ -16,9 +16,9 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 
-# Налаштування для авто-торгівлі ботом
+# Налаштування для авто-торгівлі ботом (виправлено мінімальний розмір позиції)
 LEVERAGE = 10                     # 10x плече
-BOT_MARGIN_USDT = 0.06            # Чиста маржа 0.06 USDT
+BOT_MARGIN_USDT = 0.5             # Чиста маржа 0.5 USDT (0.5 * 10 = 5 USDT загальна вартість позиції)
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -44,6 +44,22 @@ async def send_to_discord(session, webhook_url, message):
             pass
     except Exception as e:
         print(f"Помилка Discord: {e}", flush=True)
+
+def calculate_atr(kline_data, period=14):
+    """Розрахунок Average True Range (ATR) для захисту стопу від ложних проколів."""
+    if len(kline_data) < 2:
+        return 0.0
+    tr_list = []
+    for i in range(1, len(kline_data)):
+        high = float(kline_data[i]['high'])
+        low = float(kline_data[i]['low'])
+        prev_close = float(kline_data[i - 1]['close'])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+    
+    if len(tr_list) < period:
+        return tr_list[-1] if tr_list else 0.0
+    return sum(tr_list[-period:]) / period
 
 def calculate_kdj(kline_data, n=9, m1=3, m2=3):
     if len(kline_data) < n:
@@ -113,7 +129,41 @@ async def set_leverage(session, symbol, leverage, side):
     except Exception:
         pass
 
-async def open_bot_position(session, symbol, side, current_price, level_price, discord_webhook_url):
+async def set_initial_stop_loss(session, symbol, side, level_price, kline_data):
+    """Встановлення початкового стоп-лосу з урахуванням ATR нижче підтримки / вище опору"""
+    path = "/openApi/swap/v2/trade/stopOrder"
+    timestamp = str(int(time.time() * 1000))
+    
+    atr_val = calculate_atr(kline_data, period=14)
+    multiplier = 1.5 # Коефіцієнт відступу ATR
+    
+    if side == "LONG":
+        stop_price = level_price - (multiplier * atr_val)
+        stop_side = "SELL"
+        position_side_param = "LONG"
+    else:
+        stop_price = level_price + (multiplier * atr_val)
+        stop_side = "BUY"
+        position_side_param = "SHORT"
+        
+    stop_price = round(stop_price, 5)
+    
+    param_str = f"positionSide={position_side_param}&side={stop_side}&stopPrice={stop_price}&symbol={symbol}&timestamp={timestamp}&type=STOP_MARKET"
+    signature = get_sign(API_SECRET, param_str)
+    url = f"{BINGX_BASE_URL}{path}?{param_str}&signature={signature}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
+    
+    try:
+        async with session.post(url, headers=headers, timeout=5) as response:
+            if response.status == 200:
+                res_data = await response.json()
+                if res_data.get("code") == 0:
+                    return stop_price
+    except Exception:
+        pass
+    return None
+
+async def open_bot_position(session, symbol, side, current_price, level_price, kline_data, discord_webhook_url):
     if not API_KEY or not API_SECRET:
         err_msg = f"[ERROR] API ключі не налаштовані для {symbol}"
         print(err_msg, flush=True)
@@ -148,11 +198,15 @@ async def open_bot_position(session, symbol, side, current_price, level_price, d
             if response.status == 200:
                 res_data = await response.json()
                 if res_data.get("code") == 0:
+                    # Встановлюємо ATR стоп-лос одразу після відкриття
+                    stop_price = await set_initial_stop_loss(session, symbol, side, level_price, kline_data)
+                    
                     msg = (
                         f"🤖🚀 **БОТ ВІДКРИВ УГОДУ [{side}]**:\n`{symbol}`\n"
                         f"• Ціна входу: `{current_price}` | Рівень: `{level_price}`\n"
                         f"• Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`, Вартість: `{position_value_usdt} USDT`)\n"
-                        f"• Кількість: `{quantity}`"
+                        f"• Кількість: `{quantity}`\n"
+                        f"🛡️ ATR Стоп-лос: `{stop_price}`"
                     )
                     await send_to_discord(session, discord_webhook_url, msg)
                 else:
@@ -195,7 +249,7 @@ async def close_partial_position_on_exchange(session, symbol, side, quantity_to_
                 await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА HTTP ПРИ ЗАКРИТТІ ({symbol})**:\n`{err_msg}`")
     except Exception as e:
         err_msg = f"Виключення при частковому закритті {symbol}: {e}"
-        print(f"[ERROR] {err_msg}", flush=True)
+        print(err_msg, flush=True)
         await send_to_discord(session, discord_webhook_url, f"❌ **КРИТИЧНА ПОМИЛКА ЗАКРИТТЯ ({symbol})**:\n`{err_msg}`")
     return False
 
@@ -305,14 +359,14 @@ async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
             print(f"[SCANNER] Знайдено сигнал LONG для {symbol} за ціною {current_price} (Підтримка: {support_level})", flush=True)
-            await open_bot_position(session, symbol, "LONG", current_price, support_level, discord_webhook_url)
+            await open_bot_position(session, symbol, "LONG", current_price, support_level, kline_data, discord_webhook_url)
             return
 
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
             print(f"[SCANNER] Знайдено сигнал SHORT для {symbol} за ціною {current_price} (Опір: {resistance_level})", flush=True)
-            await open_bot_position(session, symbol, "SHORT", current_price, resistance_level, discord_webhook_url)
+            await open_bot_position(session, symbol, "SHORT", current_price, resistance_level, kline_data, discord_webhook_url)
             return
 
     except Exception as e:
@@ -404,63 +458,4 @@ async def monitor_active_position(session, pos, discord_webhook_url):
         last_position_alert_time[sym] = current_time
 
 async def self_ping_loop(session):
-    while True:
-        await asyncio.sleep(240)
-        try:
-            async with session.get(RENDER_URL, timeout=5) as response:
-                pass
-        except Exception:
-            pass
-
-async def main():
-    print("Бот мультипозиційного авто-ведення (без стопів, з розширеним логуванням помилок) запущено...", flush=True)
-    async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping_loop(session))
-        
-        while True:
-            start_time = asyncio.get_event_loop().time()
-            
-            open_positions = await fetch_open_positions(session)
-            open_symbols = [p.get("symbol") for p in open_positions]
-            
-            if not open_positions:
-                handled_partial_positions.clear()
-
-            if open_positions:
-                for pos in open_positions:
-                    await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
-
-            if len(open_positions) < 2:
-                symbols_list = await fetch_top_bingx_symbols(session)
-                if symbols_list:
-                    filtered_symbols = [s for s in symbols_list if s not in open_symbols]
-                    print(f"[SCANNER] Перевіряю топ монет, в роботі відкритих: {len(open_positions)}. Сканую активів: {len(filtered_symbols)}", flush=True)
-                    tasks = [scan_and_trade_coin(session, symbol, DISCORD_WEBHOOK_URL, len(open_positions)) for symbol in filtered_symbols]
-                    await asyncio.gather(*tasks)
-
-            elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 60 - elapsed)
-            await asyncio.sleep(sleep_time)
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"BingX Bot (No Stop) is running!")
-    def log_message(self, format, *args):
-        return
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    server.serve_forever()
-
-if __name__ == "__main__":
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Бот зупинений.")
-                
+    whil
