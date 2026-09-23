@@ -137,7 +137,9 @@ async def open_bot_position(session, symbol, side, price, level, kdata, webhook)
                 res = await r.json()
                 if res.get("code") == 0:
                     stop_p = await set_initial_stop_loss(session, symbol, side, level, kdata)
-                    await send_to_discord(session, webhook, f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}` | Стоп: `{stop_p}`")
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}` | Стоп: `{stop_p}`"
+                    print(msg, flush=True)
+                    await send_to_discord(session, webhook, msg)
     except: pass
 
 async def close_partial(session, symbol, side, qty, webhook):
@@ -182,7 +184,9 @@ async def fetch_top_symbols(session):
                             if vol >= MIN_24H_VOLUME_USDT: res.append((sym, vol))
                         except: pass
                     res.sort(key=lambda x: x[1], reverse=True)
-                    return [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    top_list = [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    print(print(f"Отримано топ-монет для сканування: {len(top_list)}"), flush=True) if False else None
+                    return top_list
     except: pass
     return []
 
@@ -217,9 +221,11 @@ async def scan_coin(session, symbol, webhook, open_count):
         
         if sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал LONG для {symbol} біля підтримки {sup}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
         elif res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал SHORT для {symbol} біля опору {res}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
     except: pass
 
@@ -238,7 +244,6 @@ async def monitor_pos(session, pos, webhook):
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
     
-    # Перевірка чи оновлювати час останнього сповіщення
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
@@ -255,13 +260,19 @@ async def monitor_pos(session, pos, webhook):
         if part_q > 0 and await close_partial(session, sym, side, part_q, webhook):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            await send_to_discord(session, webhook, f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | PnL: `{pnl} USDT`")
+            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | PnL: `{pnl} USDT`"
+            print(msg, flush=True)
+            await send_to_discord(session, webhook, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt, webhook):
             handled_partial_positions.discard(sym)
-            await send_to_discord(session, webhook, f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | PnL: `{pnl} USDT`")
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | PnL: `{pnl} USDT`"
+            print(msg, flush=True)
+            await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
-        await send_to_discord(session, webhook, f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі.")
+        msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
+        print(f"Супровід активної позиції {sym}", flush=True)
+        await send_to_discord(session, webhook, msg)
         last_position_alert_time[sym] = current_time
 
 async def self_ping():
@@ -274,12 +285,13 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно!", flush=True)
+    print("Бот запущено успішно та розпочав сканування ринку!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
             try:
                 start = asyncio.get_event_loop().time()
+                print("--- Початок нового циклу сканування ринку ---", flush=True)
                 positions = await fetch_open_positions(session)
                 open_syms = [p.get("symbol") for p in positions]
                 if not positions: handled_partial_positions.clear()
@@ -289,11 +301,13 @@ async def main():
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
+                    print(f"Отримано топ монет для перевірки: {len(syms)}", flush=True)
                     if syms:
                         tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
+                print(f"Цикл завершено за {elapsed:.2f} сек. Очікування...", flush=True)
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
