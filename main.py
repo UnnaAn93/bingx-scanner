@@ -18,7 +18,7 @@ COOLDOWN_SECONDS = 300
 
 # Налаштування для авто-торгівлі ботом
 LEVERAGE = 10                     # 10x плече
-BOT_MARGIN_USDT = 0.06            # Чиста маржа 0.06 USDT (загальна вартість позиції з плечем 10x буде 0.6 USDT)
+BOT_MARGIN_USDT = 0.06            # Чиста маржа 0.06 USDT
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -113,8 +113,11 @@ async def set_leverage(session, symbol, leverage, side):
     except Exception:
         pass
 
-async def open_bot_position(session, symbol, side, current_price, discord_webhook_url):
+async def open_bot_position(session, symbol, side, current_price, level_price, discord_webhook_url):
     if not API_KEY or not API_SECRET:
+        err_msg = f"[ERROR] API ключі не налаштовані для {symbol}"
+        print(err_msg, flush=True)
+        await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА БОТА ({symbol})**:\n`{err_msg}`")
         return
     
     await set_leverage(session, symbol, LEVERAGE, side)
@@ -125,6 +128,9 @@ async def open_bot_position(session, symbol, side, current_price, discord_webhoo
     position_value_usdt = BOT_MARGIN_USDT * LEVERAGE
     quantity = round(position_value_usdt / current_price, 4)
     if quantity <= 0:
+        err_msg = f"[ERROR] Занадто мала кількість для {symbol}: {quantity}"
+        print(err_msg, flush=True)
+        await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА БОТА ({symbol})**:\n`{err_msg}`")
         return
 
     order_side = "BUY" if side == "LONG" else "SELL"
@@ -137,19 +143,32 @@ async def open_bot_position(session, symbol, side, current_price, discord_webhoo
     
     try:
         async with session.post(url, headers=headers, timeout=5) as response:
+            res_text = await response.text()
+            print(f"[BINGX RESP] Статус для {symbol}: {response.status}, Відповідь: {res_text}", flush=True)
             if response.status == 200:
                 res_data = await response.json()
                 if res_data.get("code") == 0:
                     msg = (
                         f"🤖🚀 **БОТ ВІДКРИВ УГОДУ [{side}]**:\n`{symbol}`\n"
-                        f"• Ціна входу: `{current_price}` | Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`, Вартість: `{position_value_usdt} USDT`)\n"
+                        f"• Ціна входу: `{current_price}` | Рівень: `{level_price}`\n"
+                        f"• Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`, Вартість: `{position_value_usdt} USDT`)\n"
                         f"• Кількість: `{quantity}`"
                     )
                     await send_to_discord(session, discord_webhook_url, msg)
+                else:
+                    err_msg = f"Біржа відхилила ордер {symbol}: {res_data}"
+                    print(f"[ERROR] {err_msg}", flush=True)
+                    await send_to_discord(session, discord_webhook_url, f"❌ **БІРЖА ВІДХИНИЛА ОРДЕР ({symbol})**:\n`{res_data}`")
+            else:
+                err_msg = f"HTTP статус {response.status} для {symbol}: {res_text}"
+                print(f"[ERROR] {err_msg}", flush=True)
+                await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА HTTP ЗПИТУ ({symbol})**:\n`{err_msg}`")
     except Exception as e:
-        print(f"Помилка відкриття позиції ботом: {e}", flush=True)
+        err_msg = f"Помилка відкриття позиції ботом для {symbol}: {e}"
+        print(err_msg, flush=True)
+        await send_to_discord(session, discord_webhook_url, f"❌ **КРИТИЧНА ПОМИЛКА ВИКЛЮЧЕННЯ ({symbol})**:\n`{err_msg}`")
 
-async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close):
+async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close, discord_webhook_url):
     if not API_KEY or not API_SECRET:
         return False
     path = "/openApi/swap/v2/trade/order"
@@ -166,8 +185,18 @@ async def close_partial_position_on_exchange(session, symbol, side, quantity_to_
                 res_data = await response.json()
                 if res_data.get("code") == 0:
                     return True
-    except Exception:
-        pass
+                else:
+                    err_msg = f"Не вдалося закрити частину позиції {symbol}: {res_data}"
+                    print(f"[ERROR] {err_msg}", flush=True)
+                    await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА ЧАСТКОВОГО ЗАКРИТТЯ ({symbol})**:\n`{res_data}`")
+            else:
+                err_msg = f"HTTP статус {response.status} при закритті {symbol}"
+                print(f"[ERROR] {err_msg}", flush=True)
+                await send_to_discord(session, discord_webhook_url, f"❌ **ПОМИЛКА HTTP ПРИ ЗАКРИТТІ ({symbol})**:\n`{err_msg}`")
+    except Exception as e:
+        err_msg = f"Виключення при частковому закритті {symbol}: {e}"
+        print(f"[ERROR] {err_msg}", flush=True)
+        await send_to_discord(session, discord_webhook_url, f"❌ **КРИТИЧНА ПОМИЛКА ЗАКРИТТЯ ({symbol})**:\n`{err_msg}`")
     return False
 
 async def set_break_even_stop(session, symbol, side, entry_price):
@@ -275,15 +304,15 @@ async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open
         support_level = min(lows[:-1])
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
-            print(f"[SCANNER] Знайдено сигнал LONG для {symbol} за ціною {current_price}!", flush=True)
-            await open_bot_position(session, symbol, "LONG", current_price, discord_webhook_url)
+            print(f"[SCANNER] Знайдено сигнал LONG для {symbol} за ціною {current_price} (Підтримка: {support_level})", flush=True)
+            await open_bot_position(session, symbol, "LONG", current_price, support_level, discord_webhook_url)
             return
 
         resistance_level = max(highs[:-1])
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             last_alert_time[symbol] = current_time
-            print(f"[SCANNER] Знайдено сигнал SHORT для {symbol} за ціною {current_price}!", flush=True)
-            await open_bot_position(session, symbol, "SHORT", current_price, discord_webhook_url)
+            print(f"[SCANNER] Знайдено сигнал SHORT для {symbol} за ціною {current_price} (Опір: {resistance_level})", flush=True)
+            await open_bot_position(session, symbol, "SHORT", current_price, resistance_level, discord_webhook_url)
             return
 
     except Exception as e:
@@ -317,6 +346,7 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
+    # ПЕРЕВІРКА ЧАСТКОВОГО ТЕЙКУ (KDJ + 1% руху)
     is_kdj_take_profit = False
     if side == "LONG":
         if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k) and current_price >= entry_price * 1.01:
@@ -339,7 +369,7 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     if is_kdj_take_profit and sym not in handled_partial_positions:
         partial_qty = round(abs_amt * 0.75, 4)
         if partial_qty > 0:
-            success_close = await close_partial_position_on_exchange(session, sym, side, partial_qty)
+            success_close = await close_partial_position_on_exchange(session, sym, side, partial_qty, discord_webhook_url)
             if success_close:
                 await set_break_even_stop(session, sym, side, entry_price)
                 handled_partial_positions.add(sym)
@@ -383,7 +413,7 @@ async def self_ping_loop(session):
             pass
 
 async def main():
-    print("Бот мультипозиційного авто-ведення (0.06 маржа) запущено...", flush=True)
+    print("Бот мультипозиційного авто-ведення (без стопів, з розширеним логуванням помилок) запущено...", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
@@ -416,7 +446,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Bot (0.06 Margin) is running!")
+        self.wfile.write(b"BingX Bot (No Stop) is running!")
     def log_message(self, format, *args):
         return
 
@@ -433,4 +463,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Бот зупинений.")
-    
+                
