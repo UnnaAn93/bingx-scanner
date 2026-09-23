@@ -40,7 +40,7 @@ async def send_to_discord(session, webhook_url, message):
     payload = {"content": message}
     try:
         async with session.post(webhook_url, json=payload) as response:
-            pass
+            await response.text()
     except Exception as e:
         print(f"Помилка Discord: {e}", flush=True)
 
@@ -473,5 +473,4 @@ async def self_ping_loop(session):
     while True:
         await asyncio.sleep(240)
         try:
-            async with session.get(RENDER_URL, timeout=5) as response:
-        
+            async with session.get(RENDER_URL, timeout=5) as r
