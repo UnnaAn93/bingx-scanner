@@ -7,7 +7,6 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# Налаштування параметрів сканування та супроводу (15m)
 VOLUME_MULTIPLIER = 2.2           
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
@@ -473,4 +472,6 @@ async def self_ping_loop(session):
     while True:
         await asyncio.sleep(240)
         try:
-            async with session.get(RENDER_URL, timeout=5) as r
+            async with session.get(RENDER_URL, timeout=5) as response:
+                await response.text()
+        e
