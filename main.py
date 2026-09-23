@@ -7,8 +7,8 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6           # Зменшено для легшого пошуку сплесків об'єму
-APPROACH_PERCENT = 0.015          # Збільшено до 1.5% для ширшої зони біля рівнів
+VOLUME_MULTIPLIER = 1.6           # Залишаємо м'якшим для пошуку сплесків об'єму
+APPROACH_PERCENT = 0.008          # Повертаємо точніші 0.8% біля рівнів для вчасного входу
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
@@ -284,7 +284,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та розпочав сканування ринку (пом'якшені умови)!", flush=True)
+    print("Бот запущено успішно та сканує ринок (точніші рівні)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -320,4 +320,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                                   
+        
