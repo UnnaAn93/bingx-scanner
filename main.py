@@ -29,6 +29,10 @@ last_opposite_alert_time = {}
 handled_partial_positions = set() 
 partial_exit_prices = {}          # Зберігаємо ціну першого часткового виходу для кожної монети
 
+# Лічильники торкань ключових рівнів (для подвійного дотику)
+support_touches_count = {}        
+resistance_touches_count = {}     
+
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
@@ -231,6 +235,8 @@ async def scan_coin(session, symbol, webhook, open_count):
 
 async def monitor_pos(session, pos, webhook):
     global last_position_alert_time, last_opposite_alert_time, handled_partial_positions, partial_exit_prices
+    global support_touches_count, resistance_touches_count
+    
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
     entry, pnl = float(pos.get("avgPrice", 0)), pos.get("unrealizedProfit", "0")
     
@@ -246,30 +252,54 @@ async def monitor_pos(session, pos, webhook):
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
+    cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
     ema = calculate_ema([x['close'] for x in kdata], 50)
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
+    # Визначаємо локальні рівні підтримки/опору для перевірки дотиків
+    lows = [x['low'] for x in kdata[:-1]]
+    highs = [x['high'] for x in kdata[:-1]]
+    support_level = min(lows) if lows else entry
+    resistance_level = max(highs) if highs else entry
+    
+    # Ініціалізація лічильників дотиків для активного символу
+    if sym not in support_touches_count:
+        support_touches_count[sym] = 0
+    if sym not in resistance_touches_count:
+        resistance_touches_count[sym] = 0
+        
+    # Фіксація повторних дотиків (якщо ціна торкається або заходить у зону рівня)
+    if side == "SHORT" and cur_low <= support_level * 1.002:
+        support_touches_count[sym] += 1
+        print(f"[{sym}] Шорт: зафіксовано дотик підтримки №{support_touches_count[sym]}", flush=True)
+    elif side == "LONG" and cur_high >= resistance_level * 0.998:
+        resistance_touches_count[sym] += 1
+        print(f"[{sym}] Лонг: зафіксовано дотик опору №{resistance_touches_count[sym]}", flush=True)
+
     tp, full_close = False, False
     
     if side == "LONG":
-        if prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01:
-            if sym in handled_partial_positions:
-                # Повне закриття залишку: якщо ціна пішла вище мінімум на 1% від ціни першого тейку АБО пробила EMA вниз
-                prev_exit_p = partial_exit_prices.get(sym, entry)
-                if cur_c >= prev_exit_p * 1.01 or cur_c < ema:
-                    full_close = True
-            else:
+        if sym in handled_partial_positions:
+            # Повне закриття залишку: якщо ціна пішла вище мінімум на 1% від ціни першого тейку АБО пробила EMA вниз
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            if cur_c >= prev_exit_p * 1.01 or cur_c < ema:
+                full_close = True
+        else:
+            # Умова для часткового тейку в Лонзі: або стандартний KDJ (> 85), або другий дотик опору
+            if (prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01) or (resistance_touches_count[sym] >= 2):
                 tp = True
+                
     elif side == "SHORT":
-        if prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99:
-            if sym in handled_partial_positions:
-                # Повне закриття залишку: якщо ціна нижче мінімум на 1% від ціни першого тейку АБО пробила EMA вгору
-                prev_exit_p = partial_exit_prices.get(sym, entry)
-                if cur_c <= prev_exit_p * 0.99 or cur_c > ema:
-                    full_close = True
-            else:
+        if sym in handled_partial_positions:
+            # Повне закриття залишку: якщо ціна нижче мінімум на 1% від ціни першого тейку АБО пробила EMA вгору
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            if cur_c <= prev_exit_p * 0.99 or cur_c > ema:
+                full_close = True
+        else:
+            # Умова для часткового тейку в Шорті: або стандартний KDJ (< 15), або другий дотик підтримки
+            if (prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99) or (support_touches_count[sym] >= 2):
                 tp = True
         
     if tp and sym not in handled_partial_positions:
@@ -285,6 +315,8 @@ async def monitor_pos(session, pos, webhook):
         if await close_partial(session, sym, side, abs_amt, webhook):
             handled_partial_positions.discard(sym)
             partial_exit_prices.pop(sym, None)
+            support_touches_count.pop(sym, None)
+            resistance_touches_count.pop(sym, None)
             msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
@@ -304,7 +336,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та сканує ринок (з покращеним виходом для залишку)!", flush=True)
+    print("Бот запущено успішно та сканує ринок (з підтримкою подвійних тестів рівнів)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -316,6 +348,8 @@ async def main():
                 if not positions: 
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
+                    support_touches_count.clear()
+                    resistance_touches_count.clear()
                 
                 for p in positions:
                     await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
@@ -342,4 +376,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+            
