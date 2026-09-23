@@ -11,12 +11,11 @@ import threading
 VOLUME_MULTIPLIER = 2.2           
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
-LIMIT_CANDLES = 100               # Збільшено до 100 для коректного розрахунку EMA 200 / 50
+LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 
-# Налаштування для авто-торгівлі ботом (маржа 0.5 USDT * 10х = 5 USDT вартість)
 LEVERAGE = 10                     
 BOT_MARGIN_USDT = 0.5             
 
@@ -49,7 +48,7 @@ def calculate_ema(closes, period=50):
     if len(closes) < period:
         return closes[-1] if closes else 0.0
     multiplier = 2 / (period + 1)
-    ema = sum(closes[:period]) / period  # Початкове значення як SMA
+    ema = sum(closes[:period]) / period
     for price in closes[period:]:
         ema = (price - ema) * multiplier + ema
     return ema
@@ -171,7 +170,6 @@ async def set_initial_stop_loss(session, symbol, side, level_price, kline_data):
 
 async def open_bot_position(session, symbol, side, current_price, level_price, kline_data, discord_webhook_url):
     if not API_KEY or not API_SECRET:
-        print(f"[ERROR] API ключі не налаштовані для {symbol}", flush=True)
         return
     
     await set_leverage(session, symbol, LEVERAGE, side)
@@ -199,17 +197,15 @@ async def open_bot_position(session, symbol, side, current_price, level_price, k
                 if res_data.get("code") == 0:
                     stop_price = await set_initial_stop_loss(session, symbol, side, level_price, kline_data)
                     msg = (
-                        f"🤖🚀 **БОТ ВІДКРИВ УГОДУ [{side}] (З ФІЛЬТРОМ EMA)**:\n`{symbol}`\n"
-                        f"• Ціна входу: `{current_price}` | Рівень: `{level_price}`\n"
-                        f"• Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`, Вартість: `{position_value_usdt} USDT`)\n"
+                        f"🤖🚀 **БОТ ВІДКРИВ УГОДУ [{side}] (З EMA)**:\n`{symbol}`\n"
+                        f"• Вхід: `{current_price}` | Рівень: `{level_price}`\n"
+                        f"• Маржа: `{BOT_MARGIN_USDT} USDT` (Плече: `{LEVERAGE}x`)\n"
                         f"• Кількість: `{quantity}`\n"
                         f"🛡️ ATR Стоп-лос: `{stop_price}`"
                     )
                     await send_to_discord(session, discord_webhook_url, msg)
-                else:
-                    print(f"[ERROR] Біржа відхилила ордер {symbol}: {res_data}", flush=True)
-    except Exception as e:
-        print(f"[ERROR] Помилка відкриття позиції для {symbol}: {e}", flush=True)
+    except Exception:
+        pass
 
 async def close_partial_position_on_exchange(session, symbol, side, quantity_to_close, discord_webhook_url):
     if not API_KEY or not API_SECRET:
@@ -334,11 +330,9 @@ async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open
         if current_volume < (avg_volume * VOLUME_MULTIPLIER):
             return
 
-        # Рахуємо трендовий фільтр (наприклад, EMA 50)
         ema_value = calculate_ema(closes, period=50)
 
         support_level = min(lows[:-1])
-        # Умова для LONG: ціна біля підтримки І ціна вище EMA (тренд лонг)
         if support_level > 0 and 0 <= (current_price - support_level) / support_level <= APPROACH_PERCENT:
             if current_price > ema_value:
                 last_alert_time[symbol] = current_time
@@ -346,7 +340,6 @@ async def scan_and_trade_coin(session, symbol, discord_webhook_url, current_open
                 return
 
         resistance_level = max(highs[:-1])
-        # Умова для SHORT: ціна біля опору І ціна нижче EMA (тренд шорт)
         if resistance_level > 0 and 0 <= (resistance_level - current_price) / resistance_level <= APPROACH_PERCENT:
             if current_price < ema_value:
                 last_alert_time[symbol] = current_time
@@ -409,30 +402,24 @@ async def monitor_active_position(session, pos, discord_webhook_url):
                 await set_break_even_stop(session, sym, side, entry_price)
                 handled_partial_positions.add(sym)
                 report_msg = (
-                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% [KDJ + ПЛЮС > 1%] `{sym}` ({side})**:\n"
-                    f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-                    f"• Закрито: `75%` | PnL: `{pnl} USDT`\n"
-                    f"🛡️ **Стоп перенесено в безубиток!**"
+                    f"🎯 **ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side})**:\n"
+                    f"• Вхід: `{entry_price}` | Ціна: `{current_price}`\n"
+                    f"• PnL: `{pnl} USDT` | Стоп у безубитку!"
                 )
                 await send_to_discord(session, discord_webhook_url, report_msg)
 
     elif is_opposite_volume and (current_time - last_opp_time >= 180):
         report_msg = (
-            f"📊 **Супровід позиції `{sym}` ({side})**:\n"
-            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-            f"• PnL: `{pnl} USDT`\n"
-            f"⚠️ **УВАГА: Великий об'єм у ПРОТИЛЕЖНОМУ напрямку!**"
+            f"📊 **Супровід `{sym}` ({side})**:\n"
+            f"⚠️ Увага: Великий об'єм у протилежному напрямку!"
         )
         await send_to_discord(session, discord_webhook_url, report_msg)
         last_opposite_alert_time[sym] = current_time
 
     elif current_time - last_pos_time >= 900:
         report_msg = (
-            f"📊 **Супровід позиції `{sym}` ({side})**:\n"
-            f"• Вхід: `{entry_price}` | Поточна ціна: `{current_price}`\n"
-            f"• PnL: `{pnl} USDT`\n"
-            f"• KDJ -> J: `{curr_j:.1f}`, K: `{curr_k:.1f}`\n"
-            f"✅ Позиція в роботі."
+            f"📊 **Супровід `{sym}` ({side})**:\n"
+            f"• Вхід: `{entry_price}` | Ціна: `{current_price}` | PnL: `{pnl} USDT`"
         )
         await send_to_discord(session, discord_webhook_url, report_msg)
         last_position_alert_time[sym] = current_time
@@ -447,39 +434,43 @@ async def self_ping_loop(session):
             pass
 
 async def main_bot_loop():
-    print("Бот мультипозиційного авто-ведення (з фільтром EMA) запущено...", flush=True)
+    print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping_loop(session))
         
         while True:
-            start_time = asyncio.get_event_loop().time()
-            
-            open_positions = await fetch_open_positions(session)
-            open_symbols = [p.get("symbol") for p in open_positions]
-            
-            if not open_positions:
-                handled_partial_positions.clear()
+            try:
+                start_time = asyncio.get_event_loop().time()
+                
+                open_positions = await fetch_open_positions(session)
+                open_symbols = [p.get("symbol") for p in open_positions]
+                
+                if not open_positions:
+                    handled_partial_positions.clear()
 
-            if open_positions:
-                for pos in open_positions:
-                    await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
+                if open_positions:
+                    for pos in open_positions:
+                        await monitor_active_position(session, pos, DISCORD_WEBHOOK_URL)
 
-            if len(open_positions) < 2:
-                symbols_list = await fetch_top_bingx_symbols(session)
-                if symbols_list:
-                    filtered_symbols = [s for s in symbols_list if s not in open_symbols]
-                    tasks = [scan_and_trade_coin(session, symbol, DISCORD_WEBHOOK_URL, len(open_positions)) for symbol in filtered_symbols]
-                    await asyncio.gather(*tasks)
+                if len(open_positions) < 2:
+                    symbols_list = await fetch_top_bingx_symbols(session)
+                    if symbols_list:
+                        filtered_symbols = [s for s in symbols_list if s not in open_symbols]
+                        tasks = [scan_and_trade_coin(session, symbol, DISCORD_WEBHOOK_URL, len(open_positions)) for symbol in filtered_symbols]
+                        await asyncio.gather(*tasks)
 
-            elapsed = asyncio.get_event_loop().time() - start_time
-            sleep_time = max(1, 60 - elapsed)
-            await asyncio.sleep(sleep_time)
+                elapsed = asyncio.get_event_loop().time() - start_time
+                sleep_time = max(1, 60 - elapsed)
+                await asyncio.sleep(sleep_time)
+            except Exception as e:
+                print(f"Помилка в головному циклі: {e}", flush=True)
+                await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BingX Bot with EMA Filter is running!")
+        self.wfile.write(b"Bot is active!")
     def log_message(self, format, *args):
         return
 
@@ -489,4 +480,13 @@ def run_web_server():
     server.serve_forever()
 
 if __name__ == "__main__":
-    web_thread = threading
+    # Запускаємо HTTP-сервер миттєво в окремому потоці, щоб Render одразу побачив відкритий порт
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+
+    # Запускаємо асинхронний цикл бота
+    try:
+        asyncio.run(main_bot_loop())
+    except Exception as e:
+        print(f"Критична помилка запуску: {e}", flush=True)
+    
