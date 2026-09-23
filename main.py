@@ -401,15 +401,13 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     
     prev_avg_volume = sum(x['volume'] for x in kline_data[-11:-1]) / 10
 
-    # Умови для часткового тейку (75%)
     is_kdj_take_profit = False
-    # Умови для повного закриття залишку (25%), наприклад сильний рух далі або зворотний перетин/перекупленість
     is_kdj_full_close = False
 
     if side == "LONG":
         if prev_j > 85 and (curr_j < curr_k and prev_j >= prev_k) and current_price >= entry_price * 1.01:
             if sym in handled_partial_positions:
-                is_kdj_full_close = True  # Якщо 75% вже закрили, наступний сигнал KDJ закриває решту 25%
+                is_kdj_full_close = True
             else:
                 is_kdj_take_profit = True
     elif side == "SHORT":
@@ -430,7 +428,6 @@ async def monitor_active_position(session, pos, discord_webhook_url):
     last_pos_time = last_position_alert_time.get(sym, 0)
     last_opp_time = last_opposite_alert_time.get(sym, 0)
 
-    # 1. Частковий тейк 75%
     if is_kdj_take_profit and sym not in handled_partial_positions:
         partial_qty = round(abs_amt * 0.75, 4)
         if partial_qty > 0:
@@ -445,7 +442,6 @@ async def monitor_active_position(session, pos, discord_webhook_url):
                 )
                 await send_to_discord(session, discord_webhook_url, report_msg)
 
-    # 2. Закриття залишку 25% за сигналом KDJ
     elif is_kdj_full_close:
         success_close = await close_partial_position_on_exchange(session, sym, side, abs_amt, discord_webhook_url)
         if success_close:
@@ -470,4 +466,12 @@ async def monitor_active_position(session, pos, discord_webhook_url):
             f"📊 **Супровід позиції `{sym}` ({side})**:\n"
             f"• Вхід: `{entry_price}` | Ціна: `{current_price}` | PnL: `{pnl} USDT`"
         )
-        awai
+        await send_to_discord(session, discord_webhook_url, report_msg)
+        last_position_alert_time[sym] = current_time
+
+async def self_ping_loop(session):
+    while True:
+        await asyncio.sleep(240)
+        try:
+            async with session.get(RENDER_URL, timeout=5) as response:
+        
