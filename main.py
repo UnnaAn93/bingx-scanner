@@ -7,8 +7,8 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6           # Залишаємо м'якшим для пошуку сплесків об'єму
-APPROACH_PERCENT = 0.008          # Точніші 0.8% біля рівнів для вчасного входу
+VOLUME_MULTIPLIER = 1.6           
+APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
@@ -27,6 +27,7 @@ last_alert_time = {}
 last_position_alert_time = {}     
 last_opposite_alert_time = {}     
 handled_partial_positions = set() 
+partial_exit_prices = {}          # Зберігаємо ціну першого часткового виходу для кожної монети
 
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -229,11 +230,10 @@ async def scan_coin(session, symbol, webhook, open_count):
     except: pass
 
 async def monitor_pos(session, pos, webhook):
-    global last_position_alert_time, last_opposite_alert_time, handled_partial_positions
+    global last_position_alert_time, last_opposite_alert_time, handled_partial_positions, partial_exit_prices
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
     entry, pnl = float(pos.get("avgPrice", 0)), pos.get("unrealizedProfit", "0")
     
-    # Виправляємо визначення сторони позиції через positionSide замість порівняння знаку amt
     p_side = pos.get("positionSide", "LONG")
     side = "LONG" if p_side == "LONG" else "SHORT"
     abs_amt = abs(amt)
@@ -246,30 +246,46 @@ async def monitor_pos(session, pos, webhook):
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
+    ema = calculate_ema([x['close'] for x in kdata], 50)
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
     tp, full_close = False, False
-    if side == "LONG" and prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01:
-        if sym in handled_partial_positions: full_close = True
-        else: tp = True
-    elif side == "SHORT" and prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99:
-        if sym in handled_partial_positions: full_close = True
-        else: tp = True
+    
+    if side == "LONG":
+        if prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01:
+            if sym in handled_partial_positions:
+                # Повне закриття залишку: якщо ціна пішла вище мінімум на 1% від ціни першого тейку АБО пробила EMA вниз
+                prev_exit_p = partial_exit_prices.get(sym, entry)
+                if cur_c >= prev_exit_p * 1.01 or cur_c < ema:
+                    full_close = True
+            else:
+                tp = True
+    elif side == "SHORT":
+        if prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99:
+            if sym in handled_partial_positions:
+                # Повне закриття залишку: якщо ціна нижче мінімум на 1% від ціни першого тейку АБО пробила EMA вгору
+                prev_exit_p = partial_exit_prices.get(sym, entry)
+                if cur_c <= prev_exit_p * 0.99 or cur_c > ema:
+                    full_close = True
+            else:
+                tp = True
         
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q, webhook):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | PnL: `{pnl} USDT`"
+            partial_exit_prices[sym] = cur_c  # Зберігаємо ціну першого виходу
+            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt, webhook):
             handled_partial_positions.discard(sym)
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | PnL: `{pnl} USDT`"
+            partial_exit_prices.pop(sym, None)
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
@@ -288,7 +304,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та сканує ринок (точніші рівні)!", flush=True)
+    print("Бот запущено успішно та сканує ринок (з покращеним виходом для залишку)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -297,7 +313,9 @@ async def main():
                 print("--- Початок нового циклу сканування ринку ---", flush=True)
                 positions = await fetch_open_positions(session)
                 open_syms = [p.get("symbol") for p in positions]
-                if not positions: handled_partial_positions.clear()
+                if not positions: 
+                    handled_partial_positions.clear()
+                    partial_exit_prices.clear()
                 
                 for p in positions:
                     await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
@@ -324,4 +342,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
