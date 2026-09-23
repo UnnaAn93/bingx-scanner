@@ -8,7 +8,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
 VOLUME_MULTIPLIER = 1.6           # Залишаємо м'якшим для пошуку сплесків об'єму
-APPROACH_PERCENT = 0.008          # Повертаємо точніші 0.8% біля рівнів для вчасного входу
+APPROACH_PERCENT = 0.008          # Точніші 0.8% біля рівнів для вчасного входу
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
@@ -232,7 +232,11 @@ async def monitor_pos(session, pos, webhook):
     global last_position_alert_time, last_opposite_alert_time, handled_partial_positions
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
     entry, pnl = float(pos.get("avgPrice", 0)), pos.get("unrealizedProfit", "0")
-    side, abs_amt = ("LONG" if amt > 0 else "SHORT"), abs(amt)
+    
+    # Виправляємо визначення сторони позиції через positionSide замість порівняння знаку amt
+    p_side = pos.get("positionSide", "LONG")
+    side = "LONG" if p_side == "LONG" else "SHORT"
+    abs_amt = abs(amt)
     
     kdata = await fetch_kline(session, sym)
     if not kdata or len(kdata) < 15: return
