@@ -29,7 +29,6 @@ last_opposite_alert_time = {}
 handled_partial_positions = set() 
 partial_exit_prices = {}          
 
-# Лічильники торкань ключових рівнів
 support_touches_count = {}        
 resistance_touches_count = {}     
 
@@ -167,12 +166,19 @@ async def set_break_even(session, symbol, side, entry):
     ts = str(int(time.time() * 1000))
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
+    # Виправлено: додано всі необхідні параметри, зокрема positionSide та type=STOP_MARKET
     p_str = f"positionSide={p_side}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-            pass
-    except: pass
+            if r.status == 200:
+                res = await r.json()
+                if res.get("code") == 0:
+                    print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
+                    return True
+    except Exception as e:
+        print(f"[{symbol}] Помилка встановлення беззбитку: {e}", flush=True)
+    return False
 
 async def fetch_top_symbols(session):
     try:
@@ -258,19 +264,16 @@ async def monitor_pos(session, pos, webhook):
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
-    # Визначаємо локальні рівні підтримки/опору
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
     
-    # Ініціалізація лічильників
     if sym not in support_touches_count:
         support_touches_count[sym] = 0
     if sym not in resistance_touches_count:
         resistance_touches_count[sym] = 0
         
-    # Перевірка повторного дотику рівня з використанням того ж відступу APPROACH_PERCENT (0.8%)
     if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
         support_touches_count[sym] += 1
         print(f"[{sym}] Шорт: зафіксовано повторний дотик підтримки №{support_touches_count[sym]} (в межах 0.8%)", flush=True)
@@ -286,7 +289,6 @@ async def monitor_pos(session, pos, webhook):
             if cur_c >= prev_exit_p * 1.01 or cur_c < ema:
                 full_close = True
         else:
-            # Умова: або перекупленість KDJ (> 85), або другий дотик опору (в межах 0.8%)
             if (prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01) or (resistance_touches_count[sym] >= 2):
                 tp = True
                 
@@ -296,7 +298,6 @@ async def monitor_pos(session, pos, webhook):
             if cur_c <= prev_exit_p * 0.99 or cur_c > ema:
                 full_close = True
         else:
-            # Умова: або перепроданість KDJ (< 15), або другий дотик підтримки (в межах 0.8%)
             if (prev_j < 15 and cur_j > cur_k and cur_c <= entry * 0.99) or (support_touches_count[sym] >= 2):
                 tp = True
         
@@ -334,7 +335,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та сканує ринок (з урахуванням 0.8% зони для тестів рівнів)!", flush=True)
+    print("Бот запущено успішно та сканує ринок (з виправленим беззбитком)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -374,4 +375,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
