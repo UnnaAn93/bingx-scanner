@@ -238,6 +238,10 @@ async def monitor_pos(session, pos, webhook):
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
     
+    # Перевірка чи оновлювати час останнього сповіщення
+    current_time = time.time()
+    last_pos_time = last_position_alert_time.get(sym, 0)
+    
     tp, full_close = False, False
     if side == "LONG" and prev_j > 85 and cur_j < cur_k and cur_c >= entry * 1.01:
         if sym in handled_partial_positions: full_close = True
@@ -256,13 +260,17 @@ async def monitor_pos(session, pos, webhook):
         if await close_partial(session, sym, side, abs_amt, webhook):
             handled_partial_positions.discard(sym)
             await send_to_discord(session, webhook, f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | PnL: `{pnl} USDT`")
+    elif current_time - last_pos_time >= 900:
+        await send_to_discord(session, webhook, f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі.")
+        last_position_alert_time[sym] = current_time
 
 async def self_ping():
     while True:
-        await asyncio.sleep(240)
+        await asyncio.sleep(60)
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, timeout=5) as r: await r.text()
+                async with s.get(RENDER_URL, timeout=5) as r:
+                    await r.text()
         except: pass
 
 async def main():
@@ -276,7 +284,8 @@ async def main():
                 open_syms = [p.get("symbol") for p in positions]
                 if not positions: handled_partial_positions.clear()
                 
-                for p in positions: await monitor_pos(p, positions, DISCORD_WEBHOOK_URL) if False else await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
+                for p in positions:
+                    await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
@@ -298,4 +307,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
