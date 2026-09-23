@@ -7,8 +7,8 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 2.2           
-APPROACH_PERCENT = 0.008          
+VOLUME_MULTIPLIER = 1.6           # Зменшено для легшого пошуку сплесків об'єму
+APPROACH_PERCENT = 0.015          # Збільшено до 1.5% для ширшої зони біля рівнів
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
@@ -185,7 +185,6 @@ async def fetch_top_symbols(session):
                         except: pass
                     res.sort(key=lambda x: x[1], reverse=True)
                     top_list = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                    print(print(f"Отримано топ-монет для сканування: {len(top_list)}"), flush=True) if False else None
                     return top_list
     except: pass
     return []
@@ -285,7 +284,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно та розпочав сканування ринку!", flush=True)
+    print("Бот запущено успішно та розпочав сканування ринку (пом'якшені умови)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -321,4 +320,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+                                   
