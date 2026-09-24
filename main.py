@@ -15,7 +15,7 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 1.0             # Змінено маржу на 1.0 USDT
+BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -224,20 +224,47 @@ async def scan_coin(session, symbol, webhook, open_count):
         closes, vols, lows, highs = [x['close'] for x in kdata], [x['volume'] for x in kdata], [x['low'] for x in kdata], [x['high'] for x in kdata]
         cur_vol, cur_price = vols[-1], closes[-1]
         avg_vol = sum(vols[:-1]) / (len(vols) - 1)
-        if cur_vol <= 0 or avg_vol <= 0 or cur_vol < avg_vol * VOLUME_MULTIPLIER: return
+        
+        # Перевірка наявності сплеску об'єму
+        has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
         
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
         
-        if sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema:
-            last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG для {symbol} біля підтримки {sup}!", flush=True)
-            await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
-        elif res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema:
-            last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT для {symbol} біля опору {res}!", flush=True)
-            await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
-    except: pass
+        # --- СПОСІБ 1: Класичний підхід до рівнів (Підтримка/Опір + EMA + Об'єм) ---
+        near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema)
+        near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema)
+        
+        # --- СПОСІБ 2: Імпульсний пробій за об'ємом уздовж EMA 50 (Без жорстких рівнів) ---
+        # Якщо є потужний об'єм і ціна закрилася вище EMA 50 (для Лонг) або нижче EMA 50 (для Шорт)
+        momentum_long = (has_volume_spike and cur_price > ema and closes[-2] <= ema) # перетин EMA знизу вгору на імпульсі
+        momentum_short = (has_volume_spike and cur_price < ema and closes[-2] >= ema) # перетин EMA зверху вниз на імпульсі
+        
+        # Умови входу об'єднані через або (СКРИПТ ВІДКРИВАТИМЕ УГОДУ ПО БУДЬ-ЯКОМУ З ДВОХ СПОСІБІВ)
+        if has_volume_spike:
+            if near_support:
+                last_alert_time[symbol] = now
+                print(f"Знайдено сигнал LONG (Спосіб 1: біля підтримки {sup}) для {symbol}!", flush=True)
+                await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
+                return
+            elif near_resistance:
+                last_alert_time[symbol] = now
+                print(f"Знайдено сигнал SHORT (Спосіб 1: біля опору {res}) для {symbol}!", flush=True)
+                await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
+                return
+            elif momentum_long:
+                last_alert_time[symbol] = now
+                print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з об'ємом) для {symbol}!", flush=True)
+                # Для стоп-лосу в імпульсному способі передаємо поточну EMA або нижній екстремум як базу
+                await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
+                return
+            elif momentum_short:
+                last_alert_time[symbol] = now
+                print(f"Знайдено сигнал SHORT (Спосіб 2: імпульсний пробій EMA 50 з об'ємом) для {symbol}!", flush=True)
+                await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
+                return
+    except Exception as e:
+        print(f"Помилка сканування {symbol}: {e}", flush=True)
 
 async def monitor_pos(session, pos, webhook):
     global last_position_alert_time, last_opposite_alert_time, handled_partial_positions, partial_exit_prices
@@ -277,7 +304,7 @@ async def monitor_pos(session, pos, webhook):
     if sym not in last_touch_candle_time:
         last_touch_candle_time[sym] = 0
         
-    # Перевірка дотиків з інтервалом мінімум у 3-4 свічки (щоб не рахувати сусідні свічки шумом)
+    # Перевірка дотиків з інтервалом мінімум у 3-4 свічки
     candles_passed = len(kdata) - 1 - next((i for i, x in enumerate(kdata) if x['time'] == last_touch_candle_time[sym]), 0) if last_touch_candle_time[sym] > 0 else 99
     
     if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
@@ -353,7 +380,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (маржа 1 USDT, затримка дотиків 3 свічки)!", flush=True)
+    print("Бот запущено успішно (додано імпульсний спосіб входу за об'ємом уздовж EMA 50)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -376,7 +403,7 @@ async def main():
                     syms = await fetch_top_symbols(session)
                     print(f"Отримано топ монет для перевірки: {len(syms)}", flush=True)
                     if syms:
-                        tasks = [scan_coin(session, s, DISUNCIL_WEBHOOK_URL if 'DISUNCIL_WEBHOOK_URL' in globals() else DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
+                        tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
@@ -394,4 +421,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
