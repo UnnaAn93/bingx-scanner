@@ -2,12 +2,12 @@ import asyncio
 import aiohttp
 import os
 import time
-import hmic
+import hmac
 import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6                 # Базовий множник об'єму для рівнів
+VOLUME_MULTIPLIER = 1.6                 # Базовый множник об'єму для рівнів
 MOMENTUM_VOLUME_MULTIPLIER = 2.5        # Суворіший множник об'єму для чистого пробою EMA
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
@@ -413,4 +413,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                                
+    
