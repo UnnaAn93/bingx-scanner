@@ -2,18 +2,19 @@ import asyncio
 import aiohttp
 import os
 import time
-import hmac
+import hmic
 import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6           
+VOLUME_MULTIPLIER = 1.6                 # Базовий множник об'єму для рівнів
+MOMENTUM_VOLUME_MULTIPLIER = 2.5        # Суворіший множник об'єму для чистого пробою EMA
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 900            # Збільшено кулдаун до 15 хв після закриття монети
+COOLDOWN_SECONDS = 900            # Кулдаун 15 хв після закриття монети
 LEVERAGE = 10                     
 BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
 
@@ -225,6 +226,7 @@ async def scan_coin(session, symbol, webhook, open_count):
         avg_vol = sum(vols[:-1]) / (len(vols) - 1)
         
         has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
+        has_momentum_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * MOMENTUM_VOLUME_MULTIPLIER)
         
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
@@ -232,30 +234,29 @@ async def scan_coin(session, symbol, webhook, open_count):
         near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema)
         near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema)
         
-        momentum_long = (has_volume_spike and cur_price > ema and closes[-2] <= ema)
-        momentum_short = (has_volume_spike and cur_price < ema and closes[-2] >= ema)
+        momentum_long = (has_momentum_volume_spike and cur_price > ema and closes[-2] <= ema)
+        momentum_short = (has_momentum_volume_spike and cur_price < ema and closes[-2] >= ema)
         
-        if has_volume_spike:
-            if near_support:
-                last_alert_time[symbol] = now
-                print(f"Знайдено сигнал LONG (Спосіб 1: біля підтримки {sup}) для {symbol}!", flush=True)
-                await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
-                return
-            elif near_resistance:
-                last_alert_time[symbol] = now
-                print(f"Знайдено сигнал SHORT (Спосіб 1: біля опору {res}) для {symbol}!", flush=True)
-                await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
-                return
-            elif momentum_long:
-                last_alert_time[symbol] = now
-                print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з об'ємом) для {symbol}!", flush=True)
-                await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
-                return
-            elif momentum_short:
-                last_alert_time[symbol] = now
-                print(f"Знайдено сигнал SHORT (Спосіб 2: імпульсний пробій EMA 50 з об'ємом) для {symbol}!", flush=True)
-                await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
-                return
+        if near_support and has_volume_spike:
+            last_alert_time[symbol] = now
+            print(f"Знайдено сигнал LONG (Спосіб 1: біля підтримки {sup}) для {symbol}!", flush=True)
+            await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
+            return
+        elif near_resistance and has_volume_spike:
+            last_alert_time[symbol] = now
+            print(f"Знайдено сигнал SHORT (Спосіб 1: біля опору {res}) для {symbol}!", flush=True)
+            await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
+            return
+        elif momentum_long:
+            last_alert_time[symbol] = now
+            print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
+            await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
+            return
+        elif momentum_short:
+            last_alert_time[symbol] = now
+            print(f"Знайдено сигнал SHORT (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
+            await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
+            return
     except Exception as e:
         print(f"Помилка сканування {symbol}: {e}", flush=True)
 
@@ -308,11 +309,11 @@ async def monitor_pos(session, pos, webhook):
 
     tp, full_close = False, False
     
-    # ДОДАНО БУФЕР 1% ДЛЯ ВИХОДУ ЗА EMA
+    # Буфер 1% для виходу за EMA
     ema_buffer = ema * 0.01
 
     if side == "LONG":
-        if cur_c < (ema - ema_buffer):  # Заккриваємось, тільки якщо впали нижче EMA більш ніж на 1%
+        if cur_c < (ema - ema_buffer):  # Закриваємось, тільки якщо впали нижче EMA більш ніж на 1%
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -324,7 +325,7 @@ async def monitor_pos(session, pos, webhook):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > (ema + ema_buffer):  # Заккриваємось, тільки якщо виросли вище EMA більш ніж на 1%
+        if cur_c > (ema + ema_buffer):  # Закриваємось, тільки якщо виросли вище EMA більш ніж на 1%
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -351,8 +352,8 @@ async def monitor_pos(session, pos, webhook):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            last_alert_time[sym] = time.time()  # Оновлюємо таймстамп кулдауну при закритті
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯграфіку `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            last_alert_time[sym] = time.time()  
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
@@ -371,7 +372,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (додано 1% буфер виходу за EMA та збільшено кулдаун)!", flush=True)
+    print("Бот запущено успішно (з 1% буфером EMA, підвищеним вимогам до імпульсів та кулдауном)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -412,4 +413,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+                                
