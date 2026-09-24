@@ -15,7 +15,7 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 0.5             
+BOT_MARGIN_USDT = 1.0             
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
