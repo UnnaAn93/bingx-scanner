@@ -13,7 +13,7 @@ TIMEFRAME = "15m"
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 300            
+COOLDOWN_SECONDS = 900            # Збільшено кулдаун до 15 хв після закриття монети
 LEVERAGE = 10                     
 BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
 
@@ -25,13 +25,12 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
 last_position_alert_time = {}     
-last_opposite_alert_time = {}     
 handled_partial_positions = set() 
 partial_exit_prices = {}          
 
 support_touches_count = {}        
 resistance_touches_count = {}     
-last_touch_candle_time = {}       # Зберігає час/індекс останньої свічки дотику для затримки в 3-4 свічки
+last_touch_candle_time = {}       
 
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -225,22 +224,17 @@ async def scan_coin(session, symbol, webhook, open_count):
         cur_vol, cur_price = vols[-1], closes[-1]
         avg_vol = sum(vols[:-1]) / (len(vols) - 1)
         
-        # Перевірка наявності сплеску об'єму
         has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
         
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
         
-        # --- СПОСІБ 1: Класичний підхід до рівнів (Підтримка/Опір + EMA + Об'єм) ---
         near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema)
         near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema)
         
-        # --- СПОСІБ 2: Імпульсний пробій за об'ємом уздовж EMA 50 (Без жорстких рівнів) ---
-        # Якщо є потужний об'єм і ціна закрилася вище EMA 50 (для Лонг) або нижче EMA 50 (для Шорт)
-        momentum_long = (has_volume_spike and cur_price > ema and closes[-2] <= ema) # перетин EMA знизу вгору на імпульсі
-        momentum_short = (has_volume_spike and cur_price < ema and closes[-2] >= ema) # перетин EMA зверху вниз на імпульсі
+        momentum_long = (has_volume_spike and cur_price > ema and closes[-2] <= ema)
+        momentum_short = (has_volume_spike and cur_price < ema and closes[-2] >= ema)
         
-        # Умови входу об'єднані через або (СКРИПТ ВІДКРИВАТИМЕ УГОДУ ПО БУДЬ-ЯКОМУ З ДВОХ СПОСІБІВ)
         if has_volume_spike:
             if near_support:
                 last_alert_time[symbol] = now
@@ -255,7 +249,6 @@ async def scan_coin(session, symbol, webhook, open_count):
             elif momentum_long:
                 last_alert_time[symbol] = now
                 print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з об'ємом) для {symbol}!", flush=True)
-                # Для стоп-лосу в імпульсному способі передаємо поточну EMA або нижній екстремум як базу
                 await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
                 return
             elif momentum_short:
@@ -267,7 +260,7 @@ async def scan_coin(session, symbol, webhook, open_count):
         print(f"Помилка сканування {symbol}: {e}", flush=True)
 
 async def monitor_pos(session, pos, webhook):
-    global last_position_alert_time, last_opposite_alert_time, handled_partial_positions, partial_exit_prices
+    global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global support_touches_count, resistance_touches_count, last_touch_candle_time
     
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
@@ -297,32 +290,29 @@ async def monitor_pos(session, pos, webhook):
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
     
-    if sym not in support_touches_count:
-        support_touches_count[sym] = 0
-    if sym not in resistance_touches_count:
-        resistance_touches_count[sym] = 0
-    if sym not in last_touch_candle_time:
-        last_touch_candle_time[sym] = 0
+    if sym not in support_touches_count: support_touches_count[sym] = 0
+    if sym not in resistance_touches_count: resistance_touches_count[sym] = 0
+    if sym not in last_touch_candle_time: last_touch_candle_time[sym] = 0
         
-    # Перевірка дотиків з інтервалом мінімум у 3-4 свічки
     candles_passed = len(kdata) - 1 - next((i for i, x in enumerate(kdata) if x['time'] == last_touch_candle_time[sym]), 0) if last_touch_candle_time[sym] > 0 else 99
     
     if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
         if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
             support_touches_count[sym] += 1
             last_touch_candle_time[sym] = current_candle_time
-            print(f"[{sym}] Шорт: зафіксовано дотик підтримки №{support_touches_count[sym]} (пройшло свічок: {candles_passed})", flush=True)
             
     elif side == "LONG" and resistance_level > 0 and 0 <= (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT:
         if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
             resistance_touches_count[sym] += 1
             last_touch_candle_time[sym] = current_candle_time
-            print(f"[{sym}] Лонг: зафіксовано дотик опору №{resistance_touches_count[sym]} (пройшло свічок: {candles_passed})", flush=True)
 
     tp, full_close = False, False
     
+    # ДОДАНО БУФЕР 1% ДЛЯ ВИХОДУ ЗА EMA
+    ema_buffer = ema * 0.01
+
     if side == "LONG":
-        if cur_c < ema:
+        if cur_c < (ema - ema_buffer):  # Заккриваємось, тільки якщо впали нижче EMA більш ніж на 1%
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -334,7 +324,7 @@ async def monitor_pos(session, pos, webhook):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > ema:
+        if cur_c > (ema + ema_buffer):  # Заккриваємось, тільки якщо виросли вище EMA більш ніж на 1%
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -361,7 +351,8 @@ async def monitor_pos(session, pos, webhook):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            last_alert_time[sym] = time.time()  # Оновлюємо таймстамп кулдауну при закритті
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯграфіку `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
@@ -380,7 +371,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (додано імпульсний спосіб входу за об'ємом уздовж EMA 50)!", flush=True)
+    print("Бот запущено успішно (додано 1% буфер виходу за EMA та збільшено кулдаун)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -421,4 +412,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
