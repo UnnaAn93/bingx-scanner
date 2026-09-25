@@ -7,16 +7,16 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 2.2                 # Збільшено суворість для рівня (відсікаємо слабкі об'єми)
-MOMENTUM_VOLUME_MULTIPLIER = 3.0        # Суворий фільтр для імпульсного пробою
+VOLUME_MULTIPLIER = 2.2                 
+MOMENTUM_VOLUME_MULTIPLIER = 3.0        
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 900            # Кулдаун 15 хв після закриття монети
+COOLDOWN_SECONDS = 900            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
+BOT_MARGIN_USDT = 1.0             
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -45,6 +45,8 @@ async def send_to_discord(session, url, msg):
             resp_text = await resp.text()
             if resp.status >= 400:
                 print(f"ПОМИЛКА Discord API [{resp.status}]: {resp_text}", flush=True)
+            else:
+                print(f"Повідомлення успішно надіслано в Discord: {msg[:30]}...", flush=True)
     except Exception as e:
         print(f"Виняток при відправці в Discord: {e}", flush=True)
 
@@ -401,8 +403,11 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (зі суворими об'ємами та логуванням Discord)!", flush=True)
+    print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
+        # Впевнений тестовий сигнал про оновлення скрипта в Discord
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
+        
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -439,4 +444,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
