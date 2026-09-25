@@ -108,7 +108,6 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
     if side == "LONG":
-        # Ставимо стоп за екстремум або з відступом у 1.5 ATR від рівня входу
         stop_p = round(min(level, kdata[-1]['low']) - (1.2 * atr), 5)
         stop_s, p_side = "SELL", "LONG"
     else:
@@ -142,10 +141,13 @@ async def open_bot_position(session, symbol, side, price, level, kdata, webhook)
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    stop_p = await set_initial_stop_loss(session, symbol, side, level, kdata)
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}` | Стоп: `{stop_p}`"
+                    # ГАРАНТОВАНО відправляємо сповіщення одразу після відкриття позиції
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}`"
                     print(msg, flush=True)
                     await send_to_discord(session, webhook, msg)
+                    
+                    # Намагаємось паралельно встановити стоп-лос
+                    await set_initial_stop_loss(session, symbol, side, level, kdata)
     except: pass
 
 async def close_partial(session, symbol, side, qty, webhook):
@@ -242,15 +244,13 @@ async def scan_coin(session, symbol, webhook, open_count):
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
         
-        near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema)
-        near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema)
+        near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT)
+        near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT)
         
-        # Перевірка на повноцінне тіло свічки (фільтр від хвостиків / пін-барів)
         candle_body = abs(cur_price - cur_open)
         candle_range = cur_high - cur_low
-        is_solid_candle = candle_range > 0 and (candle_body / candle_range) >= 0.40 # Тіло має складати не менше 40% від свічки
+        is_solid_candle = candle_range > 0 and (candle_body / candle_range) >= 0.40
         
-        # Покращений імпульсний пробій: закриття за EMA + попередні 2 свічки були по інший бік + підтвердження тілом
         momentum_long = (
             has_momentum_volume_spike and 
             is_solid_candle and
@@ -399,7 +399,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (з фільтрами тіла свічки та стабільними імпульсами)!", flush=True)
+    print("Бот запущено успішно (зі стабільними сповіщеннями в Discord)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -415,7 +415,7 @@ async def main():
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
                 
-                for p in positions:
+                For p in positions:
                     await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
                 
                 if len(positions) < 2:
@@ -440,4 +440,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                    
+        
