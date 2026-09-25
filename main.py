@@ -36,20 +36,34 @@ last_touch_candle_time = {}
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
-async def send_to_discord(session, url, msg):
-    if not url: 
-        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не налаштовано в середовищі!", flush=True)
-        return
+async def send_to_discord(session, msg):
+    """Надіслати сповіщення в Discord із виведенням детальних логів на Render"""
+    if not DISCORD_WEBHOOK_URL:
+        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не знайдено в змінних середовища Render!", flush=True)
+        return False
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Compatible; DiscordBot/1.0)"}
-        async with session.post(url, json={"content": msg}, headers=headers, timeout=5) as resp:
+        async with session.post(DISCORD_WEBHOOK_URL, json={"content": msg}, headers=headers, timeout=10) as resp:
             resp_text = await resp.text()
             if resp.status >= 400:
                 print(f"ПОМИЛКА Discord API [{resp.status}]: {resp_text}", flush=True)
+                return False
             else:
                 print(f"Повідомлення успішно надіслано в Discord: {msg[:30]}...", flush=True)
+                return True
     except Exception as e:
-        print(f"Виняток при відправці в Discord: {e}", flush=True)
+        print(f"КРИТИЧНИЙ ВИНЯТОК при відправці в Discord: {e}", flush=True)
+        return False
+
+async def periodic_report_task(session):
+    """Періодичний звіт кожні 15 хвилин"""
+    while True:
+        await asyncio.sleep(900)
+        try:
+            msg = "📊 **Кожні 15 хв: Звіт активності бота**\nСистема працює у штатному режимі, ринок сканується."
+            await send_to_discord(session, msg)
+        except Exception as e:
+            print(f"Помилка у фоновому звіті: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if len(closes) < period: return closes[-1] if closes else 0.0
@@ -132,7 +146,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     except: pass
     return None
 
-async def open_bot_position(session, symbol, side, price, level, kdata, webhook):
+async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
     await set_leverage(session, symbol, LEVERAGE, side)
     path = "/openApi/swap/v2/trade/order"
@@ -151,11 +165,11 @@ async def open_bot_position(session, symbol, side, price, level, kdata, webhook)
                 if res.get("code") == 0:
                     msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}`"
                     print(msg, flush=True)
-                    await send_to_discord(session, webhook, msg)
+                    await send_to_discord(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
     except: pass
 
-async def close_partial(session, symbol, side, qty, webhook):
+async def close_partial(session, symbol, side, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     c_side = "SELL" if side == "LONG" else "BUY"
@@ -220,7 +234,7 @@ async def fetch_kline(session, symbol):
     except: pass
     return None
 
-async def scan_coin(session, symbol, webhook, open_count):
+async def scan_coin(session, symbol, open_count):
     if open_count >= 2: return
     now = time.time()
     if symbol in last_alert_time and now - last_alert_time[symbol] < COOLDOWN_SECONDS: return
@@ -274,27 +288,27 @@ async def scan_coin(session, symbol, webhook, open_count):
         if near_support and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
             print(f"Знайдено сигнал LONG (Підтримка {sup}) для {symbol}!", flush=True)
-            await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
+            await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata)
             return
         elif near_resistance and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
             print(f"Знайдено сигнал SHORT (Опір {res}) для {symbol}!", flush=True)
-            await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
+            await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata)
             return
         elif momentum_long:
             last_alert_time[symbol] = now
             print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
-            await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
+            await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata)
             return
         elif momentum_short:
             last_alert_time[symbol] = now
             print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
-            await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
+            await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata)
             return
     except Exception as e:
         print(f"Помилка сканування {symbol}: {e}", flush=True)
 
-async def monitor_pos(session, pos, webhook):
+async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global support_touches_count, resistance_touches_count, last_touch_candle_time
     
@@ -370,15 +384,15 @@ async def monitor_pos(session, pos, webhook):
         
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
-        if part_q > 0 and await close_partial(session, sym, side, part_q, webhook):
+        if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c  
             msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
-            await send_to_discord(session, webhook, msg)
+            await send_to_discord(session, msg)
     elif full_close:
-        if await close_partial(session, sym, side, abs_amt, webhook):
+        if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
             partial_exit_prices.pop(sym, None)
             support_touches_count.pop(sym, None)
@@ -387,11 +401,11 @@ async def monitor_pos(session, pos, webhook):
             last_alert_time[sym] = time.time()  
             msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
-            await send_to_discord(session, webhook, msg)
+            await send_to_discord(session, msg)
     elif current_time - last_pos_time >= 900:
         msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
         print(f"Супровід активної позиції {sym} відправлено в Discord", flush=True)
-        await send_to_discord(session, webhook, msg)
+        await send_to_discord(session, msg)
         last_position_alert_time[sym] = current_time
 
 async def self_ping():
@@ -408,10 +422,13 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Тестове/стартове сповіщення для перевірки вебхука одразу після запуску
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
+        # Відправляємо тестове сповіщення про старт одразу при запуску
+        await send_to_discord(session, "🔄 **Скрипт успішно запущено та оновлено!** З'єднання з Discord активне.")
         
+        # Запускаємо фонові завдання (пінг та періодичний звіт)
         asyncio.create_task(self_ping())
+        asyncio.create_task(periodic_report_task(session))
+        
         while True:
             try:
                 start = asyncio.get_event_loop().time()
@@ -425,26 +442,15 @@ async def main():
                     last_touch_candle_time.clear()
                 
                 for p in positions:
-                    await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
+                    await monitor_pos(session, p)
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
                     if syms:
-                        tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
+                        tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
-                print(f"Помилка циклу: {e}", flush=True)
-                await asyncio.sleep(10)
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Bot is active!")
-    def log_message(self, format, *args): pass
-
-if __name__ == "__main__":
-    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
-    asyncio.run(main())
-        
+                print(f"П
