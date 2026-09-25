@@ -7,21 +7,20 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6                 # Базовий множник об'єму для рівнів
-MOMENTUM_VOLUME_MULTIPLIER = 2.5        # Суворіший множник об'єму для чистого пробою EMA
+VOLUME_MULTIPLIER = 1.6                 
+MOMENTUM_VOLUME_MULTIPLIER = 2.5        
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 900            # Кулдаун 15 хв після закриття монети
+COOLDOWN_SECONDS = 300            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
+BOT_MARGIN_USDT = 1.0             
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
@@ -38,13 +37,15 @@ def get_sign(secret, payload):
 
 async def send_to_discord(session, url, msg):
     if not url: 
-        print("Помилка: DISCORD_WEBHOOK_URL не задано!", flush=True)
+        print("Помилка: DISCORD_WEBHOOK_URL не задано в змінних середовища!", flush=True)
         return
     try:
         async with session.post(url, json={"content": msg}) as resp:
             text = await resp.text()
             if resp.status not in [200, 204]:
                 print(f"Помилка Discord API [{resp.status}]: {text}", flush=True)
+            else:
+                print("Повідомлення в Discord успішно надіслано!", flush=True)
     except Exception as e:
         print(f"Виняток при відправці в Discord: {e}", flush=True)
 
@@ -200,8 +201,7 @@ async def fetch_top_symbols(session):
                             if vol >= MIN_24H_VOLUME_USDT: res.append((sym, vol))
                         except: pass
                     res.sort(key=lambda x: x[1], reverse=True)
-                    top_list = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                    return top_list
+                    return [x[0] for x in res[:TOP_COINS_LIMIT]]
     except: pass
     return []
 
@@ -230,8 +230,11 @@ async def scan_coin(session, symbol, webhook, open_count):
         cur_vol, cur_price = vols[-1], closes[-1]
         avg_vol = sum(vols[:-1]) / (len(vols) - 1)
         
-        has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
-        has_momentum_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * MOMENTUM_VOLUME_MULTIPLIER)
+        if cur_vol <= 0 or avg_vol <= 0: return
+        
+        # Перевірка на два типи сплесків об'єму
+        has_volume_spike = (cur_vol >= avg_vol * VOLUME_MULTIPLIER)
+        has_momentum_volume_spike = (cur_vol >= avg_vol * MOMENTUM_VOLUME_MULTIPLIER)
         
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
@@ -242,26 +245,26 @@ async def scan_coin(session, symbol, webhook, open_count):
         momentum_long = (has_momentum_volume_spike and cur_price > ema and closes[-2] <= ema)
         momentum_short = (has_momentum_volume_spike and cur_price < ema and closes[-2] >= ema)
         
+        # Варіант 1: Відкриття біля рівня підтримки/опору зі звичайним сплеском об'єму (1.6x)
         if near_support and has_volume_spike:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Спосіб 1: біля підтримки {sup}) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал LONG (підтримка) для {symbol} біля {sup}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
-            return
         elif near_resistance and has_volume_spike:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Спосіб 1: біля опору {res}) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал SHORT (опір) для {symbol} біля {res}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
-            return
+            
+        # Варіант 2: Імпульсне відкриття при пробої EMA з великим об'ємом (2.5x)
         elif momentum_long:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал LONG (імпульс EMA) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
-            return
         elif momentum_short:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал SHORT (імпульс EMA) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
-            return
+            
     except Exception as e:
         print(f"Помилка сканування {symbol}: {e}", flush=True)
 
@@ -283,8 +286,7 @@ async def monitor_pos(session, pos, webhook):
     if not j_v or len(j_v) < 2: return
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
-    cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
-    cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
+    cur_c, cur_low, cur_high = kdata[-1]['close'], kdata[-1]['low'], kdata[-1]['high']
     current_candle_time = kdata[-1]['time']
     ema = calculate_ema([x['close'] for x in kdata], 50)
     
@@ -314,11 +316,8 @@ async def monitor_pos(session, pos, webhook):
 
     tp, full_close = False, False
     
-    # Буфер 1% для виходу за EMA
-    ema_buffer = ema * 0.01
-
     if side == "LONG":
-        if cur_c < (ema - ema_buffer):  
+        if cur_c < ema:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -330,7 +329,7 @@ async def monitor_pos(session, pos, webhook):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > (ema + ema_buffer):  
+        if cur_c > ema:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -357,31 +356,18 @@ async def monitor_pos(session, pos, webhook):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            last_alert_time[sym] = time.time()  
             msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
+        msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`"
         print(f"Супровід активної позиції {sym}", flush=True)
         await send_to_discord(session, webhook, msg)
         last_position_alert_time[sym] = current_time
 
-async def self_ping():
-    while True:
-        await asyncio.sleep(60)
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, timeout=5) as r:
-                    await r.text()
-        except: pass
-
 async def main():
-    print("Бот запущено успішно (з 1% буфером EMA, підвищеним вимогам до імпульсів та кулдауном)!", flush=True)
+    print("Бот запущено успішно (два варіанти об'ємів активні)!", flush=True)
     async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping())
-        
-        # Надсилаємо тестове сповіщення при запускi, щоб одразу перевірити зв'язок з Discord
         await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 Скрипт оновлено та успішно запущено!")
         
         while True:
