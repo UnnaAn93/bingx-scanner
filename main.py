@@ -41,7 +41,7 @@ def get_sign(secret, payload):
 
 async def send_to_telegram(session, msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
-        print("ПОМИЛКА: TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не налаштовано в середовищі!", flush=True)
+        print("ОШИБКА: TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не настроены в окружении!", flush=True)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
@@ -49,11 +49,11 @@ async def send_to_telegram(session, msg):
         async with session.post(url, json=payload, timeout=5) as resp:
             resp_text = await resp.text()
             if resp.status >= 400:
-                print(f"ПОМИЛКА Telegram API [{resp.status}]: {resp_text}", flush=True)
+                print(f"ОШИБКА Telegram API [{resp.status}]: {resp_text}", flush=True)
             else:
-                print(f"Повідомлення успішно надіслано в Telegram", flush=True)
+                print(f"Сообщение успешно отправлено в Telegram", flush=True)
     except Exception as e:
-        print(f"Виняток при відправці в Telegram: {e}", flush=True)
+        print(f"Исключение при отправке в Telegram: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if len(closes) < period: return closes[-1] if closes else 0.0
@@ -153,7 +153,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ `[{side}]`: `{symbol}` | Вхід: `{price}`"
+                    msg = f"🤖🚀 БОТ ОТКРЫЛ СДЕЛКУ `[{side}]`: `{symbol}` | Вход: `{price}`"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
@@ -186,10 +186,10 @@ async def set_break_even(session, symbol, side, entry):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
+                    print(f"[{symbol}] Стоп успешно перенесен в безубыток на цену {entry}", flush=True)
                     return True
     except Exception as e:
-        print(f"[{symbol}] Помилка встановлення беззбитку: {e}", flush=True)
+        print(f"[{symbol}] Ошибка установки безубытка: {e}", flush=True)
     return False
 
 async def fetch_top_symbols(session):
@@ -277,26 +277,26 @@ async def scan_coin(session, symbol, open_count):
         
         if near_support and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Підтримка {sup}) для {symbol}!", flush=True)
+            print(f"Найден сигнал LONG (Поддержка {sup}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata)
             return
         elif near_resistance and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Опір {res}) для {symbol}!", flush=True)
+            print(f"Найден сигнал SHORT (Сопротивление {res}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata)
             return
         elif momentum_long:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+            print(f"Найден сигнал LONG (Импульсный пробой EMA 50) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata)
             return
         elif momentum_short:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+            print(f"Найден сигнал SHORT (Импульсный пробой EMA 50) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata)
             return
     except Exception as e:
-        print(f"Помилка сканування {symbol}: {e}", flush=True)
+        print(f"Ошибка сканирования {symbol}: {e}", flush=True)
 
 async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
@@ -347,8 +347,6 @@ async def monitor_pos(session, pos):
             last_touch_candle_time[sym] = current_candle_time
 
     tp, full_close = False, False
-    
-    # Використання EMA + ATR для буфера повного закриття
     ema_atr_buffer = 1.2 * atr
 
     if side == "LONG":
@@ -383,7 +381,7 @@ async def monitor_pos(session, pos):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c  
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🎯 ЧАСТИЧНЫЙ ТЕЙК 75% `{sym}` *({side})* | Цена: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif full_close:
@@ -394,12 +392,12 @@ async def monitor_pos(session, pos):
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
             last_alert_time[sym] = time.time()  
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🏁 ПОЛНОЕ ЗАКРЫТИЕ `{sym}` *({side})* | Цена: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
-        print(f"Супровід активної позиції {sym} відправлено в Telegram", flush=True)
+        msg = f"📊 Сопровождение позиции `{sym}` *({side})*:\n• Вход: `{entry}` | Цена: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиция в работе."
+        print(f"Сопровождение активной позиции {sym} отправлено в Telegram", flush=True)
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
 
@@ -414,9 +412,9 @@ async def self_ping():
             pass
 
 async def main():
-    print("Бот запущено успішно!", flush=True)
+    print("Бот запущен успешно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт успішно оновлено:* умова закриття по EMA тепер використовує волатильність ATR.")
+        await send_to_telegram(session, "🔄 *Скрипт успешно обновлен:* синтаксис исправлен, EMA + ATR активны.")
         
         asyncio.create_task(self_ping())
         while True:
@@ -443,13 +441,17 @@ async def main():
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
-                print(f"Помилка циклу: {e}", flush=True)
+                print(f"Ошибка цикла: {e}", flush=True)
                 await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"Bot is active!")
-    def log_message(self, format, *args): pass
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active!")
+    def log_message(self, format, *args):
+        pass
 
 if __name__ == "__main__":
-    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHand
+    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
+    asyncio.run(m
