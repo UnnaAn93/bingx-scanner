@@ -163,7 +163,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     if len(current_positions) >= 2: return
 
     balance = await fetch_account_balance(session)
-    margin_usdt = balance * 0.10  # 10% від поточного балансу
+    margin_usdt = balance * 0.10  # 10% від балансу
     if margin_usdt < 0.5: 
         margin_usdt = 1.0
 
@@ -294,14 +294,18 @@ async def scan_coin(session, symbol, open_count):
             cur_price < ema and closes[-2] >= ema and closes[-3] >= ema
         )
         
-        if near_support and has_volume_spike and is_solid_candle:
+        # Умова 1: Підтримка ТІЛЬКИ якщо вона вище EMA 50 (інакше лонг не відкриваємо)
+        if near_support and has_volume_spike and is_solid_candle and sup > ema:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata)
             return
-        elif near_resistance and has_volume_spike and is_solid_candle:
+            
+        # Умова 2: Опір ТІЛЬКИ якщо він нижче EMA 50 (інакше шорт не відкриваємо)
+        elif near_resistance and has_volume_spike and is_solid_candle and res < ema:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata)
             return
+            
         elif momentum_long:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata)
@@ -420,7 +424,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено (10% від балансу + нова логіка закриття)*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано фільтр EMA для підтримки/опору!*")
         asyncio.create_task(self_ping())
         while True:
             try:
