@@ -7,7 +7,7 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6           
+VOLUME_MULTIPLIER = 1.6                 
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
@@ -277,7 +277,6 @@ async def monitor_pos(session, pos, webhook):
     if sym not in last_touch_candle_time:
         last_touch_candle_time[sym] = 0
         
-    # Перевірка дотиків з інтервалом мінімум у 3-4 свічки (щоб не рахувати сусідні свічки шумом)
     candles_passed = len(kdata) - 1 - next((i for i, x in enumerate(kdata) if x['time'] == last_touch_candle_time[sym]), 0) if last_touch_candle_time[sym] > 0 else 99
     
     if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
@@ -376,7 +375,7 @@ async def main():
                     syms = await fetch_top_symbols(session)
                     print(f"Отримано топ монет для перевірки: {len(syms)}", flush=True)
                     if syms:
-                        tasks = [scan_coin(session, s, DISUNCIL_WEBHOOK_URL if 'DISUNCIL_WEBHOOK_URL' in globals() else DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
+                        tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
