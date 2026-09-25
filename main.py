@@ -110,7 +110,8 @@ async def fetch_open_positions(session):
                 data = await r.json()
                 if data.get("code") == 0:
                     return [p for p in data.get("data", []) if float(p.get("positionAmt", 0)) != 0]
-    except: pass
+    except Exception:
+        pass
     return []
 
 async def set_leverage(session, symbol, lev, side):
@@ -122,7 +123,8 @@ async def set_leverage(session, symbol, lev, side):
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             pass
-    except: pass
+    except Exception:
+        pass
 
 async def set_initial_stop_loss(session, symbol, side, level, kdata):
     path = "/openApi/swap/v2/trade/stopOrder"
@@ -142,7 +144,8 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0: return stop_p
-    except: pass
+    except Exception:
+        pass
     return None
 
 async def open_bot_position(session, symbol, side, price, level, kdata):
@@ -166,7 +169,8 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
                     print(msg, flush=True)
                     await send_to_discord(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
-    except: pass
+    except Exception:
+        pass
 
 async def close_partial(session, symbol, side, qty):
     path = "/openApi/swap/v2/trade/order"
@@ -180,7 +184,8 @@ async def close_partial(session, symbol, side, qty):
             if r.status == 200:
                 res = await r.json()
                 return res.get("code") == 0
-    except: pass
+    except Exception:
+        pass
     return False
 
 async def set_break_even(session, symbol, side, entry):
@@ -214,11 +219,13 @@ async def fetch_top_symbols(session):
                         try:
                             vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
                             if vol >= MIN_24H_VOLUME_USDT: res.append((sym, vol))
-                        except: pass
+                        except Exception:
+                            pass
                     res.sort(key=lambda x: x[1], reverse=True)
                     top_list = [x[0] for x in res[:TOP_COINS_LIMIT]]
                     return top_list
-    except: pass
+    except Exception:
+        pass
     return []
 
 async def fetch_kline(session, symbol):
@@ -230,7 +237,8 @@ async def fetch_kline(session, symbol):
                     raw = data.get("data", [])
                     raw.sort(key=lambda x: int(x.get("time", x.get("openTime", 0))))
                     return [{"time": int(x.get("time", x.get("openTime", 0))), "open": float(x['open']), "close": float(x['close']), "high": float(x['high']), "low": float(x['low']), "volume": float(x['volume'])} for x in raw]
-    except: pass
+    except Exception:
+        pass
     return None
 
 async def scan_coin(session, symbol, open_count):
@@ -420,7 +428,7 @@ async def self_ping():
             async with aiohttp.ClientSession() as s:
                 async with s.get(RENDER_URL, headers=headers, timeout=5) as r:
                     await r.text()
-        except: 
+        except Exception: 
             pass
 
 async def main():
@@ -453,8 +461,4 @@ async def main():
                             tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in open_syms]
                             await asyncio.gather(*tasks)
                             
-                    elapsed = asyncio.get_event_loop().time() - start
-                    await asyncio.sleep(max(1, 60 - elapsed))
-                except Exception as e:
-                    print(f"Помилка циклу: {e}", flush=True)
-       
+                    elapsed = asyncio.get_event_loop().time() - s
