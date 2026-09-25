@@ -342,7 +342,9 @@ async def monitor_pos(session, pos):
         if (near_res or price_take) and not is_volume_breakout:
             tp_75 = True
 
-        if cur_c < (ema * 0.995) and kdata[-2]['close'] < ema:
+        # Захист від передчасного закриття: закриваємо по EMA тільки якщо ціна дійсно нижче EMA і в мінусі відносно входу
+        ema_break = (cur_c < ema * 0.995) and (kdata[-2]['close'] < ema) and (cur_c < entry)
+        if ema_break:
             full_close = True
 
     elif side == "SHORT":
@@ -360,7 +362,9 @@ async def monitor_pos(session, pos):
         if (near_sup or price_take) and not is_volume_breakout:
             tp_75 = True
 
-        if cur_c > (ema * 1.005) and kdata[-2]['close'] > ema:
+        # Захист від передчасного закриття: закриваємо по EMA тільки якщо ціна дійсно вище EMA і в мінусі відносно входу
+        ema_break = (cur_c > ema * 1.005) and (kdata[-2]['close'] > ema) and (cur_c > entry)
+        if ema_break:
             full_close = True
 
     if tp_75 and sym not in handled_partial_positions:
@@ -374,7 +378,7 @@ async def monitor_pos(session, pos):
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
             position_extremes.pop(sym, None)
-            last_alert_time[sym] = current_time
+            last_alert_time[symbol] = current_time
             msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (Трейлінг/EMA) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
@@ -394,7 +398,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано трейлінг-стоп та фільтр об'ємного пробиття!*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано захист від передчасного закриття по EMA!*")
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -427,4 +431,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                                                       
+                           
