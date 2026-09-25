@@ -7,16 +7,16 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 2.2                 
-MOMENTUM_VOLUME_MULTIPLIER = 3.0        
+VOLUME_MULTIPLIER = 1.6                 # Базовий множник об'єму для рівнів
+MOMENTUM_VOLUME_MULTIPLIER = 2.5        # Суворіший множник об'єму для чистого пробою EMA
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
 TOP_COINS_LIMIT = 150             
 MIN_24H_VOLUME_USDT = 5_000_000   
-COOLDOWN_SECONDS = 900            
+COOLDOWN_SECONDS = 900            # Кулдаун 15 хв після закриття монети
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 1.0             
+BOT_MARGIN_USDT = 1.0             # Маржа 1.0 USDT
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -38,16 +38,13 @@ def get_sign(secret, payload):
 
 async def send_to_discord(session, url, msg):
     if not url: 
-        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не налаштовано в середовищі!", flush=True)
+        print("Помилка: DISCORD_WEBHOOK_URL не задано!", flush=True)
         return
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Compatible; DiscordBot/1.0)"}
-        async with session.post(url, json={"content": msg}, headers=headers, timeout=5) as resp:
-            resp_text = await resp.text()
-            if resp.status >= 400:
-                print(f"ПОМИЛКА Discord API [{resp.status}]: {resp_text}", flush=True)
-            else:
-                print(f"Повідомлення успішно надіслано в Discord: {msg[:30]}...", flush=True)
+        async with session.post(url, json={"content": msg}) as resp:
+            text = await resp.text()
+            if resp.status not in [200, 204]:
+                print(f"Помилка Discord API [{resp.status}]: {text}", flush=True)
     except Exception as e:
         print(f"Виняток при відправці в Discord: {e}", flush=True)
 
@@ -116,10 +113,10 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
     if side == "LONG":
-        stop_p = round(min(level, kdata[-1]['low']) - (1.2 * atr), 5)
+        stop_p = round(level - (1.5 * atr), 5)
         stop_s, p_side = "SELL", "LONG"
     else:
-        stop_p = round(max(level, kdata[-1]['high']) + (1.2 * atr), 5)
+        stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
     
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
@@ -149,10 +146,10 @@ async def open_bot_position(session, symbol, side, price, level, kdata, webhook)
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}`"
+                    stop_p = await set_initial_stop_loss(session, symbol, side, level, kdata)
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}` | Стоп: `{stop_p}`"
                     print(msg, flush=True)
                     await send_to_discord(session, webhook, msg)
-                    await set_initial_stop_loss(session, symbol, side, level, kdata)
     except: pass
 
 async def close_partial(session, symbol, side, qty, webhook):
@@ -216,7 +213,7 @@ async def fetch_kline(session, symbol):
                 if data.get("code") == 0:
                     raw = data.get("data", [])
                     raw.sort(key=lambda x: int(x.get("time", x.get("openTime", 0))))
-                    return [{"time": int(x.get("time", x.get("openTime", 0))), "open": float(x['open']), "close": float(x['close']), "high": float(x['high']), "low": float(x['low']), "volume": float(x['volume'])} for x in raw]
+                    return [{"time": int(x.get("time", x.get("openTime", 0))), "close": float(x['close']), "high": float(x['high']), "low": float(x['low']), "volume": float(x['volume'])} for x in raw]
     except: pass
     return None
 
@@ -229,18 +226,8 @@ async def scan_coin(session, symbol, webhook, open_count):
     if not kdata or len(kdata) < 60: return
     
     try:
-        closes = [x['close'] for x in kdata]
-        opens = [x['open'] for x in kdata]
-        vols = [x['volume'] for x in kdata]
-        lows = [x['low'] for x in kdata]
-        highs = [x['high'] for x in kdata]
-        
-        cur_vol = vols[-1]
-        cur_price = closes[-1]
-        cur_open = opens[-1]
-        cur_high = highs[-1]
-        cur_low = lows[-1]
-        
+        closes, vols, lows, highs = [x['close'] for x in kdata], [x['volume'] for x in kdata], [x['low'] for x in kdata], [x['high'] for x in kdata]
+        cur_vol, cur_price = vols[-1], closes[-1]
         avg_vol = sum(vols[:-1]) / (len(vols) - 1)
         
         has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
@@ -249,46 +236,30 @@ async def scan_coin(session, symbol, webhook, open_count):
         ema = calculate_ema(closes, 50)
         sup, res = min(lows[:-1]), max(highs[:-1])
         
-        near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT)
-        near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT)
+        near_support = (sup > 0 and 0 <= (cur_price - sup) / sup <= APPROACH_PERCENT and cur_price > ema)
+        near_resistance = (res > 0 and 0 <= (res - cur_price) / res <= APPROACH_PERCENT and cur_price < ema)
         
-        candle_body = abs(cur_price - cur_open)
-        candle_range = cur_high - cur_low
-        is_solid_candle = candle_range > 0 and (candle_body / candle_range) >= 0.40
+        momentum_long = (has_momentum_volume_spike and cur_price > ema and closes[-2] <= ema)
+        momentum_short = (has_momentum_volume_spike and cur_price < ema and closes[-2] >= ema)
         
-        momentum_long = (
-            has_momentum_volume_spike and 
-            is_solid_candle and
-            cur_price > ema and 
-            closes[-2] <= ema and 
-            closes[-3] <= ema
-        )
-        momentum_short = (
-            has_momentum_volume_spike and 
-            is_solid_candle and
-            cur_price < ema and 
-            closes[-2] >= ema and 
-            closes[-3] >= ema
-        )
-        
-        if near_support and has_volume_spike and is_solid_candle:
+        if near_support and has_volume_spike:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Підтримка {sup}) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал LONG (Спосіб 1: біля підтримки {sup}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata, webhook)
             return
-        elif near_resistance and has_volume_spike and is_solid_candle:
+        elif near_resistance and has_volume_spike:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Опір {res}) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал SHORT (Спосіб 1: біля опору {res}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata, webhook)
             return
         elif momentum_long:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал LONG (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata, webhook)
             return
         elif momentum_short:
             last_alert_time[symbol] = now
-            print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+            print(f"Знайдено сигнал SHORT (Спосіб 2: імпульсний пробій EMA 50 з підвищеним об'ємом) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata, webhook)
             return
     except Exception as e:
@@ -342,10 +313,12 @@ async def monitor_pos(session, pos, webhook):
             last_touch_candle_time[sym] = current_candle_time
 
     tp, full_close = False, False
+    
+    # Буфер 1% для виходу за EMA
     ema_buffer = ema * 0.01
 
     if side == "LONG":
-        if cur_c < (ema - ema_buffer):
+        if cur_c < (ema - ema_buffer):  
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -357,7 +330,7 @@ async def monitor_pos(session, pos, webhook):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > (ema + ema_buffer):
+        if cur_c > (ema + ema_buffer):  
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -390,7 +363,7 @@ async def monitor_pos(session, pos, webhook):
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
         msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
-        print(f"Супровід активної позиції {sym} відправлено в Discord", flush=True)
+        print(f"Супровід активної позиції {sym}", flush=True)
         await send_to_discord(session, webhook, msg)
         last_position_alert_time[sym] = current_time
 
@@ -398,23 +371,23 @@ async def self_ping():
     while True:
         await asyncio.sleep(60)
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Compatible; RenderPingBot/1.0)"}
             async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, headers=headers, timeout=5) as r:
+                async with s.get(RENDER_URL, timeout=5) as r:
                     await r.text()
-        except: 
-            pass
+        except: pass
 
 async def main():
-    print("Бот запущено успішно!", flush=True)
+    print("Бот запущено успішно (з 1% буфером EMA, підвищеним вимогам до імпульсів та кулдауном)!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Тестове/стартове сповіщення для перевірки вебхука одразу після запуску
-        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
-        
         asyncio.create_task(self_ping())
+        
+        # Надсилаємо тестове сповіщення при запускi, щоб одразу перевірити зв'язок з Discord
+        await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 Скрипт оновлено та успішно запущено!")
+        
         while True:
             try:
                 start = asyncio.get_event_loop().time()
+                print("--- Початок нового циклу сканування ринку ---", flush=True)
                 positions = await fetch_open_positions(session)
                 open_syms = [p.get("symbol") for p in positions]
                 if not positions: 
@@ -429,11 +402,13 @@ async def main():
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
+                    print(f"Отримано топ монет для перевірки: {len(syms)}", flush=True)
                     if syms:
                         tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
+                print(f"Цикл завершено за {elapsed:.2f} сек. Очікування...", flush=True)
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
@@ -447,4 +422,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                                
+    
