@@ -408,7 +408,7 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Тестове/стартове сповіщення, яке тепер гарантовано перевіряє успіх запиту
+        # Тестове/стартове сповіщення для перевірки вебхука одразу після запуску
         await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
         
         asyncio.create_task(self_ping())
@@ -447,4 +447,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
