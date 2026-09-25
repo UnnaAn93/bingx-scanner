@@ -7,8 +7,8 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 2.2                 
-MOMENTUM_VOLUME_MULTIPLIER = 3.0        
+VOLUME_MULTIPLIER = 2.5                 
+MOMENTUM_VOLUME_MULTIPLIER = 3.5        
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
@@ -90,8 +90,7 @@ async def fetch_account_balance(session):
                 data = await r.json()
                 if data.get("code") == 0:
                     balance_info = data.get("data", {}).get("balance", {})
-                    free_margin = float(balance_info.get("freeMargin", balance_info.get("balance", 10.0)))
-                    return free_margin
+                    return float(balance_info.get("freeMargin", balance_info.get("balance", 10.0)))
     except: pass
     return 10.0
 
@@ -126,10 +125,10 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
     if side == "LONG":
-        stop_p = round(min(level, kdata[-1]['low']) - (1.2 * atr), 5)
+        stop_p = round(min(level, kdata[-1]['low']) - (1.5 * atr), 5)
         stop_s, p_side = "SELL", "LONG"
     else:
-        stop_p = round(max(level, kdata[-1]['high']) + (1.2 * atr), 5)
+        stop_p = round(max(level, kdata[-1]['high']) + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
     
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
@@ -157,37 +156,6 @@ async def update_trailing_stop(session, symbol, side, new_stop_price):
     except: pass
     return False
 
-async def open_bot_position(session, symbol, side, price, level, kdata):
-    if not API_KEY or not API_SECRET: return
-    current_positions = await fetch_open_positions(session)
-    if len(current_positions) >= 2: return
-
-    balance = await fetch_account_balance(session)
-    margin_usdt = balance * 0.10  # 10% від балансу
-    if margin_usdt < 0.5: 
-        margin_usdt = 1.0
-
-    await set_leverage(session, symbol, LEVERAGE, side)
-    path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
-    qty = round((margin_usdt * LEVERAGE) / price, 4)
-    if qty <= 0: return
-    
-    o_side = "BUY" if side == "LONG" else "SELL"
-    p_side = "LONG" if side == "LONG" else "SHORT"
-    p_str = f"positionSide={p_side}&quantity={qty}&side={o_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
-    sig = get_sign(API_SECRET, p_str)
-    try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-            if r.status == 200:
-                res = await r.json()
-                if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ *[{side}]*: `{symbol}` | Маржа: `{margin_usdt:.2f}$` (10%) | Вхід: `{price}`"
-                    print(msg, flush=True)
-                    await send_to_telegram(session, msg)
-                    await set_initial_stop_loss(session, symbol, side, level, kdata)
-    except: pass
-
 async def close_partial(session, symbol, side, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
@@ -202,6 +170,44 @@ async def close_partial(session, symbol, side, qty):
                 return res.get("code") == 0
     except: pass
     return False
+
+async def open_bot_position(session, symbol, side, price, level, kdata):
+    if not API_KEY or not API_SECRET: return
+    current_positions = await fetch_open_positions(session)
+    if len(current_positions) >= 2: return
+
+    balance = await fetch_account_balance(session)
+    margin_usdt = balance * 0.10
+    if margin_usdt < 0.5: margin_usdt = 1.0
+
+    await set_leverage(session, symbol, LEVERAGE, side)
+    path = "/openApi/swap/v2/trade/order"
+    ts = str(int(time.time() * 1000))
+    qty = round((margin_usdt * LEVERAGE) / price, 4)
+    if qty <= 0: return
+    
+    o_side = "BUY" if side == "LONG" else "SELL"
+    p_side = "LONG" if side == "LONG" else "SHORT"
+    p_str = f"positionSide={p_side}&quantity={qty}&side={o_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
+    sig = get_sign(API_SECRET, p_str)
+    
+    try:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            if r.status == 200:
+                res = await r.json()
+                if res.get("code") == 0:
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ *[{side}]*: `{symbol}` | Маржа: `{margin_usdt:.2f}$` | Вхід: `{price}`"
+                    print(msg, flush=True)
+                    await send_to_telegram(session, msg)
+                    
+                    # Перевірка стоп-лоссу: якщо не встановився — закриваємо позицію негайно
+                    stop_set = await set_initial_stop_loss(session, symbol, side, level, kdata)
+                    if not stop_set:
+                        err_msg = f"🚨 *КРИТИЧНА ПОМИЛКА*: Не вдалося встановити стоп для `{symbol}`! Екстрене закриття позиції."
+                        print(err_msg, flush=True)
+                        await send_to_telegram(session, err_msg)
+                        await close_partial(session, symbol, side, qty)
+    except: pass
 
 async def set_break_even(session, symbol, side, entry):
     path = "/openApi/swap/v2/trade/stopOrder"
@@ -285,23 +291,20 @@ async def scan_coin(session, symbol, open_count):
         candle_range = cur_high - cur_low
         is_solid_candle = candle_range > 0 and (candle_body / candle_range) >= 0.40
         
+        # Видалено небезпечний momentum_short, залишено лише безпечний трендовий лонг на пробій EMA вгору
         momentum_long = (
             has_momentum_volume_spike and is_solid_candle and
             cur_price > ema and closes[-2] <= ema and closes[-3] <= ema
         )
-        momentum_short = (
-            has_momentum_volume_spike and is_solid_candle and
-            cur_price < ema and closes[-2] >= ema and closes[-3] >= ema
-        )
         
-        # Умова 1: Підтримка ТІЛЬКИ якщо вона вище EMA 50 (інакше лонг не відкриваємо)
-        if near_support and has_volume_spike and is_solid_candle and sup > ema:
+        # Умова 1: Лонг від підтримки ТІЛЬКИ якщо підтримка вище EMA 50
+        if near_support and has_volume_spike and is_solid_candle and sup > ema and cur_price > cur_open:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata)
             return
             
-        # Умова 2: Опір ТІЛЬКИ якщо він нижче EMA 50 (інакше шорт не відкриваємо)
-        elif near_resistance and has_volume_spike and is_solid_candle and res < ema:
+        # Умова 2: Шорт від опору ЗАБОРОНЕНИЙ, якщо ціна або опір вище EMA 50 (захист від тренду)
+        elif near_resistance and has_volume_spike and is_solid_candle and res < ema and cur_price < ema and cur_price < cur_open:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata)
             return
@@ -309,10 +312,6 @@ async def scan_coin(session, symbol, open_count):
         elif momentum_long:
             last_alert_time[symbol] = now
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata)
-            return
-        elif momentum_short:
-            last_alert_time[symbol] = now
-            await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata)
             return
     except: pass
 
@@ -424,7 +423,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано фільтр EMA для підтримки/опору!*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено: заблоковано шорти проти тренду та додано захист стоп-лоссу!*")
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -457,4 +456,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
