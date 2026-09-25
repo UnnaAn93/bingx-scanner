@@ -38,10 +38,11 @@ def get_sign(secret, payload):
 
 async def send_to_discord(session, url, msg):
     if not url: 
-        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не налаштовано!", flush=True)
+        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не налаштовано в середовищі!", flush=True)
         return
     try:
-        async with session.post(url, json={"content": msg}) as resp:
+        headers = {"User-Agent": "Mozilla/5.0 (Compatible; DiscordBot/1.0)"}
+        async with session.post(url, json={"content": msg}, headers=headers, timeout=5) as resp:
             resp_text = await resp.text()
             if resp.status >= 400:
                 print(f"ПОМИЛКА Discord API [{resp.status}]: {resp_text}", flush=True)
@@ -407,6 +408,7 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
+        # Тестове/стартове сповіщення, яке тепер гарантовано перевіряє успіх запиту
         await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
         
         asyncio.create_task(self_ping())
