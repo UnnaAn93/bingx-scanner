@@ -7,8 +7,8 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6                 # Базовий множник об'єму для рівнів
-MOMENTUM_VOLUME_MULTIPLIER = 2.8        # Збільшено суворість для пробою (фільтруємо шум)
+VOLUME_MULTIPLIER = 2.2                 # Збільшено суворість для рівня (відсікаємо слабкі об'єми)
+MOMENTUM_VOLUME_MULTIPLIER = 3.0        # Суворий фільтр для імпульсного пробою
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
@@ -37,11 +37,16 @@ def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
 async def send_to_discord(session, url, msg):
-    if not url: return
+    if not url: 
+        print("ПОМИЛКА: DISCORD_WEBHOOK_URL не налаштовано!", flush=True)
+        return
     try:
         async with session.post(url, json={"content": msg}) as resp:
-            await resp.text()
-    except: pass
+            resp_text = await resp.text()
+            if resp.status >= 400:
+                print(f"ПОМИЛКА Discord API [{resp.status}]: {resp_text}", flush=True)
+    except Exception as e:
+        print(f"Виняток при відправці в Discord: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if len(closes) < period: return closes[-1] if closes else 0.0
@@ -382,7 +387,7 @@ async def monitor_pos(session, pos, webhook):
             await send_to_discord(session, webhook, msg)
     elif current_time - last_pos_time >= 900:
         msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
-        print(f"Супровід активної позиції {sym}", flush=True)
+        print(f"Супровід активної позиції {sym} відправлено в Discord", flush=True)
         await send_to_discord(session, webhook, msg)
         last_position_alert_time[sym] = current_time
 
@@ -396,13 +401,12 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (зі стабільними сповіщеннями в Discord)!", flush=True)
+    print("Бот запущено успішно (зі суворими об'ємами та логуванням Discord)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
             try:
                 start = asyncio.get_event_loop().time()
-                print("--- Початок нового циклу сканування ринку ---", flush=True)
                 positions = await fetch_open_positions(session)
                 open_syms = [p.get("symbol") for p in positions]
                 if not positions: 
@@ -417,13 +421,11 @@ async def main():
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
-                    print(f"Отримано топ монет для перевірки: {len(syms)}", flush=True)
                     if syms:
                         tasks = [scan_coin(session, s, DISCORD_WEBHOOK_URL, len(positions)) for s in syms if s not in open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
-                print(f"Цикл завершено за {elapsed:.2f} сек. Очікування...", flush=True)
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
@@ -437,4 +439,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
