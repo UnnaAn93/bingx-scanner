@@ -16,7 +16,6 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 900            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 1.0             
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -78,6 +77,23 @@ def calculate_kdj(kdata, n=9, m1=3, m2=3):
         j = 3 * k - 2 * d
         k_l.append(k); d_l.append(d); j_l.append(j)
     return k_l, d_l, j_l
+
+async def fetch_account_balance(session):
+    if not API_KEY or not API_SECRET: return 10.0
+    path = "/openApi/swap/v2/user/balance"
+    ts = str(int(time.time() * 1000))
+    sig = get_sign(API_SECRET, f"timestamp={ts}")
+    url = f"{BINGX_BASE_URL}{path}?timestamp={ts}&signature={sig}"
+    try:
+        async with session.get(url, headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            if r.status == 200:
+                data = await r.json()
+                if data.get("code") == 0:
+                    balance_info = data.get("data", {}).get("balance", {})
+                    free_margin = float(balance_info.get("freeMargin", balance_info.get("balance", 10.0)))
+                    return free_margin
+    except: pass
+    return 10.0
 
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET: return []
@@ -146,10 +162,15 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     current_positions = await fetch_open_positions(session)
     if len(current_positions) >= 2: return
 
+    balance = await fetch_account_balance(session)
+    margin_usdt = balance * 0.10  # 10% від поточного балансу
+    if margin_usdt < 0.5: 
+        margin_usdt = 1.0
+
     await set_leverage(session, symbol, LEVERAGE, side)
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
-    qty = round((BOT_MARGIN_USDT * LEVERAGE) / price, 4)
+    qty = round((margin_usdt * LEVERAGE) / price, 4)
     if qty <= 0: return
     
     o_side = "BUY" if side == "LONG" else "SELL"
@@ -161,7 +182,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ *[{side}]*: `{symbol}` | Вхід: `{price}`"
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ *[{side}]*: `{symbol}` | Маржа: `{margin_usdt:.2f}$` (10%) | Вхід: `{price}`"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
@@ -311,8 +332,9 @@ async def monitor_pos(session, pos):
     vols = [x['volume'] for x in kdata[:-1]]
     avg_vol = sum(vols) / len(vols) if vols else cur_vol
     
-    ema = calculate_ema([x['close'] for x in kdata], 50)
     atr = calculate_atr(kdata, 14)
+    k_v, d_v, j_v = calculate_kdj(kdata)
+    cur_j = j_v[-1] if j_v else 50
     
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
@@ -342,9 +364,10 @@ async def monitor_pos(session, pos):
         if (near_res or price_take) and not is_volume_breakout:
             tp_75 = True
 
-        ema_break = (cur_c < ema * 0.995) and (kdata[-2]['close'] < ema) and (cur_c < entry)
-        if ema_break:
-            full_close = True
+        if sym in partial_exit_prices:
+            target_full_price = partial_exit_prices[sym] * 1.02
+            if cur_c >= target_full_price and cur_j > 80:
+                full_close = True
 
     elif side == "SHORT":
         if cur_low < position_extremes[sym]:
@@ -361,27 +384,28 @@ async def monitor_pos(session, pos):
         if (near_sup or price_take) and not is_volume_breakout:
             tp_75 = True
 
-        ema_break = (cur_c > ema * 1.005) and (kdata[-2]['close'] > ema) and (cur_c > entry)
-        if ema_break:
-            full_close = True
+        if sym in partial_exit_prices:
+            target_full_price = partial_exit_prices[sym] * 0.98
+            if cur_c <= target_full_price and cur_j < 20:
+                full_close = True
 
     if tp_75 and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
+            partial_exit_prices[sym] = cur_c
             msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* біля рівня! | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
+            partial_exit_prices.pop(sym, None)
             position_extremes.pop(sym, None)
             last_alert_time[sym] = current_time
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (Трейлінг/EMA) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (+2% після тейку + KDJ) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        k_v, d_v, j_v = calculate_kdj(kdata)
-        cur_j = j_v[-1] if j_v else 0
         msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• J: `{cur_j:.1f}`\n✅ Позиція в роботі."
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
@@ -396,7 +420,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено та помилки виправлено!*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено (10% від балансу + нова логіка закриття)*")
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -429,4 +453,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                
+        
