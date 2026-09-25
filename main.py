@@ -20,10 +20,13 @@ BOT_MARGIN_USDT = 1.0
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+
+# Налаштування Telegram
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
-# Заголовки браузера, щоб біржа/Cloudflare не блокували запити з Render
 REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -40,22 +43,28 @@ last_touch_candle_time = {}
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
-async def send_to_discord(session, msg):
-    url = DISCORD_WEBHOOK_URL
-    if not url:
-        print("❌ ПОМИЛКА: DISCORD_WEBHOOK_URL не заданий у змінних середовища Render!", flush=True)
+async def send_to_telegram(session, msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ ПОМИЛКА: TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не задані в Render!", flush=True)
         return
     
-    print(f"🔄 Спроба надіслати в Discord: {msg}", flush=True)
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": msg,
+        "parse_mode": "Markdown"
+    }
+    
+    print(f"🔄 Відправка в Telegram: {msg[:30]}...", flush=True)
     try:
-        async with session.post(url, json={"content": msg}, timeout=10) as resp:
-            resp_text = await resp.text()
-            if resp.status in [200, 204]:
-                print("✅ УСПІХ: Повідомлення успішно доставлено в Discord!", flush=True)
+        async with session.post(url, json=payload, timeout=10) as resp:
+            if resp.status == 200:
+                print("✅ УСПІХ: Повідомлення доставлено в Telegram!", flush=True)
             else:
-                print(f"❌ ПОМИЛКА DISCORD [{resp.status}]: {resp_text}", flush=True)
+                resp_text = await resp.text()
+                print(f"❌ ПОМИЛКА TELEGRAM [{resp.status}]: {resp_text}", flush=True)
     except Exception as e:
-        print(f"❌ КРИТИЧНИЙ ВИНЯТОК при відправці в Discord: {e}", flush=True)
+        print(f"❌ КРИТИЧНИЙ ВИНЯТОК при відправці в Telegram: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if len(closes) < period: return closes[-1] if closes else 0.0
@@ -104,8 +113,7 @@ async def fetch_open_positions(session):
                 data = await r.json()
                 if data.get("code") == 0:
                     return [p for p in data.get("data", []) if float(p.get("positionAmt", 0)) != 0]
-    except Exception as e:
-        print(f"Помилка отримання позицій: {e}", flush=True)
+    except: pass
     return []
 
 async def set_leverage(session, symbol, lev, side):
@@ -161,9 +169,9 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
                 res = await r.json()
                 if res.get("code") == 0:
                     stop_p = await set_initial_stop_loss(session, symbol, side, level, kdata)
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}` | Стоп: `{stop_p}`"
+                    msg = f"🤖🚀 *БОТ ВІДКРИВ УГОДУ [{side}]*\n• Монета: `{symbol}`\n• Вхід: `{price}`\n• Стоп: `{stop_p}`"
                     print(msg, flush=True)
-                    await send_to_discord(session, msg)
+                    await send_to_telegram(session, msg)
     except: pass
 
 async def close_partial(session, symbol, side, qty):
@@ -194,9 +202,7 @@ async def set_break_even(session, symbol, side, entry):
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
-                if res.get("code") == 0:
-                    print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
-                    return True
+                if res.get("code") == 0: return True
     except: pass
     return False
 
@@ -339,9 +345,9 @@ async def monitor_pos(session, pos):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c  
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🎯 *ЧАСТКОВИЙ ТЕЙК 75%*\n• Монета: `{sym}` ({side})\n• Ціна: `{cur_c}`\n• PnL: `{pnl} USDT`"
             print(msg, flush=True)
-            await send_to_discord(session, msg)
+            await send_to_telegram(session, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
@@ -349,20 +355,20 @@ async def monitor_pos(session, pos):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` ({side}) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🏁 *ПОВНЕ ЗАКРИТТЯ*\n• Монета: `{sym}` ({side})\n• Ціна: `{cur_c}`\n• PnL: `{pnl} USDT`"
             print(msg, flush=True)
-            await send_to_discord(session, msg)
+            await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+        msg = f"📊 *Супровід позиції*\n• Монета: `{sym}` ({side})\n• Вхід: `{entry}` | Ціна: `{cur_c}`\n• PnL: `{pnl} USDT`"
         print(f"Супровід активної позиції {sym}", flush=True)
-        await send_to_discord(session, msg)
+        await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
 
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Примусовий тест при старту для перевірки Discord
-        await send_to_discord(session, "🔄 Бот успішно запущено на Render, зв'язок з Discord працює!")
+        # Тестове повідомлення при старту
+        await send_to_telegram(session, "🔄 *Бот успішно запущено на Render!*\nЗв'язок з Telegram встановлено.")
         
         while True:
             try:
@@ -399,4 +405,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
