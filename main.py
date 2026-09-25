@@ -37,7 +37,6 @@ def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
 async def send_to_discord(session, msg):
-    """Надіслати сповіщення в Discord із виведенням детальних логів на Render"""
     if not DISCORD_WEBHOOK_URL:
         print("ПОМИЛКА: DISCORD_WEBHOOK_URL не знайдено в змінних середовища Render!", flush=True)
         return False
@@ -56,7 +55,6 @@ async def send_to_discord(session, msg):
         return False
 
 async def periodic_report_task(session):
-    """Періодичний звіт кожні 15 хвилин"""
     while True:
         await asyncio.sleep(900)
         try:
@@ -163,7 +161,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}`"
+                    msg = f"🤖🚀 ВІДКРИТТЯ УГОДИ [{side}]: `{symbol}` | Вхід: `{price}`"
                     print(msg, flush=True)
                     await send_to_discord(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
@@ -403,7 +401,12 @@ async def monitor_pos(session, pos):
             print(msg, flush=True)
             await send_to_discord(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` ({side}):\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
+        msg = (
+            f"📊 Супровід позиції `{sym}` ({side}):\n"
+            f"• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n"
+            f"• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n"
+            f"✅ Позиція в роботі."
+        )
         print(f"Супровід активної позиції {sym} відправлено в Discord", flush=True)
         await send_to_discord(session, msg)
         last_position_alert_time[sym] = current_time
@@ -422,10 +425,8 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Відправляємо тестове сповіщення про старт одразу при запуску
         await send_to_discord(session, "🔄 **Скрипт успішно запущено та оновлено!** З'єднання з Discord активне.")
         
-        # Запускаємо фонові завдання (пінг та періодичний звіт)
         asyncio.create_task(self_ping())
         asyncio.create_task(periodic_report_task(session))
         
@@ -453,4 +454,9 @@ async def main():
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
-                print(f"П
+                print(f"Помилка циклу: {e}", flush=True)
+                await asyncio.sleep(10)
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers
