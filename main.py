@@ -397,15 +397,16 @@ async def self_ping():
     while True:
         await asyncio.sleep(60)
         try:
+            headers = {"User-Agent": "Mozilla/5.0 (Compatible; RenderPingBot/1.0)"}
             async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, timeout=5) as r:
+                async with s.get(RENDER_URL, headers=headers, timeout=5) as r:
                     await r.text()
-        except: pass
+        except: 
+            pass
 
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Впевнений тестовий сигнал про оновлення скрипта в Discord
         await send_to_discord(session, DISCORD_WEBHOOK_URL, "🔄 **Скрипт успішно оновлено та перезапущено!** Бот працює в штатному режимі.")
         
         asyncio.create_task(self_ping())
@@ -444,4 +445,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-        
+    
