@@ -31,10 +31,7 @@ last_alert_time = {}
 last_position_alert_time = {}     
 handled_partial_positions = set() 
 partial_exit_prices = {}          
-
-support_touches_count = {}        
-resistance_touches_count = {}     
-last_touch_candle_time = {}       
+position_extremes = {}
 
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
@@ -129,9 +126,23 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     except: pass
     return None
 
+async def update_trailing_stop(session, symbol, side, new_stop_price):
+    path = "/openApi/swap/v2/trade/stopOrder"
+    ts = str(int(time.time() * 1000))
+    c_side = "SELL" if side == "LONG" else "BUY"
+    p_side = "LONG" if side == "LONG" else "SHORT"
+    p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={round(new_stop_price, 5)}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    sig = get_sign(API_SECRET, p_str)
+    try:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            if r.status == 200:
+                res = await r.json()
+                return res.get("code") == 0
+    except: pass
+    return False
+
 async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
-    # Подвійна перевірка кількості позицій перед самим відкриттям
     current_positions = await fetch_open_positions(session)
     if len(current_positions) >= 2: return
 
@@ -281,8 +292,7 @@ async def scan_coin(session, symbol, open_count):
     except: pass
 
 async def monitor_pos(session, pos):
-    global last_position_alert_time, handled_partial_positions, partial_exit_prices
-    global support_touches_count, resistance_touches_count, last_touch_candle_time
+    global last_position_alert_time, handled_partial_positions, partial_exit_prices, position_extremes
     
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
     entry, pnl = float(pos.get("avgPrice", 0)), pos.get("unrealizedProfit", "0")
@@ -294,87 +304,83 @@ async def monitor_pos(session, pos):
     kdata = await fetch_kline(session, sym)
     if not kdata or len(kdata) < 15: return
     
-    k_v, d_v, j_v = calculate_kdj(kdata)
-    if not j_v or len(j_v) < 2: return
+    cur_c = kdata[-1]['close']
+    cur_high = kdata[-1]['high']
+    cur_low = kdata[-1]['low']
+    cur_vol = kdata[-1]['volume']
+    vols = [x['volume'] for x in kdata[:-1]]
+    avg_vol = sum(vols) / len(vols) if vols else cur_vol
     
-    cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
-    cur_c, prev_c = kdata[-1]['close'], kdata[-2]['close']
-    cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
-    current_candle_time = kdata[-1]['time']
     ema = calculate_ema([x['close'] for x in kdata], 50)
-    
-    current_time = time.time()
-    last_pos_time = last_position_alert_time.get(sym, 0)
+    atr = calculate_atr(kdata, 14)
     
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
-    
-    if sym not in support_touches_count: support_touches_count[sym] = 0
-    if sym not in resistance_touches_count: resistance_touches_count[sym] = 0
-    if sym not in last_touch_candle_time: last_touch_candle_time[sym] = 0
-        
-    candles_passed = len(kdata) - 1 - next((i for i, x in enumerate(kdata) if x['time'] == last_touch_candle_time[sym]), 0) if last_touch_candle_time[sym] > 0 else 99
-    
-    if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
-        if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
-            support_touches_count[sym] += 1
-            last_touch_candle_time[sym] = current_candle_time
-            
-    elif side == "LONG" and resistance_level > 0 and 0 <= (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT:
-        if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
-            resistance_touches_count[sym] += 1
-            last_touch_candle_time[sym] = current_candle_time
 
-    tp, full_close = False, False
+    if sym not in position_extremes:
+        position_extremes[sym] = cur_high if side == "LONG" else cur_low
+
+    tp_75 = False
+    full_close = False
+    current_time = time.time()
+    last_pos_time = last_position_alert_time.get(sym, 0)
 
     if side == "LONG":
-        # Закриття по тренду лише якщо ціна впевнено закрилася нижче EMA (мінімум на 0.3%)
-        if cur_c < (ema * 0.997) and prev_c < ema:
+        if cur_high > position_extremes[sym]:
+            position_extremes[sym] = cur_high
+            if position_extremes[sym] > entry + (1 * atr):
+                new_sl = position_extremes[sym] - (1.5 * atr)
+                if new_sl > entry:
+                    await update_trailing_stop(session, sym, side, new_sl)
+
+        is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c > resistance_level)
+        near_res = (resistance_level > entry) and (cur_high >= resistance_level * 0.997)
+        price_take = cur_c >= entry * 1.015
+
+        if (near_res or price_take) and not is_volume_breakout:
+            tp_75 = True
+
+        if cur_c < (ema * 0.995) and kdata[-2]['close'] < ema:
             full_close = True
-        elif sym in handled_partial_positions:
-            prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c >= prev_exit_p * 1.02:
-                full_close = True
-        else:
-            if cur_c >= entry * 1.01:
-                if (prev_j > 85 and cur_j < cur_k) or (resistance_touches_count[sym] >= 2):
-                    tp = True
-                
+
     elif side == "SHORT":
-        # Закриття по шорту лише якщо ціна впевнено закрилася вище EMA (мінімум на 0.3%)
-        if cur_c > (ema * 1.003) and prev_c > ema:
+        if cur_low < position_extremes[sym]:
+            position_extremes[sym] = cur_low
+            if position_extremes[sym] < entry - (1 * atr):
+                new_sl = position_extremes[sym] + (1.5 * atr)
+                if new_sl < entry:
+                    await update_trailing_stop(session, sym, side, new_sl)
+
+        is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c < support_level)
+        near_sup = (support_level < entry) and (cur_low <= support_level * 1.003)
+        price_take = cur_c <= entry * 0.985
+
+        if (near_sup or price_take) and not is_volume_breakout:
+            tp_75 = True
+
+        if cur_c > (ema * 1.005) and kdata[-2]['close'] > ema:
             full_close = True
-        elif sym in handled_partial_positions:
-            prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c <= prev_exit_p * 0.98:
-                full_close = True
-        else:
-            if cur_c <= entry * 0.99:
-                if (prev_j < 15 and cur_j > cur_k) or (support_touches_count[sym] >= 2):
-                    tp = True
-        
-    if tp and sym not in handled_partial_positions:
+
+    if tp_75 and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            partial_exit_prices[sym] = cur_c  
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* біля рівня! | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
-            partial_exit_prices.pop(sym, None)
-            support_touches_count.pop(sym, None)
-            resistance_touches_count.pop(sym, None)
-            last_touch_candle_time.pop(sym, None)
-            last_alert_time[sym] = time.time()  
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            position_extremes.pop(sym, None)
+            last_alert_time[sym] = current_time
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (Трейлінг/EMA) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
+        k_v, d_v, j_v = calculate_kdj(kdata)
+        cur_j = j_v[-1] if j_v else 0
+        msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• J: `{cur_j:.1f}`\n✅ Позиція в роботі."
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
 
@@ -388,7 +394,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено: прибрано мікрошуми EMA та виправлено ліміт позицій!*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано трейлінг-стоп та фільтр об'ємного пробиття!*")
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -398,9 +404,7 @@ async def main():
                 if not positions: 
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
-                    support_touches_count.clear()
-                    resistance_touches_count.clear()
-                    last_touch_candle_time.clear()
+                    position_extremes.clear()
                 
                 for p in positions:
                     await monitor_pos(session, p)
@@ -423,4 +427,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                                
+                                                       
