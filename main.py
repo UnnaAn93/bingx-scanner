@@ -141,12 +141,9 @@ async def open_bot_position(session, symbol, side, price, level, kdata, webhook)
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    # ГАРАНТОВАНО відправляємо сповіщення одразу після відкриття позиції
                     msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ [{side}]: `{symbol}` | Вхід: `{price}`"
                     print(msg, flush=True)
                     await send_to_discord(session, webhook, msg)
-                    
-                    # Намагаємось паралельно встановити стоп-лос
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
     except: pass
 
@@ -415,7 +412,7 @@ async def main():
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
                 
-                For p in positions:
+                for p in positions:
                     await monitor_pos(session, p, DISCORD_WEBHOOK_URL)
                 
                 if len(positions) < 2:
