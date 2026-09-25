@@ -433,8 +433,8 @@ async def self_ping():
 
 async def main():
     print("Бот запущено успішно!", flush=True)
-    try:
-        async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        try:
             await send_to_discord(session, "🔄 **Скрипт успішно запущено та оновлено!** З'єднання з Discord активне.")
             
             asyncio.create_task(self_ping())
