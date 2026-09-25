@@ -320,6 +320,7 @@ async def monitor_pos(session, pos):
     cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
     current_candle_time = kdata[-1]['time']
     ema = calculate_ema([x['close'] for x in kdata], 50)
+    atr = calculate_atr(kdata, 14)
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
@@ -346,14 +347,15 @@ async def monitor_pos(session, pos):
             last_touch_candle_time[sym] = current_candle_time
 
     tp, full_close = False, False
-    ema_buffer = ema * 0.01
+    
+    # Використання EMA + ATR для буфера повного закриття
+    ema_atr_buffer = 1.2 * atr
 
     if side == "LONG":
-        if cur_c < (ema - ema_buffer):
+        if cur_c < (ema - ema_atr_buffer):
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            # Повне закриття після часткового: +2% руху + розворот/перетин KDJ
             kdj_reversal_full = (prev_j < 85 and cur_j < cur_k and cur_j < prev_j)
             if (cur_c >= prev_exit_p * 1.02) and kdj_reversal_full:
                 full_close = True
@@ -363,11 +365,10 @@ async def monitor_pos(session, pos):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > (ema + ema_buffer):
+        if cur_c > (ema + ema_atr_buffer):
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            # Повне закриття після часткового: -2% руху + розворот/перетин KDJ
             kdj_reversal_full = (prev_j > 15 and cur_j > cur_k and cur_j > prev_j)
             if (cur_c <= prev_exit_p * 0.98) and kdj_reversal_full:
                 full_close = True
@@ -415,7 +416,7 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт успішно оновлено:* повне закриття після часткового змінено на +2% при розвороті KDJ, сповіщення повернуто в Telegram.")
+        await send_to_telegram(session, "🔄 *Скрипт успішно оновлено:* умова закриття по EMA тепер використовує волатильність ATR.")
         
         asyncio.create_task(self_ping())
         while True:
@@ -451,4 +452,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
 
 if __name__ == "__main__":
-    threading.Thr
+    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHand
