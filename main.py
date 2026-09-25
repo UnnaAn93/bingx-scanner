@@ -31,19 +31,29 @@ last_alert_time = {}
 last_position_alert_time = {}     
 handled_partial_positions = set() 
 partial_exit_prices = {}          
-position_extremes = {}
+
+support_touches_count = {}        
+resistance_touches_count = {}     
+last_touch_candle_time = {}       
 
 def get_sign(secret, payload):
     return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
 
 async def send_to_telegram(session, msg):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: 
+        print("ПОМИЛКА: TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не налаштовано в середовищі!", flush=True)
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     try:
         async with session.post(url, json=payload, timeout=5) as resp:
-            pass
-    except: pass
+            resp_text = await resp.text()
+            if resp.status >= 400:
+                print(f"ПОМИЛКА Telegram API [{resp.status}]: {resp_text}", flush=True)
+            else:
+                print(f"Повідомлення успішно надіслано в Telegram", flush=True)
+    except Exception as e:
+        print(f"Виняток при відправці в Telegram: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if len(closes) < period: return closes[-1] if closes else 0.0
@@ -126,26 +136,8 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     except: pass
     return None
 
-async def update_trailing_stop(session, symbol, side, new_stop_price):
-    path = "/openApi/swap/v2/trade/stopOrder"
-    ts = str(int(time.time() * 1000))
-    c_side = "SELL" if side == "LONG" else "BUY"
-    p_side = "LONG" if side == "LONG" else "SHORT"
-    p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={round(new_stop_price, 5)}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
-    sig = get_sign(API_SECRET, p_str)
-    try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-            if r.status == 200:
-                res = await r.json()
-                return res.get("code") == 0
-    except: pass
-    return False
-
 async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
-    current_positions = await fetch_open_positions(session)
-    if len(current_positions) >= 2: return
-
     await set_leverage(session, symbol, LEVERAGE, side)
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
@@ -161,7 +153,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ *[{side}]*: `{symbol}` | Вхід: `{price}`"
+                    msg = f"🤖🚀 БОТ ВІДКРИВ УГОДУ `[{side}]`: `{symbol}` | Вхід: `{price}`"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
@@ -193,8 +185,11 @@ async def set_break_even(session, symbol, side, entry):
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
-                if res.get("code") == 0: return True
-    except: pass
+                if res.get("code") == 0:
+                    print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
+                    return True
+    except Exception as e:
+        print(f"[{symbol}] Помилка встановлення беззбитку: {e}", flush=True)
     return False
 
 async def fetch_top_symbols(session):
@@ -212,7 +207,8 @@ async def fetch_top_symbols(session):
                             if vol >= MIN_24H_VOLUME_USDT: res.append((sym, vol))
                         except: pass
                     res.sort(key=lambda x: x[1], reverse=True)
-                    return [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    top_list = [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    return top_list
     except: pass
     return []
 
@@ -249,8 +245,7 @@ async def scan_coin(session, symbol, open_count):
         cur_high = highs[-1]
         cur_low = lows[-1]
         
-        recent_vols = vols[-21:-1]
-        avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else vols[-2]
+        avg_vol = sum(vols[:-1]) / (len(vols) - 1)
         
         has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
         has_momentum_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * MOMENTUM_VOLUME_MULTIPLIER)
@@ -266,34 +261,46 @@ async def scan_coin(session, symbol, open_count):
         is_solid_candle = candle_range > 0 and (candle_body / candle_range) >= 0.40
         
         momentum_long = (
-            has_momentum_volume_spike and is_solid_candle and
-            cur_price > ema and closes[-2] <= ema and closes[-3] <= ema
+            has_momentum_volume_spike and 
+            is_solid_candle and
+            cur_price > ema and 
+            closes[-2] <= ema and 
+            closes[-3] <= ema
         )
         momentum_short = (
-            has_momentum_volume_spike and is_solid_candle and
-            cur_price < ema and closes[-2] >= ema and closes[-3] >= ema
+            has_momentum_volume_spike and 
+            is_solid_candle and
+            cur_price < ema and 
+            closes[-2] >= ema and 
+            closes[-3] >= ema
         )
         
         if near_support and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал LONG (Підтримка {sup}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, sup, kdata)
             return
         elif near_resistance and has_volume_spike and is_solid_candle:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал SHORT (Опір {res}) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, res, kdata)
             return
         elif momentum_long:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "LONG", cur_price, ema, kdata)
             return
         elif momentum_short:
             last_alert_time[symbol] = now
+            print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, ema, kdata)
             return
-    except: pass
+    except Exception as e:
+        print(f"Помилка сканування {symbol}: {e}", flush=True)
 
 async def monitor_pos(session, pos):
-    global last_position_alert_time, handled_partial_positions, partial_exit_prices, position_extremes
+    global last_position_alert_time, handled_partial_positions, partial_exit_prices
+    global support_touches_count, resistance_touches_count, last_touch_candle_time
     
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
     entry, pnl = float(pos.get("avgPrice", 0)), pos.get("unrealizedProfit", "0")
@@ -305,91 +312,93 @@ async def monitor_pos(session, pos):
     kdata = await fetch_kline(session, sym)
     if not kdata or len(kdata) < 15: return
     
-    cur_c = kdata[-1]['close']
-    cur_high = kdata[-1]['high']
-    cur_low = kdata[-1]['low']
-    cur_vol = kdata[-1]['volume']
-    vols = [x['volume'] for x in kdata[:-1]]
-    avg_vol = sum(vols[-20:]) / len(vols[-20:]) if vols else cur_vol
+    k_v, d_v, j_v = calculate_kdj(kdata)
+    if not j_v or len(j_v) < 2: return
     
+    cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
+    cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
+    cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
+    current_candle_time = kdata[-1]['time']
     ema = calculate_ema([x['close'] for x in kdata], 50)
-    atr = calculate_atr(kdata, 14)
+    
+    current_time = time.time()
+    last_pos_time = last_position_alert_time.get(sym, 0)
     
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
+    
+    if sym not in support_touches_count: support_touches_count[sym] = 0
+    if sym not in resistance_touches_count: resistance_touches_count[sym] = 0
+    if sym not in last_touch_candle_time: last_touch_candle_time[sym] = 0
+        
+    candles_passed = len(kdata) - 1 - next((i for i, x in enumerate(kdata) if x['time'] == last_touch_candle_time[sym]), 0) if last_touch_candle_time[sym] > 0 else 99
+    
+    if side == "SHORT" and support_level > 0 and 0 <= (cur_low - support_level) / support_level <= APPROACH_PERCENT:
+        if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
+            support_touches_count[sym] += 1
+            last_touch_candle_time[sym] = current_candle_time
+            
+    elif side == "LONG" and resistance_level > 0 and 0 <= (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT:
+        if last_touch_candle_time[sym] == 0 or candles_passed >= 3:
+            resistance_touches_count[sym] += 1
+            last_touch_candle_time[sym] = current_candle_time
 
-    if sym not in position_extremes:
-        position_extremes[sym] = cur_high if side == "LONG" else cur_low
-
-    k_v, d_v, j_v = calculate_kdj(kdata)
-    cur_j = j_v[-1] if j_v else 50
-    prev_j = j_v[-2] if len(j_v) > 1 else 50
-
-    tp_75 = False
-    full_close = False
-    current_time = time.time()
-    last_pos_time = last_position_alert_time.get(sym, 0)
+    tp, full_close = False, False
+    ema_buffer = ema * 0.01
 
     if side == "LONG":
-        if cur_high > position_extremes[sym]:
-            position_extremes[sym] = cur_high
-            if position_extremes[sym] > entry + (1 * atr):
-                new_sl = position_extremes[sym] - (1.5 * atr)
-                if new_sl > entry:
-                    await update_trailing_stop(session, sym, side, new_sl)
-
-        is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c > resistance_level)
-        
-        min_profit_reached = cur_c >= entry * 1.01
-        near_res_double = (resistance_level > entry) and (cur_high >= resistance_level * 0.997)
-        kdj_reversal = (cur_j > 80) and (cur_j < prev_j)
-
-        if min_profit_reached and (near_res_double or kdj_reversal) and not is_volume_breakout:
-            tp_75 = True
-
-        ema_break = (cur_c < ema * 0.995) and (kdata[-2]['close'] < ema) and (cur_c < entry)
-        if ema_break:
+        if cur_c < (ema - ema_buffer):
             full_close = True
-
+        elif sym in handled_partial_positions:
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            # Повне закриття після часткового: +2% руху + розворот/перетин KDJ
+            kdj_reversal_full = (prev_j < 85 and cur_j < cur_k and cur_j < prev_j)
+            if (cur_c >= prev_exit_p * 1.02) and kdj_reversal_full:
+                full_close = True
+        else:
+            if cur_c >= entry * 1.01:
+                if (prev_j > 85 and cur_j < cur_k) or (resistance_touches_count[sym] >= 2):
+                    tp = True
+                
     elif side == "SHORT":
-        if cur_low < position_extremes[sym]:
-            position_extremes[sym] = cur_low
-            if position_extremes[sym] < entry - (1 * atr):
-                new_sl = position_extremes[sym] + (1.5 * atr)
-                if new_sl < entry:
-                    await update_trailing_stop(session, sym, side, new_sl)
-
-        is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c < support_level)
-        
-        min_profit_reached = cur_c <= entry * 0.99
-        near_sup_double = (support_level < entry) and (cur_low <= support_level * 1.003)
-        kdj_reversal = (cur_j < 20) and (cur_j > prev_j)
-
-        if min_profit_reached and (near_sup_double or kdj_reversal) and not is_volume_breakout:
-            tp_75 = True
-
-        ema_break = (cur_c > ema * 1.005) and (kdata[-2]['close'] > ema) and (cur_c > entry)
-        if ema_break:
+        if cur_c > (ema + ema_buffer):
             full_close = True
-
-    if tp_75 and sym not in handled_partial_positions:
+        elif sym in handled_partial_positions:
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            # Повне закриття після часткового: -2% руху + розворот/перетин KDJ
+            kdj_reversal_full = (prev_j > 15 and cur_j > cur_k and cur_j > prev_j)
+            if (cur_c <= prev_exit_p * 0.98) and kdj_reversal_full:
+                full_close = True
+        else:
+            if cur_c <= entry * 0.99:
+                if (prev_j < 15 and cur_j > cur_k) or (support_touches_count[sym] >= 2):
+                    tp = True
+        
+    if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})*! | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            partial_exit_prices[sym] = cur_c  
+            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
-            position_extremes.pop(sym, None)
-            last_alert_time[sym] = current_time
-            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (Трейлінг/EMA) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            partial_exit_prices.pop(sym, None)
+            support_touches_count.pop(sym, None)
+            resistance_touches_count.pop(sym, None)
+            last_touch_candle_time.pop(sym, None)
+            last_alert_time[sym] = time.time()  
+            msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• J: `{cur_j:.1f}`\n✅ Позиція в роботі."
+        msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• KDJ -> J: `{cur_j:.1f}`, K: `{cur_k:.1f}`\n✅ Позиція в роботі."
+        print(f"Супровід активної позиції {sym} відправлено в Telegram", flush=True)
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
 
@@ -398,12 +407,16 @@ async def self_ping():
         await asyncio.sleep(60)
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get(RENDER_URL, timeout=5) as r: await r.text()
-        except: pass
+                async with s.get(RENDER_URL, timeout=5) as r:
+                    await r.text()
+        except: 
+            pass
 
 async def main():
+    print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено: фільтр об'єму (20 свічок) + вихід мін. 1% + KDJ/рівні!*")
+        await send_to_telegram(session, "🔄 *Скрипт успішно оновлено:* повне закриття після часткового змінено на +2% при розвороті KDJ, сповіщення повернуто в Telegram.")
+        
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -413,7 +426,9 @@ async def main():
                 if not positions: 
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
-                    position_extremes.clear()
+                    support_touches_count.clear()
+                    resistance_touches_count.clear()
+                    last_touch_candle_time.clear()
                 
                 for p in positions:
                     await monitor_pos(session, p)
@@ -426,7 +441,9 @@ async def main():
                         
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
-            except: await asyncio.sleep(10)
+            except Exception as e:
+                print(f"Помилка циклу: {e}", flush=True)
+                await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -434,6 +451,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args): pass
 
 if __name__ == "__main__":
-    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
-    asyncio.run(main())
-            
+    threading.Thr
