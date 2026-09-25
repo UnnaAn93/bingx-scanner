@@ -249,7 +249,8 @@ async def scan_coin(session, symbol, open_count):
         cur_high = highs[-1]
         cur_low = lows[-1]
         
-        avg_vol = sum(vols[:-1]) / (len(vols) - 1)
+        recent_vols = vols[-21:-1]
+        avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else vols[-2]
         
         has_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * VOLUME_MULTIPLIER)
         has_momentum_volume_spike = (cur_vol > 0 and avg_vol > 0 and cur_vol >= avg_vol * MOMENTUM_VOLUME_MULTIPLIER)
@@ -309,7 +310,7 @@ async def monitor_pos(session, pos):
     cur_low = kdata[-1]['low']
     cur_vol = kdata[-1]['volume']
     vols = [x['volume'] for x in kdata[:-1]]
-    avg_vol = sum(vols) / len(vols) if vols else cur_vol
+    avg_vol = sum(vols[-20:]) / len(vols[-20:]) if vols else cur_vol
     
     ema = calculate_ema([x['close'] for x in kdata], 50)
     atr = calculate_atr(kdata, 14)
@@ -321,6 +322,10 @@ async def monitor_pos(session, pos):
 
     if sym not in position_extremes:
         position_extremes[sym] = cur_high if side == "LONG" else cur_low
+
+    k_v, d_v, j_v = calculate_kdj(kdata)
+    cur_j = j_v[-1] if j_v else 50
+    prev_j = j_v[-2] if len(j_v) > 1 else 50
 
     tp_75 = False
     full_close = False
@@ -336,13 +341,14 @@ async def monitor_pos(session, pos):
                     await update_trailing_stop(session, sym, side, new_sl)
 
         is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c > resistance_level)
-        near_res = (resistance_level > entry) and (cur_high >= resistance_level * 0.997)
-        price_take = cur_c >= entry * 1.015
+        
+        min_profit_reached = cur_c >= entry * 1.01
+        near_res_double = (resistance_level > entry) and (cur_high >= resistance_level * 0.997)
+        kdj_reversal = (cur_j > 80) and (cur_j < prev_j)
 
-        if (near_res or price_take) and not is_volume_breakout:
+        if min_profit_reached and (near_res_double or kdj_reversal) and not is_volume_breakout:
             tp_75 = True
 
-        # Захист від передчасного закриття: закриваємо по EMA тільки якщо ціна дійсно нижче EMA і в мінусі відносно входу
         ema_break = (cur_c < ema * 0.995) and (kdata[-2]['close'] < ema) and (cur_c < entry)
         if ema_break:
             full_close = True
@@ -356,13 +362,14 @@ async def monitor_pos(session, pos):
                     await update_trailing_stop(session, sym, side, new_sl)
 
         is_volume_breakout = (cur_vol >= avg_vol * 2.0) and (cur_c < support_level)
-        near_sup = (support_level < entry) and (cur_low <= support_level * 1.003)
-        price_take = cur_c <= entry * 0.985
+        
+        min_profit_reached = cur_c <= entry * 0.99
+        near_sup_double = (support_level < entry) and (cur_low <= support_level * 1.003)
+        kdj_reversal = (cur_j < 20) and (cur_j > prev_j)
 
-        if (near_sup or price_take) and not is_volume_breakout:
+        if min_profit_reached and (near_sup_double or kdj_reversal) and not is_volume_breakout:
             tp_75 = True
 
-        # Захист від передчасного закриття: закриваємо по EMA тільки якщо ціна дійсно вище EMA і в мінусі відносно входу
         ema_break = (cur_c > ema * 1.005) and (kdata[-2]['close'] > ema) and (cur_c > entry)
         if ema_break:
             full_close = True
@@ -372,18 +379,16 @@ async def monitor_pos(session, pos):
         if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
-            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})* біля рівня! | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
+            msg = f"🎯 ЧАСТКОВИЙ ТЕЙК 75% `{sym}` *({side})*! | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif full_close:
         if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
             position_extremes.pop(sym, None)
-            last_alert_time[symbol] = current_time
+            last_alert_time[sym] = current_time
             msg = f"🏁 ПОВНЕ ЗАКРИТТЯ `{sym}` *({side})* (Трейлінг/EMA) | Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        k_v, d_v, j_v = calculate_kdj(kdata)
-        cur_j = j_v[-1] if j_v else 0
         msg = f"📊 Супровід позиції `{sym}` *({side})*:\n• Вхід: `{entry}` | Ціна: `{cur_c}` | PnL: `{pnl} USDT`\n• J: `{cur_j:.1f}`\n✅ Позиція в роботі."
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
@@ -398,7 +403,7 @@ async def self_ping():
 
 async def main():
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 *Скрипт оновлено: додано захист від передчасного закриття по EMA!*")
+        await send_to_telegram(session, "🔄 *Скрипт оновлено: фільтр об'єму (20 свічок) + вихід мін. 1% + KDJ/рівні!*")
         asyncio.create_task(self_ping())
         while True:
             try:
@@ -431,4 +436,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-                           
+            
