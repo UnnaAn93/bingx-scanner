@@ -23,6 +23,11 @@ API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
+# Заголовки браузера, щоб біржа/Cloudflare не блокували запити з Render
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 last_alert_time = {}
 last_position_alert_time = {}     
 handled_partial_positions = set() 
@@ -38,15 +43,15 @@ def get_sign(secret, payload):
 async def send_to_discord(session, msg):
     url = DISCORD_WEBHOOK_URL
     if not url:
-        print("❌ ПОМИЛКА: DISCORD_WEBHOOK_URL взагалі не заданий у змінних середовища Render!", flush=True)
+        print("❌ ПОМИЛКА: DISCORD_WEBHOOK_URL не заданий у змінних середовища Render!", flush=True)
         return
     
-    print(f"Спроба надіслати в Discord: {msg[:30]}...", flush=True)
+    print(f"🔄 Спроба надіслати в Discord: {msg}", flush=True)
     try:
         async with session.post(url, json={"content": msg}, timeout=10) as resp:
             resp_text = await resp.text()
             if resp.status in [200, 204]:
-                print("✅ УСПІХ: Повідомлення гарантовано доставлено в Discord!", flush=True)
+                print("✅ УСПІХ: Повідомлення успішно доставлено в Discord!", flush=True)
             else:
                 print(f"❌ ПОМИЛКА DISCORD [{resp.status}]: {resp_text}", flush=True)
     except Exception as e:
@@ -92,13 +97,15 @@ async def fetch_open_positions(session):
     ts = str(int(time.time() * 1000))
     sig = get_sign(API_SECRET, f"timestamp={ts}")
     url = f"{BINGX_BASE_URL}{path}?timestamp={ts}&signature={sig}"
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.get(url, headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.get(url, headers=headers, timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
                     return [p for p in data.get("data", []) if float(p.get("positionAmt", 0)) != 0]
-    except: pass
+    except Exception as e:
+        print(f"Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def set_leverage(session, symbol, lev, side):
@@ -107,8 +114,9 @@ async def set_leverage(session, symbol, lev, side):
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"leverage={lev}&positionSide={p_side}&symbol={symbol}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             pass
     except: pass
 
@@ -125,8 +133,9 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0: return stop_p
@@ -145,8 +154,9 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"positionSide={p_side}&quantity={qty}&side={o_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
     sig = get_sign(API_SECRET, p_str)
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
@@ -163,8 +173,9 @@ async def close_partial(session, symbol, side, qty):
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
     sig = get_sign(API_SECRET, p_str)
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
                 return res.get("code") == 0
@@ -178,8 +189,9 @@ async def set_break_even(session, symbol, side, entry):
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
+    headers = {**REQUEST_HEADERS, "X-BX-APIKEY": API_KEY}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
@@ -190,7 +202,7 @@ async def set_break_even(session, symbol, side, entry):
 
 async def fetch_top_symbols(session):
     try:
-        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
+        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", headers=REQUEST_HEADERS, timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
@@ -209,7 +221,7 @@ async def fetch_top_symbols(session):
 
 async def fetch_kline(session, symbol):
     try:
-        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines", params={"symbol": symbol, "interval": TIMEFRAME, "limit": str(LIMIT_CANDLES)}, timeout=4) as r:
+        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines", params={"symbol": symbol, "interval": TIMEFRAME, "limit": str(LIMIT_CANDLES)}, headers=REQUEST_HEADERS, timeout=4) as r:
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
@@ -349,8 +361,8 @@ async def monitor_pos(session, pos):
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        # ПЕРЕВІРКА ПРИ СТАРТІ: надсилаємо тестове сповіщення одразу
-        await send_to_discord(session, "🔄 Бот успішно запущено, вебхук працює!")
+        # Примусовий тест при старту для перевірки Discord
+        await send_to_discord(session, "🔄 Бот успішно запущено на Render, зв'язок з Discord працює!")
         
         while True:
             try:
@@ -376,7 +388,7 @@ async def main():
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
-                print(f"Помилка циклу: {e}", flush=True)
+                print(f"Помилка головного циклу: {e}", flush=True)
                 await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -387,4 +399,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
