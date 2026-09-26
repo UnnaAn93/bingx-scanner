@@ -449,7 +449,7 @@ async def main():
                     position_open_time.clear()
                     support_touches_count.clear()
                     resistance_touches_count.clear()
-                            last_touch_candle_time.clear()
+                    last_touch_candle_time.clear()
                 
                 for p in positions:
                     await monitor_pos(session, p)
