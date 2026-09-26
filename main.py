@@ -435,7 +435,8 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 **Скрипт оновлено: стопи та виходи прив'язані до рівнів + 1.5 * ATR (без EMA)!**")
+     await send_to_telegram(session, "🔄 Скрипт успішно оновлено та запущено!")
+        
         
         asyncio.create_task(self_ping())
         previous_open_syms = set()
