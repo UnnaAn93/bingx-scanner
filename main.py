@@ -367,7 +367,8 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c >= entry * 1.01) and (prev_j < 85 and cur_j >= 85)
-            cond_b = (3 <= candles_passed_in_pos <= 5) and (resistance_touches_count.get(sym, 0) >= 1)
+            cond_b = (3 <= candles_passed_in_pos <= 100) and (resistance_touches_count.get(sym, 0) >= 1)
+            
             if cond_a or cond_b:
                 tp = True
     elif side == "SHORT":
@@ -379,7 +380,8 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c <= entry * 0.99) and (prev_j > 15 and cur_j <= 15)
-            cond_b = (3 <= candles_passed_in_pos <= 5) and (support_touches_count.get(sym, 0) >= 1)
+            cond_b = (3 <= candles_passed_in_pos <= 100) and (support_touches_count.get(sym, 0) >= 1)
+            
             if cond_a or cond_b:
                 tp = True
                 
