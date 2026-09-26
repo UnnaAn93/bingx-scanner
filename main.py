@@ -177,7 +177,8 @@ async def close_partial(session, symbol, side, qty):
     p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0: return True
@@ -192,7 +193,8 @@ async def set_break_even(session, symbol, side, entry):
     p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+        
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
@@ -205,6 +207,7 @@ async def set_break_even(session, symbol, side, entry):
 async def fetch_top_symbols(session):
     try:
         async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
+            
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
