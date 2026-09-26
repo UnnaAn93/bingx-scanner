@@ -166,7 +166,11 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
                     await set_initial_stop_loss(session, symbol, side, level, kdata)
-    except: pass
+                else:
+                    print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
+    except Exception as e:
+        print(f"Помилка запиту open_bot_position: {e}", flush=True)
+
 
 async def close_partial(session, symbol, side, qty):
     path = "/openApi/swap/v2/trade/order"
