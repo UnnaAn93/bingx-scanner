@@ -449,4 +449,29 @@ async def main():
                     position_open_time.clear()
                     support_touches_count.clear()
                     resistance_touches_count.clear()
-                    last_touch_can
+                            last_touch_candle_time.clear()
+                
+                for p in positions:
+                    await monitor_pos(session, p)
+                
+                if len(positions) < 2:
+                    syms = await fetch_top_symbols(session)
+                    if syms:
+                        tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in open_syms]
+                        await asyncio.gather(*tasks)
+                        
+                elapsed = asyncio.get_event_loop().time() - start
+                await asyncio.sleep(max(1, 60 - elapsed))
+            except Exception as e:
+                print(f"Помилка циклу: {e}", flush=True)
+                await asyncio.sleep(10)
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"Bot is active!")
+    def log_message(self, format, *args): pass
+
+if __name__ == "__main__":
+    threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
+    asyncio.run(main())
+    
