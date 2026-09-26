@@ -126,10 +126,10 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
     if side == "LONG":
-        stop_p = round(min(level, kdata[-1]['low']) - (1.2 * atr), 5)
+        stop_p = round(level - (1.5 * atr), 5)
         stop_s, p_side = "SELL", "LONG"
     else:
-        stop_p = round(max(level, kdata[-1]['high']) + (1.2 * atr), 5)
+        stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
     
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
@@ -323,18 +323,17 @@ async def monitor_pos(session, pos):
     if not j_v or len(j_v) < 2: return
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
-    cur_c, cur_v = kdata[-1]['close'], kdata[-1]['volume']
+    cur_c = kdata[-1]['close']
     cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
     current_candle_time = kdata[-1]['time']
     
-    ema = calculate_ema([x['close'] for x in kdata], 50)
     atr = calculate_atr(kdata, 14)  
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
     
     open_t = position_open_time.get(sym, current_time)
-    candles_passed_in_pos = (current_time - open_t) / 900  # 900 сек = 15 хв (1 свічка)
+    candles_passed_in_pos = (current_time - open_t) / 900  
     
     lows = [x['low'] for x in kdata[:-1]]
     highs = [x['high'] for x in kdata[:-1]]
@@ -358,39 +357,33 @@ async def monitor_pos(session, pos):
             last_touch_candle_time[sym] = current_candle_time
 
     tp, full_close = False, False
-    ema_buffer = atr * 1.5  
+
+    stop_trigger_long = support_level - (1.5 * atr)
+    stop_trigger_short = resistance_level + (1.5 * atr)
 
     if side == "LONG":
-        if cur_c < (ema - ema_buffer):
+        if cur_c < stop_trigger_long:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            # Залишок закривається, якщо ціна пройшла ще не менше ніж 2% від попередньої фіксації
             if cur_c >= prev_exit_p * 1.02:
                 full_close = True
         else:
-            # Сценарій А: 1% профіту від ТВХ + KDJ
             cond_a = (cur_c >= entry * 1.01) and (prev_j > 85 and cur_j < cur_k)
-            # Сценарій Б: Подвійне торкання через 3-5 свічок (3 <= candles <= 5 або більше)
             cond_b = (3 <= candles_passed_in_pos <= 5) and (resistance_touches_count[sym] >= 2)
-            
             if cond_a or cond_b:
                 tp = True
                 
     elif side == "SHORT":
-        if cur_c > (ema + ema_buffer):
+        if cur_c > stop_trigger_short:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            # Залишок закривається, якщо ціна пройшла ще не менше ніж 2% від попередньої фіксації вниз
             if cur_c <= prev_exit_p * 0.98:
                 full_close = True
         else:
-            # Сценарій А: 1% профіту від ТВХ + KDJ
             cond_a = (cur_c <= entry * 0.99) and (prev_j < 15 and cur_j > cur_k)
-            # Сценарій Б: Подвійне торкання через 3-5 свічок
             cond_b = (3 <= candles_passed_in_pos <= 5) and (support_touches_count[sym] >= 2)
-            
             if cond_a or cond_b:
                 tp = True
         
@@ -411,7 +404,6 @@ async def monitor_pos(session, pos):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            last_alert_time[symbol] = time.time()  
             msg = f"🏁 **ПОВНЕ ЗАКРИТТЯ**\n• Монета: `{sym}` ({side})\n• Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
@@ -435,14 +427,32 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 **Скрипт оновлено за вашими правилами (1% + KDJ або подвійне торкання через 3-5 свічок + залишок 2%)!**")
+        await send_to_telegram(session, "🔄 **Скрипт оновлено: прибрано EMA з умов виходу, стопи прив'язані до ATR рівнів!**")
         
         asyncio.create_task(self_ping())
+        previous_open_syms = set()
+        
         while True:
             try:
                 start = asyncio.get_event_loop().time()
                 positions = await fetch_open_positions(session)
-                open_syms = [p.get("symbol") for p in positions]
+                current_open_syms = {p.get("symbol") for p in positions}
+                
+                closed_by_exchange = previous_open_syms - current_open_syms
+                for sym in closed_by_exchange:
+                    msg = f"🛑 **УГОДУ ЗАКРИТО (СТОП БІРЖІ)**\n• Монета: `{sym}`"
+                    print(msg, flush=True)
+                    await send_to_telegram(session, msg)
+                    
+                    handled_partial_positions.discard(sym)
+                    partial_exit_prices.pop(sym, None)
+                    position_open_time.pop(sym, None)
+                    support_touches_count.pop(sym, None)
+                    resistance_touches_count.pop(sym, None)
+                    last_touch_candle_time.pop(sym, None)
+                
+                previous_open_syms = current_open_syms
+
                 if not positions: 
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
@@ -450,14 +460,14 @@ async def main():
                     support_touches_count.clear()
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
-                
-                for p in positions:
-                    await monitor_pos(session, p)
+                else:
+                    for p in positions:
+                        await monitor_pos(session, p)
                 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
                     if syms:
-                        tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in open_syms]
+                        tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in current_open_syms]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
@@ -474,4 +484,3 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
