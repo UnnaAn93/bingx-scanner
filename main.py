@@ -435,8 +435,7 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-    await send_to_telegram(session, "🔄 Скрипт успішно оновлено та запущено!")
-        
+        await send_to_telegram(session, "🔄 Скрипт успішно оновлено та запущено!")
         
         asyncio.create_task(self_ping())
         previous_open_syms = set()
@@ -447,10 +446,9 @@ async def main():
                 positions = await fetch_open_positions(session)
                 current_open_syms = {p.get("symbol") for p in positions}
                 
-                # Перевірка закриття позицій біржею (по стопу)
                 closed_by_exchange = previous_open_syms - current_open_syms
                 for sym in closed_by_exchange:
-                    msg = f"🛑 **УГОДУ ЗАКРИТО (СТОП БІРЖІ)**\n• Монета: `{sym}`"
+                    msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n• Монета: {sym}"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
                     
@@ -460,10 +458,11 @@ async def main():
                     support_touches_count.pop(sym, None)
                     resistance_touches_count.pop(sym, None)
                     last_touch_candle_time.pop(sym, None)
-                
+                    last_alert_time.pop(sym, None)
+                    
                 previous_open_syms = current_open_syms
-
-                if not positions: 
+                
+                if not positions:
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
                     position_open_time.clear()
@@ -473,11 +472,11 @@ async def main():
                 else:
                     for p in positions:
                         await monitor_pos(session, p)
-                
+                        
                 if len(positions) < 2:
-                    syms = await fetch_top_symbols(session)
-                    if syms:
-                        tasks = [scan_coin(session, s, len(positions)) for s in syms if s not in current_open_syms]
+                    syns = await fetch_top_symbols(session)
+                    if syns:
+                        tasks = [scan_coin(session, s, len(positions)) for s in syns]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
@@ -485,6 +484,7 @@ async def main():
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
                 await asyncio.sleep(10)
+                
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
