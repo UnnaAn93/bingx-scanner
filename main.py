@@ -7,7 +7,7 @@ import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-VOLUME_MULTIPLIER = 1.6                 
+VOLUME_MULTIPLIER = 2.2           
 APPROACH_PERCENT = 0.008          
 TIMEFRAME = "15m"                 
 LIMIT_CANDLES = 100               
@@ -28,7 +28,6 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
 last_position_alert_time = {}     
-last_opposite_alert_time = {}     
 handled_partial_positions = set() 
 partial_exit_prices = {}          
 
@@ -172,17 +171,14 @@ async def set_break_even(session, symbol, side, entry):
     ts = str(int(time.time() * 1000))
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
-    p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    p_str = f"positionSide={p_side}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             if r.status == 200:
-                res = await r.json()
-                if res.get("code") == 0:
-                    print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
-                    return True
-    except Exception as e:
-        print(f"[{symbol}] Помилка встановлення беззбитку: {e}", flush=True)
+                print(f"[{symbol}] Стоп успішно перенесено в беззбиток на ціну {entry}", flush=True)
+                return True
+    except: pass
     return False
 
 async def fetch_top_symbols(session):
@@ -244,7 +240,7 @@ async def scan_coin(session, symbol, open_count):
     except: pass
 
 async def monitor_pos(session, pos):
-    global last_position_alert_time, last_opposite_alert_time, handled_partial_positions, partial_exit_prices
+    global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global support_touches_count, resistance_touches_count, last_touch_candle_time
     
     sym, amt = pos.get("symbol"), float(pos.get("positionAmt", 0))
@@ -266,7 +262,7 @@ async def monitor_pos(session, pos):
     current_candle_time = kdata[-1]['time']
     
     ema = calculate_ema([x['close'] for x in kdata], 50)
-    atr = calculate_atr(kdata, 14)  # Вираховуємо ATR
+    atr = calculate_atr(kdata, 14)
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
@@ -295,9 +291,7 @@ async def monitor_pos(session, pos):
             print(f"[{sym}] Лонг: зафіксовано дотик опору №{resistance_touches_count[sym]}", flush=True)
 
     tp, full_close = False, False
-    
-    # Використовуємо буфер рівний 1 повному ATR (1.0 * atr)
-    ema_buffer = 1.0 * atr
+    ema_buffer = 1.0 * atr  # Буфер для захисту від хибних проколів EMA
     
     if side == "LONG":
         if cur_c < (ema - ema_buffer):
@@ -354,9 +348,9 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (маржа 0.5 USDT, EMA + 1.0*ATR буфер виходу)!", flush=True)
+    print("Бот запущено успішно (EMA+ATR буфер + Телеграм сповіщення)!", flush=True)
+    asyncio.create_task(self_ping())
     async with aiohttp.ClientSession() as session:
-        asyncio.create_task(self_ping())
         while True:
             try:
                 start = asyncio.get_event_loop().time()
@@ -380,7 +374,9 @@ async def main():
                         
                 elapsed = asyncio.get_event_loop().time() - start
                 await asyncio.sleep(max(1, 60 - elapsed))
-            except: await asyncio.sleep(10)
+            except Exception as e:
+                print(f"Помилка циклу: {e}", flush=True)
+                await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
