@@ -125,6 +125,8 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     path = "/openApi/swap/v2/trade/stopOrder"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
+    
+    # Стоп чітко від рівня (підтримки/опору) + 1.5 * ATR
     if side == "LONG":
         stop_p = round(level - (1.5 * atr), 5)
         stop_s, p_side = "SELL", "LONG"
@@ -358,6 +360,7 @@ async def monitor_pos(session, pos):
 
     tp, full_close = False, False
 
+    # Умови закриття через пробій рівнів + 1.5 * ATR (без EMA)
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
@@ -404,6 +407,7 @@ async def monitor_pos(session, pos):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
+            last_alert_time[symbol] = time.time()  
             msg = f"🏁 **ПОВНЕ ЗАКРИТТЯ**\n• Монета: `{sym}` ({side})\n• Ціна: `{cur_c}` | PnL: `{pnl} USDT`"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
@@ -427,7 +431,7 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 **Скрипт оновлено: прибрано EMA з умов виходу, стопи прив'язані до ATR рівнів!**")
+        await send_to_telegram(session, "🔄 **Скрипт оновлено: стопи та виходи прив'язані до рівнів + 1.5 * ATR (без EMA)!**")
         
         asyncio.create_task(self_ping())
         previous_open_syms = set()
@@ -438,6 +442,7 @@ async def main():
                 positions = await fetch_open_positions(session)
                 current_open_syms = {p.get("symbol") for p in positions}
                 
+                # Перевірка закриття позицій біржею (по стопу)
                 closed_by_exchange = previous_open_syms - current_open_syms
                 for sym in closed_by_exchange:
                     msg = f"🛑 **УГОДУ ЗАКРИТО (СТОП БІРЖІ)**\n• Монета: `{sym}`"
@@ -484,3 +489,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
+    
