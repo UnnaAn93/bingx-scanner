@@ -15,7 +15,7 @@ TOP_COINS_LIMIT = 150
 MIN_24H_VOLUME_USDT = 5_000_000   
 COOLDOWN_SECONDS = 300            
 LEVERAGE = 10                     
-BOT_MARGIN_USDT = 0.5             # Змінено маржу на 0.5 USDT
+BOT_MARGIN_USDT = 0.5             # Маржа 0.5 USDT
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -264,7 +264,9 @@ async def monitor_pos(session, pos):
     cur_c = kdata[-1]['close']
     cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
     current_candle_time = kdata[-1]['time']
+    
     ema = calculate_ema([x['close'] for x in kdata], 50)
+    atr = calculate_atr(kdata, 14)  # Вираховуємо ATR
     
     current_time = time.time()
     last_pos_time = last_position_alert_time.get(sym, 0)
@@ -294,8 +296,11 @@ async def monitor_pos(session, pos):
 
     tp, full_close = False, False
     
+    # Використовуємо буфер рівний 1 повному ATR (1.0 * atr)
+    ema_buffer = 1.0 * atr
+    
     if side == "LONG":
-        if cur_c < ema:
+        if cur_c < (ema - ema_buffer):
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -306,7 +311,7 @@ async def monitor_pos(session, pos):
                     tp = True
                 
     elif side == "SHORT":
-        if cur_c > ema:
+        if cur_c > (ema + ema_buffer):
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -349,7 +354,7 @@ async def self_ping():
         except: pass
 
 async def main():
-    print("Бот запущено успішно (маржа 0.5 USDT, сповіщення в Telegram)!", flush=True)
+    print("Бот запущено успішно (маржа 0.5 USDT, EMA + 1.0*ATR буфер виходу)!", flush=True)
     async with aiohttp.ClientSession() as session:
         asyncio.create_task(self_ping())
         while True:
@@ -385,4 +390,4 @@ class SimpleHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.environ.get("PORT", 10000))), SimpleHandler).serve_forever(), daemon=True).start()
     asyncio.run(main())
-    
+        
