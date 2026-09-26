@@ -117,7 +117,8 @@ async def set_leverage(session, symbol, lev, side):
     p_str = f"leverage={lev}&positionSide={p_side}&symbol={symbol}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            
             pass
     except: pass
 
@@ -134,7 +135,8 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", timeout=5) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
+            
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0: return stop_p
