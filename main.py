@@ -135,14 +135,20 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-            
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}") as r:
             if r.status == 200:
                 res = await r.json()
-                if res.get("code") == 0: return stop_p
-    except: pass
+                if res.get("code") == 0:
+                    print(f"{symbol} Початковий стоп успішно встановлено: {stop_p}", flush=True)
+                    return stop_p
+                else:
+                    print(f"Помилка стопу при відкритті {symbol}: {res}", flush=True)
+            else:
+                print(f"HTTP помилка стопу {symbol}: {r.status}", flush=True)
+    except Exception as e:
+        print(f"Виняток при встановленні стопу {symbol}: {e}", flush=True)
     return None
-
+    
 async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
     await set_leverage(session, symbol, LEVERAGE, side)
@@ -194,16 +200,20 @@ async def set_break_even(session, symbol, side, entry):
     p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-        
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}") as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
                     print(f"{symbol} Стоп успішно перенесено в безубиток", flush=True)
                     return True
-    except: pass
-    print(f"{symbol} Помилка встановлення безубитку", flush=True)
+                else:
+                    print(f"Помилка БУ для {symbol}: {res}", flush=True)
+            else:
+                print(f"HTTP помилка БУ {symbol}: {r.status}", flush=True)
+    except Exception as e:
+        print(f"Виняток при встановленні БУ {symbol}: {e}", flush=True)
     return False
+    
 
 async def fetch_top_symbols(session):
     try:
