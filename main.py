@@ -383,12 +383,12 @@ async def monitor_pos(session, pos):
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
             cond_a_rem = (cur_c >= prev_exit_p * 1.02) and (prev_j >= prev_k and cur_j < cur_k)
-            cond_b_rem = (3 <= candles_passed <= 100) and (resistance_level == 0 and (resistance_level - cur_high) / resistance_level >= 0.005)
+            cond_b_rem = (3 <= candles_passed <= 30) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level >= 0.005)
             if cond_a_rem or cond_b_rem:
                 full_close = True
         else:
             cond_a = (cur_c >= entry * 1.01) and (prev_j >= prev_k and cur_j < cur_k)
-            cond_b = (3 <= candles_passed <= 100) and (resistance_level == 0 and (resistance_level - cur_high) / resistance_level >= 0.005)
+            cond_b = (3 <= candles_passed <= 30) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level >= 0.005)
             if cond_a or cond_b:
                 tp = True
                 
@@ -398,12 +398,12 @@ async def monitor_pos(session, pos):
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
             cond_a_rem = (cur_c <= prev_exit_p * 0.98) and (prev_j <= prev_k and cur_j > cur_k)
-            cond_b_rem = (3 <= candles_passed <= 100) and (support_level == 0 and (cur_low - support_level) / support_level >= 0.005)
+            cond_b_rem = (3 <= candles_passed <= 30) and (support_level != 0 and (cur_low - support_level) / support_level >= 0.005)
             if cond_a_rem or cond_b_rem:
                 full_close = True
         else:
             cond_a = (cur_c <= entry * 0.99) and (prev_j <= prev_k and cur_j > cur_k)
-            cond_b = (3 <= candles_passed <= 100) and (support_level == 0 and (cur_low - support_level) / support_level >= 0.005)
+            cond_b = (3 <= candles_passed <= 30) and (support_level != 0 and (cur_low - support_level) / support_level >= 0.005)
             if cond_a or cond_b:
                 tp = True
 
