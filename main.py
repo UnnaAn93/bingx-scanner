@@ -374,7 +374,7 @@ async def monitor_pos(session, pos):
             
     tp, full_close = False, False
     
-        stop_trigger_long = support_level - (1.5 * atr)
+    stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
     
     if side == "LONG":
