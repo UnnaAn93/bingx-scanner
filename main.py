@@ -381,36 +381,30 @@ async def monitor_pos(session, pos):
                 full_close = True
             elif sym in handled_partial_positions:
                 prev_exit_p = partial_exit_prices.get(sym, entry)
-                # Повна фіксація: 2% від попередньої фіксації + (KDJ перетин АБО повторне торкання опору через 3-100 свічок)
                 cond_a_rem = (cur_c >= prev_exit_p * 1.02) and (prev_j >= prev_k and cur_j > cur_k)
                 cond_b_rem = (3 <= candles_passed <= 100) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT) and (cur_c >= prev_exit_p * 1.02)
                 if cond_a_rem or cond_b_rem:
                     full_close = True
             else:
-                # Перша фіксація: мінімум 1% чистого руху (entry * 1.01) + (KDJ перетин АБО подвійне торкання через 3-100 свічок)
                 cond_a = (cur_c >= entry * 1.01) and (prev_j >= prev_k and cur_j > cur_k)
                 cond_b = (3 <= candles_passed <= 100) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT) and (cur_c >= entry * 1.01)
                 if cond_a or cond_b:
                     tp = True
-
 
         elif side == "SHORT":
             if cur_c >= stop_trigger_short:
                 full_close = True
             elif sym in handled_partial_positions:
                 prev_exit_p = partial_exit_prices.get(sym, entry)
-                # Повна фіксація для шорта: 2% вниз від попередньої фіксації + (KDJ перетин АБО повторне торкання підтримки)
                 cond_a_rem = (cur_c <= prev_exit_p * 0.98) and (prev_j <= prev_k and cur_j < cur_k)
                 cond_b_rem = (3 <= candles_passed <= 100) and (support_level != 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT) and (cur_c <= prev_exit_p * 0.98)
                 if cond_a_rem or cond_b_rem:
                     full_close = True
             else:
-                # Перша фіксація для шорта: мінімум 1% вниз (entry * 0.99) + (KDJ перетин АБО подвійне торкання через 3-100 свічок)
                 cond_a = (cur_c <= entry * 0.99) and (prev_j <= prev_k and cur_j < cur_k)
                 cond_b = (3 <= candles_passed <= 100) and (support_level != 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT) and (cur_c <= entry * 0.99)
                 if cond_a or cond_b:
                     tp = True
-
 
 
     if tp and sym not in handled_partial_positions:
