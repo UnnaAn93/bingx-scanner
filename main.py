@@ -392,7 +392,7 @@ if side == "LONG":
                 if cond_a or cond_b:
                     tp = True
 
-        elif side == "SHORT":
+elif side == "SHORT":
             if cur_c >= stop_trigger_short:
                 full_close = True
             elif sym in handled_partial_positions:
@@ -406,7 +406,6 @@ if side == "LONG":
                 cond_b = (3 <= candles_passed <= 100) and (support_level != 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT) and (cur_c <= entry * 0.99)
                 if cond_a or cond_b:
                     tp = True
-                    
 
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
