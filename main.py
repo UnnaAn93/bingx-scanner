@@ -376,8 +376,8 @@ async def monitor_pos(session, pos):
     
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
-    
-        if side == "LONG":
+
+if side == "LONG":
             if cur_c <= stop_trigger_long:
                 full_close = True
             elif sym in handled_partial_positions:
@@ -392,7 +392,7 @@ async def monitor_pos(session, pos):
                 if cond_a or cond_b:
                     tp = True
 
-      elif side == "SHORT":
+        elif side == "SHORT":
             if cur_c >= stop_trigger_short:
                 full_close = True
             elif sym in handled_partial_positions:
