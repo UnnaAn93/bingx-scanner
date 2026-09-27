@@ -383,7 +383,7 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c >= entry * 1.01) and (prev_exit_p * 1.02) if 'prev_exit_p' in locals() else (cur_c >= entry * 1.01)
-            cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROX_PERCENT)
+            cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT)
             if cond_a or cond_b:
                 tp = True
     elif side == "SHORT":
@@ -395,7 +395,7 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c <= entry * 0.99) and (prev_exit_p * 0.98) if 'prev_exit_p' in locals() else (cur_c <= entry * 0.99)
-            cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROX_PERCENT)
+            cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT)
             if cond_a or cond_b:
                 tp = True
                 
