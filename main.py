@@ -374,16 +374,20 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
     
-    if side == "LONG":
+        if side == "LONG":
         if cur_c <= stop_trigger_long:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c < prev_exit_p * 0.98:
+            # Умови для залишку: мін. 2% від попереднього виходу + перетин KDJ, або торкання рівня
+            cond_a_rem = (cur_c >= prev_exit_p * 1.02) and (prev_j <= prev_k and cur_j > cur_k)
+            cond_b_rem = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT)
+            if cur_c < prev_exit_p * 0.98 or cond_a_rem or cond_b_rem:
                 full_close = True
         else:
-            cond_a = (cur_c >= entry * 1.01) and (prev_exit_p * 1.02) if 'prev_exit_p' in locals() else (cur_c >= entry * 1.01)
-            cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT)
+            # Умови для першої фіксації 75%: 1% від входу + перетин KDJ (J перетинає K знизу вгору), або торкання рівня (від 2 торкань)
+            cond_a = (cur_c >= entry * 1.01) and (prev_j <= prev_k and cur_j > cur_k)
+            cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROACH_PERCENT) and (resistance_touches_count.get(sym, 0) >= 2)
             if cond_a or cond_b:
                 tp = True
     elif side == "SHORT":
@@ -391,14 +395,17 @@ async def monitor_pos(session, pos):
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c > prev_exit_p * 1.02:
+            # Умови для залишку: мін. 2% вниз від попереднього виходу + перетин KDJ, або торкання рівня
+            cond_a_rem = (cur_c <= prev_exit_p * 0.98) and (prev_j >= prev_k and cur_j < cur_k)
+            cond_b_rem = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT)
+            if cur_c > prev_exit_p * 1.02 or cond_a_rem or cond_b_rem:
                 full_close = True
         else:
-            cond_a = (cur_c <= entry * 0.99) and (prev_exit_p * 0.98) if 'prev_exit_p' in locals() else (cur_c <= entry * 0.99)
-            cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT)
+            # Умови для першої фіксації 75%: 1% вниз від входу + перетин KDJ (J перетинає K зверху вниз), або торкання рівня (від 2 торкань)
+            cond_a = (cur_c <= entry * 0.99) and (prev_j >= prev_k and cur_j < cur_k)
+            cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROACH_PERCENT) and (support_touches_count.get(sym, 0) >= 2)
             if cond_a or cond_b:
                 tp = True
-                
 
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
