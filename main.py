@@ -122,7 +122,7 @@ async def set_leverage(session, symbol, lev, side):
             pass
     except: pass
 
-async def set_initial_stop_loss(session, symbol, side, level, kdata):
+async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
@@ -132,7 +132,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     else:
         stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
-    p_str = f"positionSide={p_side}&side={stop_s}&triggerPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    p_str = f"positionSide={p_side}&side={stop_s}&quantity={qty}&triggerPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
@@ -170,7 +170,8 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
                     msg = f"🟢 ВІДКРИВ УГОДУ [{side}]\n• Монета: {symbol}\n• Ціна: {price}"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
-                    await set_initial_stop_loss(session, symbol, side, level, kdata)
+                    await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
+
                 else:
                     print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
     except Exception as e:
