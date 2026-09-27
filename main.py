@@ -365,7 +365,7 @@ async def monitor_pos(session, pos):
     stop_trigger_short = resistance_level + (1.5 * atr)
     
     if side == "LONG":
-        if cur_c >= stop_trigger_long:
+        if cur_c <= stop_trigger_long:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
@@ -377,7 +377,7 @@ async def monitor_pos(session, pos):
             if cond_a or cond_b:
                 tp = True
     elif side == "SHORT":
-        if cur_c <= stop_trigger_short:
+        if cur_c >= stop_trigger_short:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
