@@ -392,7 +392,7 @@ if side == "LONG":
                 if cond_a or cond_b:
                     tp = True
 
-    elif side == "SHORT":
+elif side == "SHORT":
             if cur_c >= stop_trigger_short:
                 full_close = True
             elif sym in handled_partial_positions:
