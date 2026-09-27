@@ -123,7 +123,7 @@ async def set_leverage(session, symbol, lev, side):
     except: pass
 
 async def set_initial_stop_loss(session, symbol, side, level, kdata):
-    path = "/openApi/swap/v2/trade/stopOrder"
+    path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
     if side == "LONG":
@@ -193,7 +193,7 @@ async def close_partial(session, symbol, side, qty):
     return False
 
 async def set_break_even(session, symbol, side, entry):
-    path = "/openApi/swap/v2/trade/stopOrder"
+    path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
