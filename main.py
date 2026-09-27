@@ -237,7 +237,9 @@ async def fetch_kline(session, symbol):
     except: pass
     return None
 
-async def scan_coin(session, symbol, open_count):
+async def scan_coin(session, symbol, open_count, open_symbols):
+    if symbol in open_symbols:
+        return
     if open_count >= 2: return
     now = time.time()
     if symbol in last_alert_time and now - last_alert_time[symbol] < COOLDOWN_SECONDS: return
