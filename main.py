@@ -364,30 +364,30 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
     
-        elif side == "LONG":
-            if cur_c >= stop_trigger_long:
+    if side == "LONG":
+        if cur_c >= stop_trigger_long:
+            full_close = True
+        elif sym in handled_partial_positions:
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            if cur_c < prev_exit_p * 0.98:
                 full_close = True
-            elif sym in handled_partial_positions:
-                prev_exit_p = partial_exit_prices.get(sym, entry)
-                if cur_c < prev_exit_p * 0.98:
-                    full_close = True
-            else:
-                cond_a = (cur_c >= entry * 1.01) and (prev_exit_p < entry * 1.02) if 'prev_exit_p' in locals() else (cur_c >= entry * 1.01)
-                cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROX_PERCENT)
-                if cond_a or cond_b:
-                    tp = True
-        elif side == "SHORT":
-            if cur_c <= stop_trigger_short:
+        else:
+            cond_a = (cur_c >= entry * 1.01) and (prev_exit_p * 1.02) if 'prev_exit_p' in locals() else (cur_c >= entry * 1.01)
+            cond_b = (candles_passed <= 100) and (resistance_level > 0 and (resistance_level - cur_high) / resistance_level <= APPROX_PERCENT)
+            if cond_a or cond_b:
+                tp = True
+    elif side == "SHORT":
+        if cur_c <= stop_trigger_short:
+            full_close = True
+        elif sym in handled_partial_positions:
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            if cur_c > prev_exit_p * 1.02:
                 full_close = True
-            elif sym in handled_partial_positions:
-                prev_exit_p = partial_exit_prices.get(sym, entry)
-                if cur_c > prev_exit_p * 1.02:
-                    full_close = True
-            else:
-                cond_a = (cur_c <= entry * 0.99) and (prev_exit_p > entry * 0.98) if 'prev_exit_p' in locals() else (cur_c <= entry * 0.99)
-                cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROX_PERCENT)
-                if cond_a or cond_b:
-                    tp = True
+        else:
+            cond_a = (cur_c <= entry * 0.99) and (prev_exit_p * 0.98) if 'prev_exit_p' in locals() else (cur_c <= entry * 0.99)
+            cond_b = (candles_passed <= 100) and (support_level > 0 and (cur_low - support_level) / support_level <= APPROX_PERCENT)
+            if cond_a or cond_b:
+                tp = True
                 
 
     if tp and sym not in handled_partial_positions:
