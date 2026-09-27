@@ -132,7 +132,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     else:
         stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
-    p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    p_str = f"positionSide={p_side}&side={stop_s}&triggerPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}") as r:
@@ -286,16 +286,18 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         momentum_long = (
             has_momentum_volume_spike and
             is_solid_candle and
-            cur_price > ema and  # тільки над EMA
-            closes[-2] <= ema and
-            closes[-3] <= ema
+            min(cur_price, cur_open) > ema and
+            min(closes[-1], opens[-1]) > ema and  # або закриття/відкриття попередніх свічок, залежно від вашої логіки
+            min(closes[-2], opens[-2]) > ema
+
         )
         momentum_short = (
             has_momentum_volume_spike and
             is_solid_candle and
-            cur_price < ema and  # тільки під EMA
-            closes[-2] >= ema and
-            closes[-3] >= ema
+            max(cur_price, cur_open) < ema and
+            max(closes[-1], opens[-1]) < ema and
+            max(closes[-2], opens[-2]) < ema
+
         )
         
         if near_support and has_volume_spike and is_solid_candle and cur_price > ema:
