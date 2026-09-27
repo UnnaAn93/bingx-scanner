@@ -472,7 +472,7 @@ async def main():
                 if len(positions) < 2:
                     syns = await fetch_top_symbols(session)
                     if syns:
-                        tasks = [scan_coin(session, s, len(positions)) for s in syns]
+                        tasks = [scan_coin(session, symbol, len(positions), current_open_syms) for symbol in syns]
                         await asyncio.gather(*tasks)
                         
                 elapsed = asyncio.get_event_loop().time() - start
