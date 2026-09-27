@@ -135,7 +135,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata):
     p_str = f"positionSide={p_side}&side={stop_s}&triggerPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}") as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
@@ -200,7 +200,7 @@ async def set_break_even(session, symbol, side, entry):
     p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}") as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
