@@ -346,6 +346,7 @@ async def monitor_pos(session, pos):
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c = kdata[-1]['close']
+    prev_c = kdata[-2]['close']
     cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
     current_candle_time = kdata[-1]['time']
     
