@@ -382,26 +382,34 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
+    tp_full_close = False
+
     if side == "LONG":
+        # Стоп-лос
         if cur_c <= stop_trigger_long:
             full_close = True
+        # Якщо 75% вже закрили, перевіряємо ціль для залишку (Entry + 3 * ATR)
         elif sym in handled_partial_positions:
-            prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c <= prev_exit_p * 1.02:
+            if cur_c >= entry + (3 * atr):
                 full_close = True
+        # Якщо ще нічого не закривали, перевіряємо першу ціль (Entry + 1.5 * ATR)
         else:
-            cond_a = (cur_c >= entry + (1.5 * atr)) and (prev_c >= 15 and cur_c >= 15)
-            # Виправлено діапазон свічок від 30 до 50
-            cond_b = (candles_passed_in_pos >= 30) and (resistance_touches_count.get(sym, 0) == -1)
-            if (cond_a or cond_b) and cur_c >= entry + (1.5 * atr):
-                tp = True
+            if cur_c >= entry + (1.5 * atr):
+                Tp = True
+
     elif side == "SHORT":
+        # Стоп-лос
         if cur_c >= stop_trigger_short:
             full_close = True
+        # Якщо 75% вже закрили, перевіряємо ціль для залишку (Entry - 3 * ATR)
         elif sym in handled_partial_positions:
-            prev_exit_p = partial_exit_prices.get(sym, entry)
-            if cur_c >= prev_exit_p * 0.98:
+            if cur_c <= entry - (3 * atr):
                 full_close = True
+        # Якщо ще нічого не закривали, перевіряємо першу ціль (Entry - 1.5 * ATR)
+        else:
+            if cur_c <= entry - (1.5 * atr):
+                Tp = True
+
         else:
             cond_a = (cur_c <= entry - (1.5 * atr)) and (prev_c >= 15 and cur_c >= 15)
             # Виправлено діапазон свічок від 30 до 30
