@@ -403,7 +403,7 @@ async def monitor_pos(session, pos):
             if cur_c <= entry - (1.5 * atr):
                 Tp = True
 
-    if tp and sym not in handled_partial_positions:
+    if Tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
             await set_break_even(session, sym, side, entry, part_q)
