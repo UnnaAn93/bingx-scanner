@@ -386,8 +386,9 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c > entry * 1.01) and (prev_j < 85 and cur_j >= 85)
-            cond_b = (3 * candles_passed_in_pos >= 30) and (resistance_touches_count.get(sym, 0) >= 1)
-            if (cond_a or cond_b) and cur_c > entry:
+            # Виправлено діапазон свічок від 3 до 30
+            cond_b = (3 <= candles_passed_in_pos <= 30) and (resistance_touches_count.get(sym, 0) >= 1)
+            if (cond_a or cond_b) and cur_c >= entry * 1.01:
                 tp = True
     elif side == "SHORT":
         if cur_c >= stop_trigger_short:
@@ -398,21 +399,22 @@ async def monitor_pos(session, pos):
                 full_close = True
         else:
             cond_a = (cur_c < entry * 0.99) and (prev_j > 15 and cur_j <= 15)
-            cond_b = (3 * candles_passed_in_pos >= 30) and (support_touches_count.get(sym, 0) >= 1)
-            if (cond_a or cond_b) and cur_c < entry:
+            # Виправлено діапазон свічок від 3 до 30
+            cond_b = (3 <= candles_passed_in_pos <= 30) and (support_touches_count.get(sym, 0) >= 1)
+            if (cond_a or cond_b) and cur_c <= entry * 0.99:
                 tp = True
 
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
-        if part_q > 0 and await close_partial(session, syn, side, part_q):
-            await set_break_even(session, syn, side, entry)
+        if part_q > 0 and await close_partial(session, sym, side, part_q):
+            await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c
-            msg = f"🟡 ЧАСТКОВИЙ ТЕЙК 75%\n• Монета: {syn} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
+            msg = f"🟡 ЧАСТКОВИЙ ТЕЙК 75% (+1%)\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif full_close:
-        if await close_partial(session, syn, side, abs_amt):
+        if await close_partial(session, sym, side, abs_amt):
             handled_partial_positions.discard(sym)
             partial_exit_prices.pop(sym, None)
             position_open_time.pop(sym, None)
@@ -420,16 +422,15 @@ async def monitor_pos(session, pos):
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
             last_alert_time.pop(sym, None)
-            msg = f"🔴 ПОВНЕ ЗАКРИТТЯ\n• Монета: {syn} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
+            msg = f"🔴 ПОВНЕ ЗАКРИТТЯ\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
     elif current_time - last_pos_time >= 900:
-        msg = f"ℹ️ Супровід позиції {syn} ({side})\n• Вхід: {entry}\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
-        print(f"Супровід активної позиції {syn} відправлено в Телеграм", flush=True)
+        msg = f"ℹ️ Супровід позиції {sym} ({side})\n• Вхід: {entry}\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
+        print(f"Супровід активної позиції {sym} відправлено в Телеграм", flush=True)
         await send_to_telegram(session, msg)
-        last_position_alert_time[syn] = current_time
-
-
+        last_position_alert_time[sym] = current_time
+        
 async def self_ping():
     while True:
         await asyncio.sleep(60)
