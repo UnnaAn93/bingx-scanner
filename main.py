@@ -288,19 +288,18 @@ async def scan_coin(session, symbol, open_count, open_symbols):
             has_momentum_volume_spike and
             is_solid_candle and
             min(cur_price, cur_open) > ema and
-            min(closes[-1], opens[-1]) > ema and  # або закриття/відкриття попередніх свічок, залежно від вашої логіки
+            min(closes[-1], opens[-1]) > ema and
             min(closes[-2], opens[-2]) > ema
-
         )
+
         momentum_short = (
             has_momentum_volume_spike and
             is_solid_candle and
             max(cur_price, cur_open) < ema and
             max(closes[-1], opens[-1]) < ema and
             max(closes[-2], opens[-2]) < ema
-
         )
-        
+
         if near_support and has_volume_spike and is_solid_candle and cur_price > ema:
             last_alert_time[symbol] = now
             level = sup
@@ -325,7 +324,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
             print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
             await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
             return
-            
+
 async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global position_open_time, support_touches_count, resistance_touches_count, last_touch_candle_time
