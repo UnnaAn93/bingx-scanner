@@ -388,10 +388,10 @@ async def monitor_pos(session, pos):
             if cur_c <= prev_exit_p * 1.02:
                 full_close = True
         else:
-            cond_a = (cur_c > entry * 1.01) and (prev_j < 85 and cur_j >= 85)
-            # Виправлено діапазон свічок від 3 до 30
-            cond_b = (3 <= candles_passed_in_pos <= 30) and (resistance_touches_count.get(sym, 0) >= 1)
-            if (cond_a or cond_b) and cur_c >= entry * 1.01:
+            cond_a = (cur_c >= entry + (1.5 * atr)) and (prev_c >= 15 and cur_c >= 15)
+            # Виправлено діапазон свічок від 30 до 50
+            cond_b = (candles_passed_in_pos >= 30) and (resistance_touches_count.get(sym, 0) == -1)
+            if (cond_a or cond_b) and cur_c >= entry + (1.5 * atr):
                 tp = True
     elif side == "SHORT":
         if cur_c >= stop_trigger_short:
@@ -401,10 +401,10 @@ async def monitor_pos(session, pos):
             if cur_c >= prev_exit_p * 0.98:
                 full_close = True
         else:
-            cond_a = (cur_c < entry * 0.99) and (prev_j > 15 and cur_j <= 15)
-            # Виправлено діапазон свічок від 3 до 30
-            cond_b = (3 <= candles_passed_in_pos <= 30) and (support_touches_count.get(sym, 0) >= 1)
-            if (cond_a or cond_b) and cur_c <= entry * 0.99:
+            cond_a = (cur_c <= entry - (1.5 * atr)) and (prev_c >= 15 and cur_c >= 15)
+            # Виправлено діапазон свічок від 30 до 30
+            cond_b = (candles_passed_in_pos >= 30) and (support_touches_count.get(sym, 0) == -1)
+            if (cond_a or cond_b) and cur_c <= entry - (1.5 * atr):
                 tp = True
 
     if tp and sym not in handled_partial_positions:
