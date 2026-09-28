@@ -132,7 +132,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     else:
         stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
-    p_str = f"positionSide={p_side}&side={stop_s}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    p_str = f"positionSide={p_side}&quantity={qty}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
@@ -193,12 +193,12 @@ async def close_partial(session, symbol, side, qty):
     except: pass
     return False
 
-async def set_break_even(session, symbol, side, entry):
+async def set_break_even(session, symbol, side, entry, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
-    p_str = f"positionSide={p_side}&price=0&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+    p_str = f"positionSide={p_side}&quantity={qty}&price={entry}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
@@ -407,7 +407,7 @@ async def monitor_pos(session, pos):
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
-            await set_break_even(session, sym, side, entry)
+            await set_break_even(session, sym, side, entry, part_q)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c
             msg = f"🟡 ЧАСТКОВИЙ ТЕЙК 75% (+1%)\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
