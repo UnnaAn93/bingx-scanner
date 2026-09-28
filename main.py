@@ -378,39 +378,34 @@ async def monitor_pos(session, pos):
     stop_trigger_short = resistance_level + (1.5 * atr)
     
     if side == "LONG":
-        if cur_c <= stop_trigger_long:
+        if cur_c < stop_trigger_long:
             full_close = True
         elif sym in handled_partial_positions:
             prev_exit_p = partial_exit_prices.get(sym, entry)
-            cond_a_rem = (cur_c >= prev_exit_p * 1.02) and (prev_j >= prev_k and cur_j < cur_k)
-            cond_b_rem = (3 <= candles_passed <= 30) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level <= 0.005)
-            if cond_a_rem or cond_b_rem:
+            if cur_c >= prev_exit_p * 1.02:
                 full_close = True
         else:
-            cond_a = (cur_c >= entry * 1.01) and (prev_j >= prev_k and cur_j < cur_k)
-            cond_b = (3 <= candles_passed <= 30) and (resistance_level != 0 and (resistance_level - cur_high) / resistance_level <= 0.005)
+            cond_a = (cur_c >= entry * 1.01) and (prev_j < 85 and cur_j >= 85)
+            cond_b = (3 <= candles_passed_in_pos <= 30) and (resistance_touches_count.get(sym, 0) >= 1)
+            if cond_a or cond_b:
+                tp = True
+    elif side == "SHORT":
+        if cur_c > stop_trigger_short:
+            full_close = True
+        elif sym in handled_partial_positions:
+            prev_exit_p = partial_exit_prices.get(sym, entry)
+            if cur_c <= prev_exit_p * 0.98:
+                full_close = True
+        else:
+            cond_a = (cur_c <= entry * 0.99) and (prev_j > 15 and cur_j <= 15)
+            cond_b = (3 <= candles_passed_in_pos <= 30) and (support_touches_count.get(sym, 0) >= 1)
             if cond_a or cond_b:
                 tp = True
                 
-    elif side == "SHORT":
-        if cur_c >= stop_trigger_short:
-            full_close = True
-        elif sym in handled_partial_positions:
-            prev_exit_p = partial_exit_prices.get(sym, entry)
-            cond_a_rem = (cur_c <= prev_exit_p * 0.98) and (prev_j <= prev_k and cur_j > cur_k)
-            cond_b_rem = (3 <= candles_passed <= 30) and (support_level != 0 and (cur_low - support_level) / support_level <= 0.005)
-            if cond_a_rem or cond_b_rem:
-                full_close = True
-        else:
-            cond_a = (cur_c <= entry * 0.99) and (prev_j <= prev_k and cur_j > cur_k)
-            cond_b = (3 <= candles_passed <= 30) and (support_level != 0 and (cur_low - support_level) / support_level <= 0.005)
-            if cond_a or cond_b:
-                tp = True
-
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0 and await close_partial(session, sym, side, part_q):
-            await set_break_even(session, sym, side, entry, part_q)
+            await set_break_even(session, sym, side, entry)
             handled_partial_positions.add(sym)
             partial_exit_prices[sym] = cur_c
             msg = f"🟡 ЧАСТКОВИЙ ТЕЙК 75%\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
@@ -428,11 +423,12 @@ async def monitor_pos(session, pos):
             msg = f"🔴 ПОВНЕ ЗАКРИТТЯ\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
-    elif current_time - last_pos_time > 300:
-        msg = f"ℹ️ Супровід активної позиції ({side})\n• Монета: {sym} (Вхід: {entry})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
+    elif current_time - last_pos_time >= 900:
+        msg = f"ℹ️ Супровід позиції {sym} ({side})\n• Вхід: {entry}\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
         print(f"Супровід активної позиції {sym} відправлено в Телеграм", flush=True)
         await send_to_telegram(session, msg)
         last_position_alert_time[sym] = current_time
+
 
 
 async def self_ping():
