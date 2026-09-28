@@ -377,45 +377,31 @@ async def monitor_pos(session, pos):
             resistance_touches_count[sym] += 1
             last_touch_candle_time[sym] = current_candle_time
             
-    tp, full_close = False, False
-    
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
-    tp_full_close = False
+    full_close = False
+    Tp = False
 
     if side == "LONG":
-        # Стоп-лос
         if cur_c <= stop_trigger_long:
             full_close = True
-        # Якщо 75% вже закрили, перевіряємо ціль для залишку (Entry + 3 * ATR)
         elif sym in handled_partial_positions:
             if cur_c >= entry + (3 * atr):
                 full_close = True
-        # Якщо ще нічого не закривали, перевіряємо першу ціль (Entry + 1.5 * ATR)
         else:
             if cur_c >= entry + (1.5 * atr):
                 Tp = True
 
     elif side == "SHORT":
-        # Стоп-лос
         if cur_c >= stop_trigger_short:
             full_close = True
-        # Якщо 75% вже закрили, перевіряємо ціль для залишку (Entry - 3 * ATR)
         elif sym in handled_partial_positions:
             if cur_c <= entry - (3 * atr):
                 full_close = True
-        # Якщо ще нічого не закривали, перевіряємо першу ціль (Entry - 1.5 * ATR)
         else:
             if cur_c <= entry - (1.5 * atr):
                 Tp = True
-
-        else:
-            cond_a = (cur_c <= entry - (1.5 * atr)) and (prev_c >= 15 and cur_c >= 15)
-            # Виправлено діапазон свічок від 30 до 30
-            cond_b = (candles_passed_in_pos >= 30) and (support_touches_count.get(sym, 0) == -1)
-            if (cond_a or cond_b) and cur_c <= entry - (1.5 * atr):
-                tp = True
 
     if tp and sym not in handled_partial_positions:
         part_q = round(abs_amt * 0.75, 4)
