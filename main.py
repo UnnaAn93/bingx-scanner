@@ -269,6 +269,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         is_solid_candle = candle_range > 0 and (candle_body / candle_range >= 0.4)
         
         # Суворі умови з урахуванням EMA за закриттям (тілом свічки)
+    
     momentum_long = (
         has_momentum_volume_spike and
         is_solid_candle and
