@@ -310,9 +310,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
         await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
         return
-    except Exception as e:
-        print(f"Помилка сканування {symbol}: {e}", flush=True)
-
+    
 async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global position_open_time, support_touches_count, resistance_touches_count, last_touch_candle_time
