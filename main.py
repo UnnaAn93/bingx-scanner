@@ -242,33 +242,33 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     kdata = await fetch_kline(session, symbol)
     if not kdata or len(kdata) < 60: return
 
-        closes = [x['close'] for x in kdata]
-        opens = [x['open'] for x in kdata]
-        vols = [x['volume'] for x in kdata]
-        lows = [x['low'] for x in kdata]
-        highs = [x['high'] for x in kdata]
+    closes = [x['close'] for x in kdata]
+    opens = [x['open'] for x in kdata]
+    vols = [x['volume'] for x in kdata]
+    lows = [x['low'] for x in kdata]
+    highs = [x['high'] for x in kdata]
         
-        cur_vol = vols[-1]
-        cur_price = closes[-1]
-        cur_open = opens[-1]
-        cur_high = highs[-1]
-        cur_low = lows[-1]
+    cur_vol = vols[-1]
+    cur_price = closes[-1]
+    cur_open = opens[-1]
+    cur_high = highs[-1]
+    cur_low = lows[-1]
         
-        avg_vol = sum(vols[:-1]) / (len(vols) - 1)
-        has_volume_spike = (cur_vol > avg_vol * VOLUME_MULTIPLIER) and (cur_vol > 0)
-        has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
+    avg_vol = sum(vols[:-1]) / (len(vols) - 1)
+    has_volume_spike = (cur_vol > avg_vol * VOLUME_MULTIPLIER) and (cur_vol > 0)
+    has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
         
-        ema = calculate_ema(closes, 50)
-        sup, res = min(lows[:-1]), max(highs[:-1])
+    ema = calculate_ema(closes, 50)
+    sup, res = min(lows[:-1]), max(highs[:-1])
         
-        near_support = (sup > 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
-        near_resistance = (res > 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
+    near_support = (sup > 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
+    near_resistance = (res > 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
         
-        candle_body = abs(cur_price - cur_open)
-        candle_range = cur_high - cur_low
-        is_solid_candle = candle_range > 0 and (candle_body / candle_range >= 0.4)
+    candle_body = abs(cur_price - cur_open)
+    candle_range = cur_high - cur_low
+    is_solid_candle = candle_range > 0 and (candle_body / candle_range >= 0.4)
         
-        # Суворі умови з урахуванням EMA за закриттям (тілом свічки)
+    # Суворі умови з урахуванням EMA за закриттям (тілом свічки)
     
     momentum_long = (
         has_momentum_volume_spike and
