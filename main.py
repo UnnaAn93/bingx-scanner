@@ -345,9 +345,10 @@ async def monitor_pos(session, pos):
     if not j_v or len(j_v) < 2: return
     
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
-    cur_c = kdata[-1]['close']
-    prev_c = kdata[-2]['close']
-    cur_low, cur_high = kdata[-1]['low'], kdata[-1]['high']
+    cur_c = float(kdata[-1]['close'])
+    prev_c = float(kdata[-2]['close']) if len(kdata) >= 2 else cur_c
+    cur_low, cur_high = float(kdata[-1]['low']), float(kdata[-1]['high'])
+
     current_candle_time = kdata[-1]['time']
     
     atr = calculate_atr(kdata, 14)
