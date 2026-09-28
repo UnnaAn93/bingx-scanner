@@ -132,7 +132,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     else:
         stop_p = round(level + (1.5 * atr), 5)
         stop_s, p_side = "BUY", "SHORT"
-    p_str = f"positionSide={p_side}&quantity={qty}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET"
+        p_str = f'side={stop_s}&positionSide={p_side}&quantity={qty}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET'
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
