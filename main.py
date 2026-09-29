@@ -478,7 +478,7 @@ async def main():
                     support_touches_count.clear()
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
-             else:
+            else:
                 for p in positions:
                     try:
                         await monitor_pos(session, p)
