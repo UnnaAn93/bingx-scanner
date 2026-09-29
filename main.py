@@ -471,13 +471,13 @@ async def main():
                     
                 previous_open_syms = current_open_syms
                 
-                if not positions:
-                    handled_partial_positions.clear()
-                    partial_exit_prices.clear()
-                    position_open_time.clear()
-                    support_touches_count.clear()
-                    resistance_touches_count.clear()
-                    last_touch_candle_time.clear()
+            if not positions:
+                handled_partial_positions.clear()
+                partial_exit_prices.clear()
+                position_open_time.clear()
+                support_touches_count.clear()
+                resistance_touches_count.clear()
+                last_touch_candle_time.clear()
             else:
                 for p in positions:
                     try:
