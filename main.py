@@ -392,20 +392,20 @@ async def monitor_pos(session, pos):
         if cur_c <= stop_trigger_long:
             full_close = True
         elif sym in handled_partial_positions:
-            if cur_c >= entry + (3 * atr):
+            if cur_c >= entry + (4 * atr):
                 full_close = True
         else:
-            if cur_c >= entry + (1.5 * atr):
+            if cur_c >= entry + (2 * atr):
                 Tp = True
 
     elif side == "SHORT":
         if cur_c >= stop_trigger_short:
             full_close = True
         elif sym in handled_partial_positions:
-            if cur_c <= entry - (3 * atr):
+            if cur_c <= entry - (4 * atr):
                 full_close = True
         else:
-            if cur_c <= entry - (1.5 * atr):
+            if cur_c <= entry - (2 * atr):
                 Tp = True
 
     if Tp and sym not in handled_partial_positions:
