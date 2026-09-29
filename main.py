@@ -478,9 +478,12 @@ async def main():
                     support_touches_count.clear()
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
-                else:
-                    for p in positions:
-                        await monitor_pos(session, p)
+                        else:
+            for p in positions:
+                try:
+                    await monitor_pos(session, p)
+                except Exception as e:
+                    print(f"Помилка моніторингу для {p.get('symbol')}: {e}", flush=True)
                         
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
@@ -490,7 +493,7 @@ async def main():
                         
                 elapsed = asyncio.get_event_loop().time() - start
                 # Інтервал очікування змінено на 300 секунд (5 хвилин)
-                await asyncio.sleep(max(1, 300 - elapsed))
+                await asyncio.sleep(max(1, 900 - elapsed))
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
                 await asyncio.sleep(10)
