@@ -284,30 +284,34 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         not near_support
     )
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price > ema:
+    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema:
         last_alert_time[symbol] = now
         level = sup
-        print(f"Знайдено сигнал LONG (Підтримка + EMA) для {symbol}!", flush=True)
+        print(f"Знайдено сигнал LONG (Підтримка + EMA) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
         return
-    elif near_resistance and has_volume_spike and is_solid_candle and cur_price < ema:
+
+    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema:
         last_alert_time[symbol] = now
         level = res
-        print(f"Знайдено сигнал SHORT (Опір + EMA) для {symbol}!", flush=True)
+        print(f"Знайдено сигнал SHORT (Опір + EMA) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
         return
+
     elif momentum_long:
         last_alert_time[symbol] = now
         level = ema
-        print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+        print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
         return
+
     elif momentum_short:
         last_alert_time[symbol] = now
         level = ema
-        print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
+        print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
         return
+
         
 async def close_partial(session, symbol, side, qty):
     if not API_KEY or not API_SECRET: return False
