@@ -450,27 +450,27 @@ async def main():
         previous_open_syms = set()
         
         while True:
-            try:
-                start = asyncio.get_event_loop().time()
-                positions = await fetch_open_positions(session)
-                current_open_syms = {p.get("symbol") for p in positions}
-                
-                closed_by_exchange = previous_open_syms - current_open_syms
-                for sym in closed_by_exchange:
-                    msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n• Монета: {sym}"
-                    print(msg, flush=True)
-                    await send_to_telegram(session, msg)
-                    
-                    handled_partial_positions.discard(sym)
-                    partial_exit_prices.pop(sym, None)
-                    position_open_time.pop(sym, None)
-                    support_touches_count.pop(sym, None)
-                    resistance_touches_count.pop(sym, None)
-                    last_touch_candle_time.pop(sym, None)
-                    last_alert_time.pop(sym, None)
-                    
-                previous_open_syms = current_open_syms
-                
+        try:
+            start = asyncio.get_event_loop().time()
+            positions = await fetch_open_positions(session)
+            current_open_syms = {p.get("symbol") for p in positions}
+
+            closed_by_exchange = previous_open_syms - current_open_syms
+            for sym in closed_by_exchange:
+                msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n• Монета: {sym}"
+                print(msg, flush=True)
+                await send_to_telegram(session, msg)
+
+                handled_partial_positions.discard(sym)
+                partial_exit_prices.pop(sym, None)
+                position_open_time.pop(sym, None)
+                support_touches_count.pop(sym, None)
+                resistance_touches_count.pop(sym, None)
+                last_touch_candle_time.pop(sym, None)
+                last_alert_time.pop(sym, None)
+
+            previous_open_syms = current_open_syms
+
             if not positions:
                 handled_partial_positions.clear()
                 partial_exit_prices.clear()
@@ -485,18 +485,18 @@ async def main():
                     except Exception as e:
                         print(f"Помилка супроводу для {p.get('symbol')}: {e}", flush=True)
 
-                if len(positions) < 2:
-                    syms = await fetch_top_symbols(session)
-                    if syms:
-                        tasks = [scan_coin(session, symbol, len(positions), current_open_syms) for symbol in syms]
-                        await asyncio.gather(*tasks)
-                        
-                elapsed = asyncio.get_event_loop().time() - start
-                # Інтервал очікування змінено на 300 секунд (5 хвилин)
-                await asyncio.sleep(max(1, 300 - elapsed))
-            except Exception as e:
-                print(f"Помилка циклу: {e}", flush=True)
-                await asyncio.sleep(10)
+            if len(positions) < 2:
+                syms = await fetch_top_symbols(session)
+                if syms:
+                    tasks = [scan_coin(session, symbol, len(positions), current_open_syms) for symbol in syms]
+                    await asyncio.gather(*tasks)
+
+            elapsed = asyncio.get_event_loop().time() - start
+            await asyncio.sleep(max(1, 300 - elapsed))
+
+        except Exception as e:
+            print(f"Помилка циклу: {e}", flush=True)
+            await asyncio.sleep(10)
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
