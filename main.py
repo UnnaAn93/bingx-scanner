@@ -490,7 +490,8 @@ async def main():
             try:
                 start = asyncio.get_event_loop().time()
                 positions = await fetch_open_positions(session)
-                current_open_syms = {p.get("symbol") for p in positions}
+                current_open_syms = {p.get("symbol") for p in positions} if isinstance(positions, list) else set()
+
                 
                 closed_by_exchange = previous_open_syms - current_open_syms
                 for sym in closed_by_exchange:
