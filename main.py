@@ -478,9 +478,12 @@ async def main():
                     support_touches_count.clear()
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
-                else:
-                    for p in positions:
+            else:
+                for p in positions:
+                    try:
                         await monitor_pos(session, p)
+                    except Exception as e:
+                        print(f"Помилка супроводу для {p.get('symbol')}: {e}", flush=True)
                         
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
