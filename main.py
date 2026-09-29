@@ -412,7 +412,7 @@ async def monitor_pos(session, pos):
         part_q = round(abs_amt * 0.75, 4)
         if part_q > 0:
             if await close_partial(session, sym, side, part_q):
-                await set_break_even(session, sym, side, entry, part_q)
+                await set_break_even(session, sym, side, entry, round(abs_amt - part_q, 4))
                 handled_partial_positions.add(sym)
                 partial_exit_prices[sym] = cur_c
                 msg = f"🟡 ЧАСТКОВИЙ ТЕЙК 75% (+1%)\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
