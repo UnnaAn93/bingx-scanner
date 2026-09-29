@@ -448,8 +448,7 @@ async def main():
         
         asyncio.create_task(self_ping())
         previous_open_syms = set()
-        last_position_alert_time.clear()
-                    
+        
         while True:
             try:
                 start = asyncio.get_event_loop().time()
@@ -481,11 +480,8 @@ async def main():
                     last_touch_candle_time.clear()
                 else:
                     for p in positions:
-                        try:
-                            await monitor_pos(session, p)
-                        except Exception as e:
-                            print(f"Помилка моніторингу для {p.get('symbol')}: {e}", flush=True)
-                            
+                        await monitor_pos(session, p)
+                        
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
                     if syms:
@@ -494,7 +490,7 @@ async def main():
                         
                 elapsed = asyncio.get_event_loop().time() - start
                 # Інтервал очікування змінено на 300 секунд (5 хвилин)
-                await asyncio.sleep(max(1, 900 - elapsed))
+                await asyncio.sleep(max(1, 300 - elapsed))
             except Exception as e:
                 print(f"Помилка циклу: {e}", flush=True)
                 await asyncio.sleep(10)
