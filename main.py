@@ -424,11 +424,13 @@ async def monitor_pos(session, pos):
             msg = f"🔴 ПОВНЕ ЗАКРИТТЯ\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
-    elif current_time - last_pos_time >= 900:
-        msg = f"ℹ️ Супровід позиції {sym} ({side})\n• Вхід: {entry}\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
-        print(f"Супровід активної позиції {sym} відправлено в Телеграм", flush=True)
-        await send_to_telegram(session, msg)
-        last_position_alert_time[sym] = current_time
+    else:
+        last_alert = last_alert_time.get(sym, 0)
+        if current_time - last_alert >= 900:
+            msg = f"ℹ️ Супровід позиції {sym} ({side})\n• Вхід: {entry}\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
+            print(f"Супровід активної позиції {sym} відправлено в Telegram.", flush=True)
+            await send_to_telegram(session, msg)
+            last_alert_time[sym] = current_time
         
 async def self_ping():
     while True:
