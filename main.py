@@ -378,8 +378,9 @@ async def monitor_pos(session, pos):
     open_t = position_open_time.get(sym, current_time)
     candles_passed_in_pos = (current_time - open_t) / 900
     
-    lows = [x['low'] for x in kdata[:-1]]
-    highs = [x['high'] for x in kdata[:-1]]
+    lows = [float(x['low']) for x in kdata]
+    highs = [float(x['high']) for x in kdata]
+
     support_level = min(lows) if lows else entry
     resistance_level = max(highs) if highs else entry
     
