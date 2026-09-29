@@ -284,8 +284,6 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         not near_support
     )
 
-    )
-
     if near_support and has_volume_spike and is_solid_candle and cur_price >= ema:
         last_alert_time[symbol] = now
         level = sup
