@@ -310,7 +310,24 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}!", flush=True)
         await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
         return
+        
+async def close_partial(session, symbol, side, qty):
+    path = "/openApi/swap/v2/trade/order"
+    ts = str(int(time.time() * 1000))
+    p_side = "BUY" if side == "SHORT" else "SELL"
+    p_str = f"positionSide={p_side}&quantity={qty}&symbol={symbol}&timestamp={ts}&type=MARKET"
+    sig = get_sign(API_SECRET, p_str)
+    try:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
+            if r.status == 200:
+                raw = await r.json()
+                if raw.get("code") == 0:
+                    return True
+    except Exception as e:
+        print(f"Помилка часткового закриття {symbol}: {e}", flush=True)
+    return False
     
+
 async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
     global position_open_time, support_touches_count, resistance_touches_count, last_touch_candle_time
