@@ -106,7 +106,9 @@ async def fetch_open_positions(session):
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
-                    return [p for p in data.get("data", []) if float(p.get("positionAmt", 0)) != 0]
+                    d = data.get("data")
+                    if isinstance(d, list):
+                        return [p for p in d if isinstance(p, dict) and float(p.get("positionAmt", 0)) != 0]
     except: pass
     return []
 
@@ -202,20 +204,23 @@ async def set_break_even(session, symbol, side, entry, qty):
 async def fetch_top_symbols(session):
     try:
         async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
-            
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
-                    res = []
-                    for t in data.get("data", []):
-                        sym = t.get("symbol")
-                        if sym.startswith("NC") or "2USD" in sym or not sym.endswith("USDT"): continue
-                        try:
-                            vol = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
-                            if vol >= MIN_24H_VOLUME_USDT: res.append((sym, vol))
-                        except: pass
-                    res.sort(key=lambda x: x[1], reverse=True)
-                    return [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    d = data.get("data")
+                    if isinstance(d, list):
+                        res = []
+                        for t in d:
+                            if not isinstance(t, dict): continue
+                            sym = t.get("symbol")
+                            if not sym or sym.startswith("NC") or "USD" in sym or not sym.endswith("USDT"): continue
+                            try:
+                                val = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
+                                if val >= MIN_24H_VOLUME_USDT: res.append((sym, val))
+                            except:
+                                pass
+                        res.sort(key=lambda x: x[1], reverse=True)
+                        return [x[0] for x in res[:TOP_COINS_LIMIT]]
     except: pass
     return []
 
