@@ -257,7 +257,18 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
         
     ema = calculate_ema(closes, 50)
-    sup, res = min(lows[:-1]), max(highs[:-1])
+    sup, res = min(lows[-1]), max(highs[-1])
+    
+    # 📌 Додаємо розрахунок KDJ для поточного аналізу
+    k_vals, d_vals, j_vals = calculate_kdj(kdata)
+    current_k = k_vals[-1]
+    current_d = d_vals[-1]
+    prev_k = k_vals[-2]
+    prev_d = d_vals[-2]
+
+    near_support = (sup != 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
+    near_resistance = (res != 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
+
         
     near_support = (sup > 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
     near_resistance = (res > 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
@@ -273,7 +284,8 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         is_solid_candle and 
         min(closes[-1], opens[-1]) >= ema and 
         min(closes[-2], opens[-2]) >= ema and
-        not near_resistance
+        not near_resistance and
+        prev_k <= prev_d and current_k > current_d
     )
 
     momentum_short = (
@@ -281,20 +293,21 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         is_solid_candle and 
         max(closes[-1], opens[-1]) <= ema and 
         max(closes[-2], opens[-2]) <= ema and
-        not near_support
+        not near_support and
+        current_k < current_d
     )
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema:
+    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (prev_k <= prev_d and current_k > current_d):
         last_alert_time[symbol] = now
         level = sup
-        print(f"Знайдено сигнал LONG (Підтримка + EMA) для {symbol}", flush=True)
+        print(f"Знайдено сигнал LONG (Підтримка + KDJ) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
         return
 
-    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema:
+    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema and (current_k < current_d):
         last_alert_time[symbol] = now
         level = res
-        print(f"Знайдено сигнал SHORT (Опір + EMA) для {symbol}", flush=True)
+        print(f"Знайдено сигнал SHORT (Опір + KDJ) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
         return
 
