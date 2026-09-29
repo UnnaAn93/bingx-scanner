@@ -177,18 +177,19 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
         print(f"Помилка запиту open_bot_position: {e}", flush=True)
 
 async def set_break_even(session, symbol, side, entry, qty):
+    if not API_KEY or not API_SECRET: return False
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     p_side = "LONG" if side == "LONG" else "SHORT"
     c_side = "SELL" if side == "LONG" else "BUY"
-    p_str = f"positionSide={p_side}&quantity={qty}&price={entry}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP"
+    p_str = f"positionSide={p_side}&price={entry}&quantity={qty}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINANCE_BASE_URL or 'https://open-api.bingx.com'}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    print(f"{symbol} Стоп успішно перенесено в Безубиток", flush=True)
+                    print(f"{symbol} Стоп успішно перенесено в Беззбиток", flush=True)
                     return True
                 else:
                     print(f"Помилка БУ для {symbol}: {res}", flush=True)
@@ -198,7 +199,6 @@ async def set_break_even(session, symbol, side, entry, qty):
         print(f"Виняток при встановленні БУ {symbol}: {e}", flush=True)
     return False
 
-    
 
 async def fetch_top_symbols(session):
     try:
