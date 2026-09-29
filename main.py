@@ -163,16 +163,13 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             
-            if r.status == 200:
-                res = await r.json()
                 if res.get("code") == 0:
-                position_open_time[symbol] = time.time()
-                msg = f"🟢 ВІДКРИВ УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
-                print(msg, flush=True)
-                await send_to_telegram(session, msg)
-                await asyncio.sleep(1)  # Даємо біржі секунду на реєстрацію позиції
-                await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
-
+                    position_open_time[symbol] = time.time()
+                    msg = f"🟢 ВІДКРИВ УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
+                    print(msg, flush=True)
+                    await send_to_telegram(session, msg)
+                    await asyncio.sleep(1)
+                    await set_initial_stop_loss
 
                 else:
                     print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
