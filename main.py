@@ -486,7 +486,6 @@ async def main():
                 last_touch_candle_time.clear()
                 last_position_alert_time.clear()
             else:
-                last_position_alert_time.clear()  # <-- Обов'язково додайте цей рядок
                 for p in positions:
                     try:
                         await monitor_pos(session, p)
@@ -500,7 +499,7 @@ async def main():
                     await asyncio.gather(*tasks)
 
             elapsed = asyncio.get_event_loop().time() - start
-            await asyncio.sleep(max(1, 300 - elapsed))
+            await asyncio.sleep(max(1, 900 - elapsed))
 
         except Exception as e:
             print(f"Помилка циклу: {e}", flush=True)
