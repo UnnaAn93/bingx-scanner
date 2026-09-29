@@ -156,8 +156,8 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     ts = str(int(time.time() * 1000))
     qty = round(BOT_MARGIN_USDT * LEVERAGE / price, 4)
     if qty == 0: return
-    p_side = "BUY" if side == "LONG" else "SELL"
-    c_side = "LONG" if side == "LONG" else "SHORT"
+    p_side = "LONG" if side == "LONG" else "SHORT"
+    c_side = "BUY" if side == "LONG" else "SELL"
     p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
