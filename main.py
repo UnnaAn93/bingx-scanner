@@ -449,7 +449,7 @@ async def main():
         asyncio.create_task(self_ping())
         previous_open_syms = set()
         
-        while True:
+    while True:
         try:
             start = asyncio.get_event_loop().time()
             positions = await fetch_open_positions(session)
