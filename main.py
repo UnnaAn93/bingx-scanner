@@ -166,11 +166,13 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             if r.status == 200:
                 res = await r.json()
                 if res.get("code") == 0:
-                    position_open_time[symbol] = time.time()
-                    msg = f"🟢 ВІДКРИВ УГОДУ [{side}]\n• Монета: {symbol}\n• Ціна: {price}"
-                    print(msg, flush=True)
-                    await send_to_telegram(session, msg)
-                    await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
+                position_open_time[symbol] = time.time()
+                msg = f"🟢 ВІДКРИВ УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
+                print(msg, flush=True)
+                await send_to_telegram(session, msg)
+                await asyncio.sleep(1)  # Даємо біржі секунду на реєстрацію позиції
+                await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
+
 
                 else:
                     print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
