@@ -311,21 +311,26 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         return
         
 async def close_partial(session, symbol, side, qty):
+    if not API_KEY or not API_SECRET: return False
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
-    p_side = "BUY" if side == "SHORT" else "SELL"
-    p_str = f"positionSide={p_side}&quantity={qty}&symbol={symbol}&timestamp={ts}&type=MARKET"
+    c_side = "SELL" if side == "LONG" else "BUY"
+    p_side = "LONG" if side == "LONG" else "SHORT"
+    p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
     sig = get_sign(API_SECRET, p_str)
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             if r.status == 200:
-                raw = await r.json()
-                if raw.get("code") == 0:
+                res = await r.json()
+                if res.get("code") == 0:
                     return True
+                else:
+                    print(f"Помилка закриття {symbol}: {res}", flush=True)
+            else:
+                print(f"HTTP помилка закриття {symbol}: {r.status}", flush=True)
     except Exception as e:
-        print(f"Помилка часткового закриття {symbol}: {e}", flush=True)
+        print(f"Виняток при закритті {symbol}: {e}", flush=True)
     return False
-    
 
 async def monitor_pos(session, pos):
     global last_position_alert_time, handled_partial_positions, partial_exit_prices
