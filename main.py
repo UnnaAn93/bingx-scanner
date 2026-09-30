@@ -251,10 +251,8 @@ async def fetch_top_symbols(session):
                     continue
                 if val >= 10000 and sym.endswith("USD"):
                     res.append((sym, val))
-            except Exception as:
+            except Exception as e:
                 pass
-                        except Exception as ex:
-                            pass
                     res.sort(key=lambda x: x[1], reverse=True)
                     top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
                     print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
