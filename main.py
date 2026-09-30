@@ -302,7 +302,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         current_k < current_d
     )
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k < 35 and current_d < 35 and current_k > prev_k and current_d > prev_d)
+    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k < 35 and current_d < 35 and current_k > prev_k and current_d > prev_d):
         last_alert_time[symbol] = now
         level = sup
         print(f"Знайдено сигнал LONG (Підтримка + KDJ) для {symbol}", flush=True)
