@@ -275,11 +275,16 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     sup, res = min(lows[-1]), max(highs[-1])
     
     # 📌 Додаємо розрахунок KDJ для поточного аналізу
-    k_vals, d_vals, j_vals = calculate_kdj(kdata)
-    current_k = k_vals[-1]
-    current_d = d_vals[-1]
-    prev_k = k_vals[-2]
-    prev_d = d_vals[-2]
+    kd_res = calculate_kd(kdata)
+    if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3:
+        k_vals, d_vals, j_vals = kd_res
+        current_k = k_vals[-1]
+        current_d = d_vals[-1]
+        prev_k = k_vals[-2]
+        prev_d = d_vals[-2]
+    else:
+        return
+
 
     near_support = (sup != 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
     near_resistance = (res != 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
