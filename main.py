@@ -215,15 +215,15 @@ async def fetch_top_symbols(session):
                             sym = t.get("symbol")
                             if not sym or sym.startswith("NC") or "USD" in sym or not sym.endswith("USDT"): continue
                             try:
-                                # Використовуємо готовий quoteVolume (об'єм у USDT) напряму
-                                val = float(t.get("quoteVolume", 0))
-                                if val >= MIN_24H_VOLUME_USDT: 
+                                val = float(str(t.get("quoteVolume", 0)).replace(',', '.'))
+                                # Тимчасово знижуємо мінімальний об'єм до 10 000 USDT для перевірки
+                                if val >= 10000: 
                                     res.append((sym, val))
-                            except:
+                            except Exception as ex:
                                 pass
                         res.sort(key=lambda x: x[1], reverse=True)
                         top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                        print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)}", flush=True)
+                        print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
                         return top_symbols
                 else:
                     print(f"⚠️ Помилка API біржі у fetch_top_symbols: {data}", flush=True)
