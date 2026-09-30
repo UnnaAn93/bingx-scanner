@@ -240,14 +240,19 @@ async def fetch_top_symbols(session):
                     print(f"FIRST COIN: {d[0]}", flush=True)
                     res = []
                     for t in d:
-                        if not isinstance(t, dict): continue
-                        sym = t.get("symbol")
-                        if not sym: continue
-                        try:
-                            vol_val = t.get("quoteVolume") or t.get("volume") or 0
-                            val = float(str(vol_val).replace(',', '.'))
-                            if val >= 10000 and sym.endswith("USDT"): 
-                                res.append((sym, val))
+            if not isinstance(t, dict): continue
+            sym = t.get("symbol")
+            if not sym: continue
+            try:
+                vol_val = t.get("quoteVolume") or t.get("volume") or 0
+                val = float(str(vol_val).replace(',', '.'))
+                # ДОДАЄМО ФІЛЬТР ТУТ: відсікаємо все, що містить "2USDT-USDT"
+                if "2USDT-USDT" in sym:
+                    continue
+                if val >= 10000 and sym.endswith("USD"):
+                    res.append((sym, val))
+            except Exception as:
+                pass
                         except Exception as ex:
                             pass
                     res.sort(key=lambda x: x[1], reverse=True)
