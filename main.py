@@ -208,7 +208,7 @@ async def fetch_top_symbols(session):
                 data = await r.json()
                 d = data.get("data")
                 if isinstance(d, list) and len(d) > 0:
-                    print(🔍 ПЕРША МОНЕТА ВІД БІРЖІ: {d[0]}, flush=True) # Виведемо структуру першої монети
+                    print(ПЕРША МОНЕТА ВІД БІРЖІ: {d[0]}, flush=True) # Виведемо структуру першої монети
                     res = []
                     for t in d:
                         if not isinstance(t, dict): continue
