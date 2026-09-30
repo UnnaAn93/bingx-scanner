@@ -206,6 +206,7 @@ async def fetch_top_symbols(session):
         async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
+                print(f"🔍 Сира відповідь ticker: {data}", flush=True)
                 if data.get("code") == 0:
                     d = data.get("data")
                     if isinstance(d, list):
@@ -221,7 +222,10 @@ async def fetch_top_symbols(session):
                                 pass
                         res.sort(key=lambda x: x[1], reverse=True)
                         return [x[0] for x in res[:TOP_COINS_LIMIT]]
-    except: pass
+                else:
+                    print(f"⚠️ Помилка API біржі у fetch_top_symbols: {data}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Виняток у fetch_top_symbols: {e}", flush=True)
     return []
 
 async def fetch_kline(session, symbol):
