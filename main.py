@@ -290,7 +290,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         min(closes[-1], opens[-1]) >= ema and 
         min(closes[-2], opens[-2]) >= ema and
         not near_resistance and
-        current_k < 50 and current_d < 50 and current_k > prev_k and current_d > prev_d
+        current_k > current_d and prev_k <= prev_d
     )
 
     momentum_short = (
@@ -302,7 +302,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         current_k < current_d
     )
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k < 50 and current_d < 50 and current_k > prev_k and current_d > prev_d):
+    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k > current_d and prev_k <= prev_d):
         last_alert_time[symbol] = now
         level = sup
         print(f"Знайдено сигнал LONG (Підтримка + KDJ) для {symbol}", flush=True)
