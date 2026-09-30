@@ -477,28 +477,33 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
-        await send_to_telegram(session, "🔄 Скрипт успішно оновлено та запущено!")
-        
+        await send_to_telegram(session, "🟢 Скрипт успішно оновлено та запущено!")
+
         asyncio.create_task(self_ping())
         previous_open_syms = set()
         last_hourly_report = time.time()
-        
+
         while True:
             try:
                 start = asyncio.get_event_loop().time()
-                
+                print("🔄 Початок нового циклу сканування ринку...", flush=True)
+
                 if time.time() - last_hourly_report >= 3600:
                     if not positions:
-                        report_msg = "ℹ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
+                        report_msg = "ℹ️ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
                         print(report_msg, flush=True)
                         await send_to_telegram(session, report_msg)
                     last_hourly_report = time.time()
 
                 positions = await fetch_open_positions(session)
+                print(f"📊 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
 
-                current_open_syms = {p.get("symbol") for p in positions} if isinstance(positions, list) else set()
+                current_open_syms = (
+                    [p.get("symbol") for p in positions]
+                    if isinstance(positions, list)
+                    else set()
+                )
 
-                
                 closed_by_exchange = previous_open_syms - current_open_syms
                 for sym in closed_by_exchange:
                     msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n• Монета: {sym}"
@@ -512,9 +517,9 @@ async def main():
                     resistance_touches_count.pop(sym, None)
                     last_touch_candle_time.pop(sym, None)
                     last_alert_time.pop(sym, None)
-                    
+
                 previous_open_syms = current_open_syms
-                
+
                 if not positions:
                     handled_partial_positions.clear()
                     partial_exit_prices.clear()
@@ -522,22 +527,34 @@ async def main():
                     support_touches_count.clear()
                     resistance_touches_count.clear()
                     last_touch_candle_time.clear()
+                    last_alert_time.clear()
                 else:
                     for p in positions:
                         await monitor_pos(session, p)
-                        
+
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
+                    print(f"📈 Отримано тикерів для сканування: {len(syms) if syms else 0}", flush=True)
+                    
                     if syms:
-                        tasks = [scan_coin(session, symbol, len(positions), current_open_syms) for symbol in syms]
+                        tasks = [
+                            scan_coin(
+                                session, symbol, len(positions), current_open_syms
+                            )
+                            for symbol in syms
+                        ]
                         await asyncio.gather(*tasks)
-                        
+                else:
+                    print("⏸ Досягнуто ліміт відкритих позицій (>= 2), сканування монет пропущено.", flush=True)
+
                 elapsed = asyncio.get_event_loop().time() - start
-                # Інтервал очікування змінено на 300 секунд (5 хвилин)
+                print(f"💤 Цикл завершено за {elapsed:.2f} сек. Чекаємо на наступний...", flush=True)
+                
                 await asyncio.sleep(max(1, 300 - elapsed))
             except Exception as e:
-                print(f"Помилка циклу: {e}", flush=True)
+                print(f"⚠️ Помилка у головному циклі: {e}", flush=True)
                 await asyncio.sleep(10)
+                    
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
