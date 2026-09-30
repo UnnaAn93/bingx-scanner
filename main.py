@@ -274,8 +274,12 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     ema = calculate_ema(closes, 50)
     sup, res = min(lows[-1]), max(highs[-1])
     
-    # 📌 Додаємо розрахунок KDJ для поточного аналізу
-    kd_res = calculate_kd(kdata)
+    # Безпечний розрахунок KD
+    try:
+        kd_res = calculate_kd(kdata) if 'calculate_kd' in globals() else None
+    except Exception:
+        kd_res = None
+
     if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3:
         k_vals, d_vals, j_vals = kd_res
         current_k = k_vals[-1]
@@ -283,7 +287,8 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         prev_k = k_vals[-2]
         prev_d = d_vals[-2]
     else:
-        return
+        # Якщо функція не повертає списки, задаємо базові значення, щоб бот не падав
+        current_k, current_d, prev_k, prev_d = 0, 0, 0, 0
 
 
     near_support = (sup != 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
