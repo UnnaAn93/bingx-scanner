@@ -208,14 +208,13 @@ async def fetch_top_symbols(session):
                 data = await r.json()
                 d = data.get("data")
                 if isinstance(d, list) and len(d) > 0:
-                    print(ПЕРША МОНЕТА ВІД БІРЖІ: {d[0]}, flush=True) # Виведемо структуру першої монети
+                    print(f"FIRST COIN: {d[0]}", flush=True)
                     res = []
                     for t in d:
                         if not isinstance(t, dict): continue
                         sym = t.get("symbol")
                         if not sym: continue
                         try:
-                            # Шукаємо об'єм по різних можливих ключах
                             vol_val = t.get("quoteVolume") or t.get("volume") or 0
                             val = float(str(vol_val).replace(',', '.'))
                             if val >= 10000 and sym.endswith("USDT"): 
@@ -224,15 +223,16 @@ async def fetch_top_symbols(session):
                             pass
                     res.sort(key=lambda x: x[1], reverse=True)
                     top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                    print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
+                    print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
                     return top_symbols
                 else:
-                    print(f"⚠️ Помилка: список порожній", flush=True)
+                    print("Помилка: список порожній", flush=True)
             else:
-                print(f"⚠️ Помилка HTTP: {r.status}", flush=True)
+                print(f"Помилка HTTP: {r.status}", flush=True)
     except Exception as e:
-        print(f"⚠️ Виняток у fetch_top_symbols: {e}", flush=True)
+        print(f"Виняток у fetch_top_symbols: {e}", flush=True)
     return []
+
 
 async def fetch_kline(session, symbol):
     try:
