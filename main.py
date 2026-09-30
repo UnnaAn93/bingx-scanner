@@ -76,7 +76,7 @@ def calculate_atr(kdata, period=14):
         tr.append(max(h - l, abs(h - pc), abs(l - pc)))
     return sum(tr[-period:]) / period if len(tr) >= period else (tr[-1] if tr else 0.0)
 
-def calculate_kdj(kdata, n=9, m1=3, m2=3):
+def calculate_kd(kdata, n=9, m1=3, m2=3):
     if len(kdata) < n: return None, None, None
     k_l, d_l, j_l = [], [], []
     k, d = 50.0, 50.0
