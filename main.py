@@ -285,20 +285,16 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     # Суворі умови з урахуванням EMA за закриттям (тілом свічки)
     
     momentum_long = (
-        has_momentum_volume_spike and 
-        is_solid_candle and 
-        min(closes[-1], opens[-1]) >= ema and 
-        min(closes[-2], opens[-2]) >= ema and
-        not near_resistance and
+        has_momentum_volume_spike and
+        is_solid_candle and
+        cur_price >= ema and
         current_k > current_d and prev_k <= prev_d
     )
 
     momentum_short = (
-        has_momentum_volume_spike and 
-        is_solid_candle and 
-        max(closes[-1], opens[-1]) <= ema and 
-        max(closes[-2], opens[-2]) <= ema and
-        not near_support and
+        has_momentum_volume_spike and
+        is_solid_candle and
+        cur_price <= ema and
         current_k < current_d
     )
 
