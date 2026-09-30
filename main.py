@@ -153,6 +153,8 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
+if not atr or atr <= 0:
+    atr = float(kdata[-1]['close']) * 0.01
     if side == "LONG":
         stop_p = round(level - (1.5 * atr), 3)
         stop_s = f"stopPrice={stop_p}&positionSide=LONG&quantity={qty}&side=SELL&symbol={symbol}&timestamp={ts}"
