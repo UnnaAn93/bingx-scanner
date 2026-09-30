@@ -485,11 +485,21 @@ async def main():
         
         asyncio.create_task(self_ping())
         previous_open_syms = set()
+        last_hourly_report = time.time()
         
         while True:
             try:
                 start = asyncio.get_event_loop().time()
+                
+                if time.time() - last_hourly_report >= 3600:
+                    if not positions:
+                        report_msg = "ℹ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
+                        print(report_msg, flush=True)
+                        await send_to_telegram(session, report_msg)
+                    last_hourly_report = time.time()
+
                 positions = await fetch_open_positions(session)
+
                 current_open_syms = {p.get("symbol") for p in positions} if isinstance(positions, list) else set()
 
                 
