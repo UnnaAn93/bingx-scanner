@@ -253,10 +253,10 @@ async def fetch_top_symbols(session):
                     res.append((sym, val))
             except Exception as e:
                 pass
-                    res.sort(key=lambda x: x[1], reverse=True)
-                    top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                    print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
-                    return top_symbols
+        res.sort(key=lambda x: x[1], reverse=True)
+        top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
+        print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)}")
+        return top_symbols
                 else:
                     print("Помилка: список порожній", flush=True)
             else:
