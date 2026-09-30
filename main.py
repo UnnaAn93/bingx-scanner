@@ -382,9 +382,13 @@ async def monitor_pos(session, pos):
     kdata = await fetch_kline(session, sym)
     if not kdata or len(kdata) < 15: return
     
-    k_v, d_v, j_v = calculate_kdj(kdata)
-    if not j_v or len(j_v) < 2: return
-    
+    kd_res = calculate_kd(kdata)
+    if not isinstance(kd_res, (list, tuple)) or len(kd_res) < 3:
+        return
+    k_v, d_v, j_v = kd_res
+    if not j_v or len(j_v) < 2:
+        return
+
     cur_j, prev_j, cur_k, prev_k = j_v[-1], j_v[-2], k_v[-1], k_v[-2]
     cur_c = float(kdata[-1]['close'])
     prev_c = float(kdata[-2]['close']) if len(kdata) >= 2 else cur_c
