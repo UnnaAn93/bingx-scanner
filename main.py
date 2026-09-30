@@ -280,15 +280,14 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     except Exception:
         kd_res = None
 
-    if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3:
+    if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3 and len(kd_res[0]) >= 2:
         k_vals, d_vals, j_vals = kd_res
-        current_k = k_vals[-1]
-        current_d = d_vals[-1]
-        prev_k = k_vals[-2]
-        prev_d = d_vals[-2]
+        current_k = float(k_vals[-1])
+        current_d = float(d_vals[-1])
+        prev_k = float(k_vals[-2])
+        prev_d = float(d_vals[-2])
     else:
-        # Якщо функція не повертає списки, задаємо базові значення, щоб бот не падав
-        current_k, current_d, prev_k, prev_d = 0, 0, 0, 0
+        current_k, current_d, prev_k, prev_d = 0.0, 0.0, 0.0, 0.0
 
 
     near_support = (sup != 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
