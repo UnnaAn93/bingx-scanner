@@ -77,23 +77,48 @@ def calculate_atr(kdata, period=14):
     return sum(tr[-period:]) / period if len(tr) >= period else (tr[-1] if tr else 0.0)
 
 def calculate_kd(kdata, n=9, m1=3, m2=3):
-    if len(kdata) < n: return None, None, None
-    k_l, d_l, j_l = [], [], []
-    k, d = 50.0, 50.0
-    for i in range(len(kdata)):
-        if i < n - 1:
-            k_l.append(50.0); d_l.append(50.0); j_l.append(50.0)
-            continue
-        win = kdata[i - n + 1 : i + 1]
-        hh = max(x['high'] for x in win)
-        mm = min(x['low'] for x in win)
-        c = kdata[i]['close']
-        rsv = 50.0 if hh == mm else (c - mm) / (hh - mm) * 100
-        k = ((m1 - 1) * k + rsv) / m1
-        d = ((m2 - 1) * d + k) / m2
-        j = 3 * k - 2 * d
-        k_l.append(k); d_l.append(d); j_l.append(j)
-    return k_l, d_l, j_l
+    try:
+        if not kdata or len(kdata) < n: 
+            return [50.0], [50.0], [50.0]
+        
+        closes = [float(x['close']) for x in kdata]
+        lows = [float(x['low']) for x in kdata]
+        highs = [float(x['high']) for x in kdata]
+        
+        k_list = []
+        d_list = []
+        j_list = []
+        
+        rsv_list = []
+        for i in range(len(kdata)):
+            if i < n - 1:
+                rsv_list.append(50.0)
+                continue
+            sub_lows = lows[i - n + 1 : i + 1]
+            sub_highs = highs[i - n + 1 : i + 1]
+            l_val = min(sub_lows)
+            h_val = max(sub_highs)
+            c_val = closes[i]
+            
+            if h_val - l_val == 0:
+                rsv = 50.0
+            else:
+                rsv = (c_val - l_val) / (h_val - l_val) * 100
+            rsv_list.append(rsv)
+            
+        k = 50.0
+        d = 50.0
+        for rsv in rsv_list:
+            k = (2 / 3) * k + (1 / 3) * rsv
+            d = (2 / 3) * d + (1 / 3) * k
+            j = 3 * k - 2 * d
+            k_list.append(k)
+            d_list.append(d)
+            j_list.append(j)
+            
+        return k_list, d_list, j_list
+    except Exception:
+        return [50.0], [50.0], [50.0]
 
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET: return []
