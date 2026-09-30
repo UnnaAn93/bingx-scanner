@@ -206,7 +206,6 @@ async def fetch_top_symbols(session):
         async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
-                print(f"🔍 Сира відповідь ticker: {data}", flush=True)
                 if data.get("code") == 0:
                     d = data.get("data")
                     if isinstance(d, list):
@@ -216,12 +215,16 @@ async def fetch_top_symbols(session):
                             sym = t.get("symbol")
                             if not sym or sym.startswith("NC") or "USD" in sym or not sym.endswith("USDT"): continue
                             try:
-                                val = float(t.get("volume", 0)) * float(t.get("lastPrice", 0))
-                                if val >= MIN_24H_VOLUME_USDT: res.append((sym, val))
+                                # Використовуємо готовий quoteVolume (об'єм у USDT) напряму
+                                val = float(t.get("quoteVolume", 0))
+                                if val >= MIN_24H_VOLUME_USDT: 
+                                    res.append((sym, val))
                             except:
                                 pass
                         res.sort(key=lambda x: x[1], reverse=True)
-                        return [x[0] for x in res[:TOP_COINS_LIMIT]]
+                        top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
+                        print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)}", flush=True)
+                        return top_symbols
                 else:
                     print(f"⚠️ Помилка API біржі у fetch_top_symbols: {data}", flush=True)
     except Exception as e:
