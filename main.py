@@ -206,29 +206,32 @@ async def fetch_top_symbols(session):
         async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
-                if data.get("code") == 0:
-                    d = data.get("data")
-                    if isinstance(d, list):
-                        res = []
-                        for t in d:
-                            if not isinstance(t, dict): continue
-                            sym = t.get("symbol")
-                            if not sym or sym.startswith("NC") or "USD" in sym or not sym.endswith("USDT"): continue
-                            try:
-                                val = float(str(t.get("quoteVolume", 0)).replace(',', '.'))
-                                # Тимчасово знижуємо мінімальний об'єм до 10 000 USDT для перевірки
-                                if val >= 10000: 
-                                    res.append((sym, val))
-                            except Exception as ex:
-                                pass
-                        res.sort(key=lambda x: x[1], reverse=True)
-                        top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
-                        print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
-                        return top_symbols
+                print(f"🔍 DEBUG data keys: {list(data.keys()) if isinstance(data, dict) else type(data)}", flush=True)
+                d = data.get("data")
+                print(f"🔍 DEBUG d type: {type(d)}, length: {len(d) if isinstance(d, (list, dict)) else 'N/A'}", flush=True)
+                
+                if isinstance(d, list):
+                    res = []
+                    for t in d:
+                        if not isinstance(t, dict): continue
+                        sym = t.get("symbol")
+                        if not sym or sym.startswith("NC") or "USD" in sym or not sym.endswith("USDT"): continue
+                        try:
+                            val = float(str(t.get("quoteVolume", 0)).replace(',', '.'))
+                            if val >= 10000: 
+                                res.append((sym, val))
+                        except Exception as ex:
+                            pass
+                    res.sort(key=lambda x: x[1], reverse=True)
+                    top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    print(f"📈 Успішно відібрано монет за об'ємом: {len(top_symbols)} (всього знайдено: {len(res)})", flush=True)
+                    return top_symbols
                 else:
-                    print(f"⚠️ Помилка API біржі у fetch_top_symbols: {data}", flush=True)
+                    print(f"⚠️ Помилка: 'data' не є списком! Отримано: {d}", flush=True)
+            else:
+                print(f"⚠️ Помилка HTTP: {r.status}", flush=True)
     except Exception as e:
-        print(f"⚠️ Виняток у fetch_top_symbols: {e}", flush=True)
+        print(f"⚠️️ Виняток у fetch_top_symbols: {e}", flush=True)
     return []
 
 async def fetch_kline(session, symbol):
