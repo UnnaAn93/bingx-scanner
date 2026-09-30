@@ -499,7 +499,7 @@ async def main():
                 print(f"📊 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
 
                 current_open_syms = (
-                    [p.get("symbol") for p in positions]
+                    {p.get("symbol") for p in positions}
                     if isinstance(positions, list)
                     else set()
                 )
