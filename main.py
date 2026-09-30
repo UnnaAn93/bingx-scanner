@@ -297,7 +297,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
         
     ema = calculate_ema(closes, 50)
-    sup, res = min(lows[-1]), max(highs[-1])
+    sup, res = lows[-1], highs[-1]
     
         # Надійний виклик KD у сканері
     try:
