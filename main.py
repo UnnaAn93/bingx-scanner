@@ -274,18 +274,18 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     ema = calculate_ema(closes, 50)
     sup, res = min(lows[-1]), max(highs[-1])
     
-    # Безпечний розрахунок KD
+        # Надійний виклик KD у сканері
     try:
-        kd_res = calculate_kd(kdata) if 'calculate_kd' in globals() else None
+        kd_res = calculate_kd(kdata)
     except Exception:
         kd_res = None
 
-    if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3 and len(kd_res[0]) >= 2:
+    if isinstance(kd_res, (list, tuple)) and len(kd_res) >= 3:
         k_vals, d_vals, j_vals = kd_res
-        current_k = float(k_vals[-1])
-        current_d = float(d_vals[-1])
-        prev_k = float(k_vals[-2])
-        prev_d = float(d_vals[-2])
+        current_k = float(k_vals[-1]) if k_vals else 0.0
+        current_d = float(d_vals[-1]) if d_vals else 0.0
+        prev_k = float(k_vals[-2]) if len(k_vals) >= 2 else 0.0
+        prev_d = float(d_vals[-2]) if len(d_vals) >= 2 else 0.0
     else:
         current_k, current_d, prev_k, prev_d = 0.0, 0.0, 0.0, 0.0
 
