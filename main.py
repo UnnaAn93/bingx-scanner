@@ -153,15 +153,17 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
-if not atr or atr <= 0:
-    atr = float(kdata[-1]['close']) * 0.01
+    if not atr or atr <= 0:
+        atr = float(kdata[-1]['close']) * 0.01
+    
     if side == "LONG":
         stop_p = round(level - (1.5 * atr), 3)
-        stop_s = f"stopPrice={stop_p}&positionSide=LONG&quantity={qty}&side=SELL&symbol={symbol}&timestamp={ts}"
+        stop_s = f"stopPrice={stop_p}&positionSide=LONG&quantity={qty}&side=SELL&symbol={symbol}&type=STOP_MARKET&timestamp={ts}"
     else:
         stop_p = round(level + (1.5 * atr), 3)
-        stop_s = f"stopPrice={stop_p}&positionSide=SHORT&quantity={qty}&side=BUY&symbol={symbol}&timestamp={ts}"
-        p_str = f'side={stop_s}&positionSide={p_side}&quantity={qty}&stopPrice={stop_p}&symbol={symbol}&timestamp={ts}&type=STOP_MARKET'
+        stop_s = f"stopPrice={stop_p}&positionSide=SHORT&quantity={qty}&side=BUY&symbol={symbol}&type=STOP_MARKET&timestamp={ts}"
+        
+    p_str = stop_s
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
