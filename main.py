@@ -239,7 +239,7 @@ async def fetch_top_symbols(session):
                 if isinstance(d, list) and len(d) > 0:
                     print(f"FIRST COIN: {d[0]}", flush=True)
                     res = []
-                    for t in d:
+        for t in d:
             if not isinstance(t, dict): continue
             sym = t.get("symbol")
             if not sym: continue
