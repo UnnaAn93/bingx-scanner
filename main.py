@@ -232,31 +232,30 @@ async def set_break_even(session, symbol, side, entry, qty):
 
 async def fetch_top_symbols(session):
     try:
-        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=5) as r:
+        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker") as r:
             if r.status == 200:
                 data = await r.json()
                 d = data.get("data")
                 if isinstance(d, list) and len(d) > 0:
                     print(f"FIRST COIN: {d[0]}", flush=True)
                     res = []
-        for t in d:
-            if not isinstance(t, dict): continue
-            sym = t.get("symbol")
-            if not sym: continue
-            try:
-                vol_val = t.get("quoteVolume") or t.get("volume") or 0
-                val = float(str(vol_val).replace(',', '.'))
-                # ДОДАЄМО ФІЛЬТР ТУТ: відсікаємо все, що містить "2USDT-USDT"
-                if "2USDT-USDT" in sym:
-                    continue
-                if val >= 10000 and sym.endswith("USD"):
-                    res.append((sym, val))
-            except Exception as e:
-                pass
-        res.sort(key=lambda x: x[1], reverse=True)
-        top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
-        print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)}")
-        return top_symbols
+                    for t in d:
+                        if not isinstance(t, dict): continue
+                        sym = t.get("symbol")
+                        if not sym: continue
+                        try:
+                            vol_val = t.get("quoteVolume") or t.get("volume") or 0
+                            val = float(str(vol_val).replace(',', '.'))
+                            if "2USDT-USDT" in sym:
+                                continue
+                            if val >= 10000 and sym.endswith("USD"):
+                                res.append((sym, val))
+                        except Exception as e:
+                            pass
+                    res.sort(key=lambda x: x[1], reverse=True)
+                    top_symbols = [x[0] for x in res[:TOP_COINS_LIMIT]]
+                    print(f"Успішно відібрано монет за об'ємом: {len(top_symbols)}")
+                    return top_symbols
                 else:
                     print("Помилка: список порожній", flush=True)
             else:
@@ -264,7 +263,6 @@ async def fetch_top_symbols(session):
     except Exception as e:
         print(f"Виняток у fetch_top_symbols: {e}", flush=True)
     return []
-
 
 async def fetch_kline(session, symbol):
     try:
