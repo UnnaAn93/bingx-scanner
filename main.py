@@ -174,7 +174,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     await cancel_existing_stop_orders(session, symbol)
     
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000) - 5000)
+    ts = str(int(time.time() * 1000)) - 5000
     atr = calculate_atr(kdata, 14)
     if not atr or atr <= 0:
         atr = float(kdata[-1]['close']) * 0.01
