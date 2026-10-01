@@ -272,7 +272,7 @@ async def fetch_top_symbols(session):
                             val = float(str(vol_val).replace(',', '.'))
                             if "USD-USD" in sym or "-USD" in sym or "2USDT-USDT" in sym:
                                 continue
-                            if val >= 10000 and sym.endswith("-USDT"):
+                            if val >= 10000 and "USDT" in sym:
                                 res.append((sym, val))
                         except Exception as e:
                             pass
@@ -373,14 +373,14 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         current_k > 20  
     )
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k > current_d and prev_k <= prev_d):
+    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k >= current_d and prev_k <= prev_d) and current_k < 85:
         last_alert_time[symbol] = now
         level = sup
         print(f"Знайдено сигнал LONG (Підтримка + KDJ) для {symbol}", flush=True)
         await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
         return
 
-    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema and (current_k < current_d):
+    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema and (current_k <= current_d and prev_k >= prev_d) and current_j > 20:
         last_alert_time[symbol] = now
         level = res
         print(f"Знайдено сигнал SHORT (Опір + KDJ) для {symbol}", flush=True)
