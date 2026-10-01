@@ -368,9 +368,9 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     momentum_short = (
         has_momentum_volume_spike and
         is_solid_candle and
-        cur_price <= ema and
+        cur_price < ema and
         current_k < current_d and
-        current_k > 20  
+        current_j < 20
     )
 
     if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k >= current_d and prev_k <= prev_d) and current_k < 85:
