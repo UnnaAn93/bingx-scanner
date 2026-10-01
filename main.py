@@ -637,7 +637,7 @@ async def main():
                 print(f"💤 Цикл завершено за {elapsed:.2f} сек. Чекаємо на наступний...", flush=True)
                 
                 await asyncio.sleep(max(1, 300 - elapsed))
-            except Exception as e:
+             except Exception as e:
                 print(f"⚠️ Помилка у головному циклі: {e}", flush=True)
                 await asyncio.sleep(10)
                     
