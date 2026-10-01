@@ -406,7 +406,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
 async def close_partial(session, symbol, side, qty):
     if not API_KEY or not API_SECRET: return False
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) - 5000)
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
