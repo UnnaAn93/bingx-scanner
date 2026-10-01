@@ -272,7 +272,7 @@ async def fetch_top_symbols(session):
                             val = float(str(vol_val).replace(',', '.'))
                             if "USD-USD" in sym or "-USD" in sym or "2USDT-USDT" in sym:
                                 continue
-                            if val >= 10000 and sym.endswith
+                            if val >= 10000 and sym.endswith("-USDT"):
                                 res.append((sym, val))
                         except Exception as e:
                             pass
