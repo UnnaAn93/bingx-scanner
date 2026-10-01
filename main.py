@@ -133,7 +133,8 @@ async def fetch_open_positions(session):
                 if data.get("code") == 0:
                     d = data.get("data")
                     if isinstance(d, list):
-                        return [p for p in d if isinstance(p, dict) and float(p.get("positionAmt", 0)) != 0]
+                        return [p for p in data if isinstance(p, dict) and float(p.get("positionAmt", 0)) != 0]
+                        
     except: pass
     return []
 
