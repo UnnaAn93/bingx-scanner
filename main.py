@@ -12,8 +12,8 @@ MOMENTUM_VOLUME_MULTIPLIER = 2.5
 APPROACH_PERCENT = 0.015
 TIMEFRAME = "15m"
 LIMIT_CANDLES = 100
-TOP_COINS_LIMIT = 250
-MIN_24H_VOLUME_USDT = 2_000_000
+TOP_COINS_LIMIT = 400
+MIN_24H_VOLUME_USDT = 500_000
 COOLDOWN_SECONDS = 300  # Змінено на 5 хвилин
 LEVERAGE = 10
 BOT_MARGIN_USDT = 1.0
@@ -272,7 +272,7 @@ async def fetch_top_symbols(session):
                             val = float(str(vol_val).replace(',', '.'))
                             if "USD-USD" in sym or "2USDT-USDT" in sym:
                                 continue
-                            if val >= 10000 and "USDT" in sym:
+                            if val >= 500 and "USDT" in sym:
                                 res.append((sym, val))
                         except Exception as e:
                             pass
