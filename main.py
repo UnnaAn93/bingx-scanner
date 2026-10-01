@@ -330,10 +330,6 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         
     avg_vol = sum(vols[:-1]) / (len(vols) - 1)
     has_volume_spike = (cur_vol > avg_vol * VOLUME_MULTIPLIER) and (cur_vol > 0)
-    has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
-        
-    ema = calculate_ema(closes, 50)
-    sup, res = lows[-1], highs[-1]
 async def scan_coin(session, symbol, open_count, open_symbols):
     if symbol in open_symbols:
         return
@@ -386,7 +382,16 @@ async def scan_coin(session, symbol, open_count, open_symbols):
 
     candle_body = abs(cur_price - cur_open)
     candle_range = cur_high - cur_low
+    
+    # Вираховуємо тіні свічки для захисту від шпильок
+    upper_shadow = cur_high - max(cur_price, cur_open)
+    lower_shadow = min(cur_price, cur_open) - cur_low
+    
     is_solid_candle = candle_range > 0 and (candle_body / candle_range >= 0.4)
+    
+    # Фільтри проти довгих тіней (шпильок)
+    no_large_upper_shadow = upper_shadow <= candle_body * 1.5
+    no_large_lower_shadow = lower_shadow <= candle_body * 1.5
 
     # Отримуємо закриття попередньої свічки для перевірки повного закріплення
     prev_close = float(kdata[-2]['close'])
@@ -399,9 +404,9 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     # Якщо ціна перетинає EMA або товчеться біля неї (немає чіткого закріплення) - пропускаємо
     is_sideways = not price_above_ema and not price_below_ema
 
-    # Умови для входів (забороняємо шорти вище EMA та лонги нижче EMA)
-    can_long = price_above_ema and (current_k > current_d and prev_k > prev_d)
-    can_short = price_below_ema and (current_k < current_d and prev_k < prev_d)
+    # Умови для входів з урахуванням відсутності шпильок
+    can_long = price_above_ema and (current_k > current_d and prev_k > prev_d) and no_large_upper_shadow
+    can_short = price_below_ema and (current_k < current_d and prev_k < prev_d) and no_large_lower_shadow
 
     if not is_sideways:
         if near_support and has_volume_spike and is_solid_candle and can_short:
