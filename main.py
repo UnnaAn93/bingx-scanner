@@ -340,6 +340,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         current_d = float(d_vals[-1]) if d_vals else 0.0
         prev_k = float(k_vals[-2]) if len(k_vals) >= 2 else 0.0
         prev_d = float(d_vals[-2]) if len(d_vals) >= 2 else 0.0
+        current_j = 3 * current_k - 2 * current_d
     else:
         current_k, current_d, prev_k, prev_d = 0.0, 0.0, 0.0, 0.0
 
