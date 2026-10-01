@@ -334,8 +334,38 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         
     ema = calculate_ema(closes, 50)
     sup, res = lows[-1], highs[-1]
-    
-        # Надійний виклик KD у сканері
+async def scan_coin(session, symbol, open_count, open_symbols):
+    if symbol in open_symbols:
+        return
+    if open_count >= 2:
+        return
+    now = time.time()
+    if symbol in last_alert_time and now - last_alert_time[symbol] < COOLDOWN_SECONDS:
+        return
+    kdata = await fetch_kline(session, symbol)
+    if not kdata or len(kdata) < 60:
+        return
+
+    closes = [x['close'] for x in kdata]
+    opens = [x['open'] for x in kdata]
+    vols = [x['volume'] for x in kdata]
+    lows = [x['low'] for x in kdata]
+    higs = [x['high'] for x in kdata]
+
+    cur_vol = vols[-1]
+    cur_price = closes[-1]
+    cur_open = opens[-1]
+    cur_high = higs[-1]
+    cur_low = lows[-1]
+
+    avg_vol = sum(vols[:-1]) / (len(vols) - 1)
+    has_volume_spike = (cur_vol > avg_vol * VOLUME_MULTIPLIER) and (cur_vol > 0)
+    has_momentum_volume_spike = (cur_vol > avg_vol * MOMENTUM_VOLUME_MULTIPLIER) and (cur_vol > 0)
+
+    ema = calculate_ema(closes, 50)
+    sup, res = lows[-1], higs[-1]
+
+    # Надійний індикатор KD у сканері
     try:
         kd_res = calculate_kd(kdata)
     except Exception:
@@ -351,64 +381,54 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     else:
         current_k, current_d, prev_k, prev_d = 0.0, 0.0, 0.0, 0.0
 
-
-    near_support = (sup != 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
-    near_resistance = (res != 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
-
-        
     near_support = (sup > 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
     near_resistance = (res > 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
-        
+
     candle_body = abs(cur_price - cur_open)
     candle_range = cur_high - cur_low
     is_solid_candle = candle_range > 0 and (candle_body / candle_range >= 0.4)
-        
-    # Суворі умови з урахуванням EMA за закриттям (тілом свічки)
-    
-    momentum_long = (
-        has_momentum_volume_spike and
-        is_solid_candle and
-        cur_price >= ema and
-        current_k > current_d and prev_k <= prev_d and
-        current_k < 20
-    )
 
-    momentum_short = (
-        has_momentum_volume_spike and
-        is_solid_candle and
-        cur_price < ema and
-        current_k < current_d and
-        current_j > 80
-    )
+    # Отримуємо закриття попередньої свічки для перевірки повного закріплення
+    prev_close = float(kdata[-2]['close'])
+    ema_val = ema
 
-    if near_support and has_volume_spike and is_solid_candle and cur_price >= ema and (current_k >= current_d and prev_k <= prev_d) and current_k < 85:
-        last_alert_time[symbol] = now
-        level = sup
-        print(f"Знайдено сигнал LONG (Підтримка + KDJ) для {symbol}", flush=True)
-        await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
-        return
+    # Фільтр тренду та боковиків за допомогою EMA
+    price_above_ema = cur_price > ema_val and prev_close > ema_val
+    price_below_ema = cur_price < ema_val and prev_close < ema_val
 
-    elif near_resistance and has_volume_spike and is_solid_candle and cur_price <= ema and (current_k <= current_d and prev_k >= prev_d) and current_j > 20:
-        last_alert_time[symbol] = now
-        level = res
-        print(f"Знайдено сигнал SHORT (Опір + KDJ) для {symbol}", flush=True)
-        await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
-        return
+    # Якщо ціна перетинає EMA або товчеться біля неї (немає чіткого закріплення) - пропускаємо
+    is_sideways = not price_above_ema and not price_below_ema
 
-    elif momentum_long:
-        last_alert_time[symbol] = now
-        level = ema
-        print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}", flush=True)
-        await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
-        return
+    # Умови для входів (забороняємо шорти вище EMA та лонги нижче EMA)
+    can_long = price_above_ema and (current_k > current_d and prev_k > prev_d)
+    can_short = price_below_ema and (current_k < current_d and prev_k < prev_d)
 
-    elif momentum_short:
-        last_alert_time[symbol] = now
-        level = ema
-        print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}", flush=True)
-        await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
-        return
+    if not is_sideways:
+        if near_support and has_volume_spike and is_solid_candle and can_short:
+            level = sup
+            print(f"Знайдено сигнал SHORT (Підтримка + KDJ) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
+            return
 
+        elif near_resistance and has_volume_spike and is_solid_candle and can_long:
+            level = res
+            print(f"Знайдено сигнал LONG (Опір + KDJ) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
+            return
+
+        elif momentum_long and can_long:
+            last_alert_time[symbol] = now
+            level = ema_val
+            print(f"Знайдено сигнал LONG (Імпульсний пробій EMA 50) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
+            return
+
+        elif momentum_short and can_short:
+            last_alert_time[symbol] = now
+            level = ema_val
+            print(f"Знайдено сигнал SHORT (Імпульсний пробій EMA 50) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
+            return
         
 async def close_partial(session, symbol, side, qty):
     if not API_KEY or not API_SECRET: return False
