@@ -149,7 +149,30 @@ async def set_leverage(session, symbol, lev, side):
             pass
     except: pass
 
+async def cancel_existing_stop_orders(session, symbol):
+    try:
+        path = "/openApi/swap/v2/trade/openOrders"
+        ts = str(int(time.time() * 1000))
+        p_str = f"symbol={symbol}&timestamp={ts}"
+        sig = get_sign(API_SECRET, p_str)
+        async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
+            if r.status == 200:
+                data = await r.json()
+                orders = data.get("data", {}).get("orders", [])
+                for ord in orders:
+                    if ord.get("type") in ["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"]:
+                        order_id = ord.get("orderId")
+                        del_path = "/openApi/swap/v2/trade/order"
+                        del_ts = str(int(time.time() * 1000))
+                        del_p_str = f"orderId={order_id}&symbol={symbol}&timestamp={del_ts}"
+                        del_sig = get_sign(API_SECRET, del_p_str)
+                        await session.delete(f"{BINGX_BASE_URL}{del_path}?{del_p_str}&signature={del_sig}", headers={"X-BX-APIKEY": API_KEY})
+    except Exception as e:
+        print(f"Помилка при скасуванні старих ордерів для {symbol}: {e}", flush=True)
+
 async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
+    await cancel_existing_stop_orders(session, symbol)
+    
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     atr = calculate_atr(kdata, 14)
@@ -158,10 +181,10 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     
     if side == "LONG":
         stop_p = round(level - (1.5 * atr), 3)
-        stop_s = f"stopPrice={stop_p}&positionSide=LONG&quantity={qty}&side=SELL&symbol={symbol}&type=STOP_MARKET&timestamp={ts}"
+        stop_s = f"stopPrice={stop_p}&positionSide=LONG&quantity={qty}&side=SELL&symbol={symbol}&type=STOP_MARKET"
     else:
         stop_p = round(level + (1.5 * atr), 3)
-        stop_s = f"stopPrice={stop_p}&positionSide=SHORT&quantity={qty}&side=BUY&symbol={symbol}&type=STOP_MARKET&timestamp={ts}"
+        stop_s = f"stopPrice={stop_p}&positionSide=SHORT&quantity={qty}&side=BUY&symbol={symbol}&type=STOP_MARKET"
         
     p_str = stop_s
     sig = get_sign(API_SECRET, p_str)
@@ -208,6 +231,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
 
 async def set_break_even(session, symbol, side, entry, qty):
     if not API_KEY or not API_SECRET: return False
+    await cancel_existing_stop_orders(session, symbol)
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000))
     p_side = "LONG" if side == "LONG" else "SHORT"
@@ -246,9 +270,9 @@ async def fetch_top_symbols(session):
                         try:
                             vol_val = t.get("quoteVolume") or t.get("volume") or 0
                             val = float(str(vol_val).replace(',', '.'))
-                            if "2USDT-USDT" in sym:
+                            if "USD-USD" in sym or "-USD" in sym or "2USDT-USDT" in sym:
                                 continue
-                            if val >= 10000 and sym.endswith("USDT"):
+                            if val >= 10000 and sym.endswith
                                 res.append((sym, val))
                         except Exception as e:
                             pass
