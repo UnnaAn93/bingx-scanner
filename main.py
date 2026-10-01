@@ -563,25 +563,25 @@ async def main():
         previous_open_syms = set()
         last_hourly_report = time.time()
 
-        while True:
-            try:
-                start = asyncio.get_event_loop().time()
-                print("🔄 Початок нового циклу сканування ринку...", flush=True)
+    while True:
+        try:
+            start = asyncio.get_event_loop().time()
+            print("🔄 Початок нового циклу сканування ринку...", flush=True)
 
-                positions = await fetch_open_positions(session)
-                print(f"📊 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
+            positions = await fetch_open_positions(session)
+            print(f"🔍 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
 
-     if not positions:
-        if time.time() - last_hourly_report >= 3600:
-            report_msg = "ℹ️ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
-            print(report_msg, flush=True)
-            await send_to_telegram(session, report_msg)
-            last_hourly_report = time.time()
-    else:
-        if time.time() - last_hourly_report >= 900:
-            for p in positions:
-                await monitor_pos(session, p)
-            last_hourly_report = time.time()
+            if not positions:
+                if time.time() - last_hourly_report >= 3600:
+                    report_msg = "ℹ️ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
+                    print(report_msg, flush=True)
+                    await send_to_telegram(session, report_msg)
+                    last_hourly_report = time.time()
+            else:
+                if time.time() - last_hourly_report >= 900:
+                    for p in positions:
+                        await monitor_pos(session, p)
+                    last_hourly_report = time.time()
             
 
                 current_open_syms = (
