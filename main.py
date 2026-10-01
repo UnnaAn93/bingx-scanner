@@ -123,19 +123,25 @@ def calculate_kd(kdata, n=9, m1=3, m2=3):
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET: return []
     path = "/openApi/swap/v2/user/positions"
-    ts = str(int(time.time() * 1000) - 5000)
-    sig = get_sign(API_SECRET, f"timestamp={ts}")
-    url = f"{BINGX_BASE_URL}{path}?timestamp={ts}&signature={sig}"
+    ts = str(int(time.time() * 1000))
+    params = f"timestamp={ts}"
+    sig = get_sign(API_SECRET, params)
+    url = f"{BINGX_BASE_URL}{path}?{params}&signature={sig}"
     try:
         async with session.get(url, headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             if r.status == 200:
                 data = await r.json()
                 if data.get("code") == 0:
-                    d = data.get("data")
-                    if isinstance(d, list):
-                        return [p for p in data if isinstance(p, dict) and float(p.get("positionAmt", 0)) != 0]
-                        
-    except: pass
+                    pos_data = data.get("data", [])
+                    if isinstance(pos_data, dict):
+                        lst = pos_data.get("positions", [])
+                    elif isinstance(pos_data, list):
+                        lst = pos_data
+                    else:
+                        lst = []
+                    return [p for p in lst if isinstance(p, dict) and float(p.get("positionAmt", 0)) != 0]
+    except Exception as e:
+        print(f"Error fetching positions: {e}")
     return []
 
 async def set_leverage(session, symbol, lev, side):
