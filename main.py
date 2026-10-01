@@ -583,10 +583,8 @@ async def main():
                             await monitor_pos(session, p)
                         last_hourly_report = time.time()
 
-                current_open_syms = {
-                    p.get("symbol") for p in positions
-                    if isinstance(positions, list)
-                    else set()
+                current_open_syms = {p.get("symbol") for p in positions if isinstance(positions, list)}
+
                 }
 
                 closed_by_exchange = previous_open_syms - current_open_syms
