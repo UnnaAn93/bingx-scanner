@@ -123,7 +123,7 @@ def calculate_kd(kdata, n=9, m1=3, m2=3):
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET: return []
     path = "/openApi/swap/v2/user/positions"
-    ts = str(int(time.time() * 1000)) - 5000
+    ts = str(int(time.time() * 1000) - 5000)
     sig = get_sign(API_SECRET, f"timestamp={ts}")
     url = f"{BINGX_BASE_URL}{path}?timestamp={ts}&signature={sig}"
     try:
@@ -139,7 +139,7 @@ async def fetch_open_positions(session):
 
 async def set_leverage(session, symbol, lev, side):
     path = "/openApi/swap/v2/trade/leverage"
-    ts = str(int(time.time() * 1000)) - 5000
+    ts = str(int(time.time() * 1000) - 5000)
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"leverage={lev}&positionSide={p_side}&symbol={symbol}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
@@ -152,7 +152,7 @@ async def set_leverage(session, symbol, lev, side):
 async def cancel_existing_stop_orders(session, symbol):
     try:
         path = "/openApi/swap/v2/trade/openOrders"
-        ts = str(int(time.time() * 1000)) - 5000
+        ts = str(int(time.time() * 1000) - 5000)
         p_str = f"symbol={symbol}&timestamp={ts}"
         sig = get_sign(API_SECRET, p_str)
         async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
@@ -163,7 +163,7 @@ async def cancel_existing_stop_orders(session, symbol):
                     if ord.get("type") in ["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"]:
                         order_id = ord.get("orderId")
                         del_path = "/openApi/swap/v2/trade/order"
-                        del_ts = str(int(time.time() * 1000)) - 5000
+                        del_ts = str(int(time.time() * 1000) - 5000)
                         del_p_str = f"orderId={order_id}&symbol={symbol}&timestamp={del_ts}"
                         del_sig = get_sign(API_SECRET, del_p_str)
                         await session.delete(f"{BINGX_BASE_URL}{del_path}?{del_p_str}&signature={del_sig}", headers={"X-BX-APIKEY": API_KEY})
@@ -174,7 +174,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     await cancel_existing_stop_orders(session, symbol)
     
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000)) - 5000
+    ts = str(int(time.time() * 1000) - 5000)
     atr = calculate_atr(kdata, 14)
     if not atr or atr <= 0:
         atr = float(kdata[-1]['close']) * 0.01
@@ -207,7 +207,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
     await set_leverage(session, symbol, LEVERAGE, side)
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000)) - 5000
+    ts = str(int(time.time() * 1000) - 5000)
     qty = round(BOT_MARGIN_USDT * LEVERAGE / price, 4)
     if qty == 0: return
     p_side = "LONG" if side == "LONG" else "SHORT"
@@ -233,7 +233,7 @@ async def set_break_even(session, symbol, side, entry, qty):
     if not API_KEY or not API_SECRET: return False
     await cancel_existing_stop_orders(session, symbol)
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000)) - 5000
+    ts = str(int(time.time() * 1000) - 5000)
     p_side = "LONG" if side == "LONG" else "SHORT"
     c_side = "SELL" if side == "LONG" else "BUY"
     p_str = f"positionSide={p_side}&price={entry}&quantity={qty}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP"
