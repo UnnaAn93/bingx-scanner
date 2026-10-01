@@ -270,7 +270,7 @@ async def fetch_top_symbols(session):
                         try:
                             vol_val = t.get("quoteVolume") or t.get("volume") or 0
                             val = float(str(vol_val).replace(',', '.'))
-                            if "USD-USD" in sym or "-USD" in sym or "2USDT-USDT" in sym:
+                            if "USD-USD" in sym or "2USDT-USDT" in sym:
                                 continue
                             if val >= 10000 and "USDT" in sym:
                                 res.append((sym, val))
