@@ -563,39 +563,38 @@ async def main():
         previous_open_syms = set()
         last_hourly_report = time.time()
 
-    while True:
-        try:
-            start = asyncio.get_event_loop().time()
-            print("🔄 Початок нового циклу сканування ринку...", flush=True)
+        while True:
+            try:
+                start = asyncio.get_event_loop().time()
+                print("🔄 Початок нового циклу сканування ринку...", flush=True)
 
-            positions = await fetch_open_positions(session)
-            print(f"🔍 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
+                positions = await fetch_open_positions(session)
+                print(f"🔍 Знайдено відкритих позицій на біржі: {len(positions)}", flush=True)
 
-            if not positions:
-                if time.time() - last_hourly_report >= 3600:
-                    report_msg = "ℹ️ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
-                    print(report_msg, flush=True)
-                    await send_to_telegram(session, report_msg)
-                    last_hourly_report = time.time()
-            else:
-                if time.time() - last_hourly_report >= 900:
-                    for p in positions:
-                        await monitor_pos(session, p)
-                    last_hourly_report = time.time()
-            
+                if not positions:
+                    if time.time() - last_hourly_report >= 3600:
+                        report_msg = "ℹ️ Статус бота: Відкритих позицій немає, нових сигналів за останню годину не знайдено."
+                        print(report_msg, flush=True)
+                        await send_to_telegram(session, report_msg)
+                        last_hourly_report = time.time()
+                else:
+                    if time.time() - last_hourly_report >= 900:
+                        for p in positions:
+                            await monitor_pos(session, p)
+                        last_hourly_report = time.time()
 
-                current_open_syms = (
-                    {p.get("symbol") for p in positions}
+                current_open_syms = {
+                    p.get("symbol") for p in positions
                     if isinstance(positions, list)
                     else set()
-                )
+                }
 
                 closed_by_exchange = previous_open_syms - current_open_syms
                 for sym in closed_by_exchange:
-                    msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n• Монета: {sym}"
+                    msg = f"❌ УГОДУ ЗАКРИТО (СТОП БІРЖІ)\n Монета: {sym}"
                     print(msg, flush=True)
                     await send_to_telegram(session, msg)
-                    
+
                     handled_partial_positions.discard(sym)
                     partial_exit_prices.pop(sym, None)
                     position_open_time.pop(sym, None)
@@ -620,8 +619,8 @@ async def main():
 
                 if len(positions) < 2:
                     syms = await fetch_top_symbols(session)
-                    print(f"📈 Отримано тикерів для сканування: {len(syms) if syms else 0}", flush=True)
-                    
+                    print(f"📡 Отримано тикерів для сканування: {len(syms) if syms else 0}", flush=True)
+
                     if syms:
                         tasks = [
                             scan_coin(
@@ -631,16 +630,15 @@ async def main():
                         ]
                         await asyncio.gather(*tasks)
                 else:
-                    print("⏸ Досягнуто ліміт відкритих позицій (>= 2), сканування монет пропущено.", flush=True)
+                    print(f"📦 Досягнуто ліміт відкритих позицій (>= 2), сканування монет пропущено.", flush=True)
 
                 elapsed = asyncio.get_event_loop().time() - start
-                print(f"💤 Цикл завершено за {elapsed:.2f} сек. Чекаємо на наступний...", flush=True)
-                
+                print(f"⏱️ Цикл завершено за {elapsed:.2f} сек. Чекаємо на наступний...", flush=True)
+
                 await asyncio.sleep(max(1, 300 - elapsed))
-             except Exception as e:
+            except Exception as e:
                 print(f"⚠️ Помилка у головному циклі: {e}", flush=True)
                 await asyncio.sleep(10)
-                    
 
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
