@@ -192,11 +192,20 @@ async def cancel_existing_stop_orders(session, symbol):
         print(f"Помилка при скасуванні старих ордерів для {symbol}: {e}", flush=True)
 
 async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
-    await sync_time(session)
     await cancel_existing_stop_orders(session, symbol)
-    
+
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000) + server_time_offset)
+    try:
+        async with session.get("https://open-api.bingx.com/openApi/swap/v2/quote/time") as r:
+            if r.status == 200:
+                data = await r.json()
+                st = data.get("serverTime") or data.get("data", {}).get("serverTime")
+                ts = str(st) if st else str(int(time.time() * 1000))
+            else:
+                ts = str(int(time.time() * 1000))
+    except:
+        ts = str(int(time.time() * 1000))
+
     atr = calculate_atr(kdata, 14)
     if not atr or atr <= 0:
         atr = float(kdata[-1]['close']) * 0.01
