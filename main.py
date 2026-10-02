@@ -424,19 +424,25 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     prev_close = float(kdata[-2]['close'])
     ema_val = ema
 
-    # Фільтр тренду та боковиків за допомогою EMA
+    # Рахуємо ATR для динамічного фільтра відстані від EMA
+    atr = calculate_atr(kdata, 14)
+    if not atr or atr <= 0:
+        atr = float(kdata[-1]['close']) * 0.01
+
+    # Перевіряємо, щоб ціна була вище/нижче EMA, але не далі ніж на 2 * ATR (щоб не заходити на хаях/лоу)
+    near_ema_long = (cur_price > ema_val) and ((cur_price - ema_val) <= 2 * atr)
+    near_ema_short = (cur_price < ema_val) and ((ema_val - cur_price) <= 2 * atr)
+
     price_above_ema = cur_price > ema_val and prev_close > ema_val
     price_below_ema = cur_price < ema_val and prev_close < ema_val
 
-    # Якщо ціна перетинає EMA або товчеться біля неї (немає чіткого закріплення) - пропускаємо
-    is_sideways = not price_above_ema and not price_below_ema
-
-    # Умови для входів з урахуванням відсутності шпильок
     can_long = price_above_ema and (current_k > current_d and prev_k > prev_d) and no_large_upper_shadow
     can_short = price_below_ema and (current_k < current_d and prev_k < prev_d) and no_large_lower_shadow
 
-    momentum_long = (cur_price > ema_val) and has_volume_spike and is_solid_candle
-    momentum_short = (cur_price < ema_val) and has_volume_spike and is_solid_candle
+    # Тепер моментум спрацює тільки якщо ціна йде за трендом, але все ще близько до EMA (в межах 2 * ATR)
+    momentum_long = near_ema_long and has_volume_spike and is_solid_candle
+    momentum_short = near_ema_short and has_volume_spike and is_solid_candle
+
 
     if not is_sideways:
         if near_support and has_volume_spike and is_solid_candle and can_long:
