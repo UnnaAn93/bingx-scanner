@@ -192,6 +192,7 @@ async def cancel_existing_stop_orders(session, symbol):
         print(f"Помилка при скасуванні старих ордерів для {symbol}: {e}", flush=True)
 
 async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
+    await sync_time(session)
     await cancel_existing_stop_orders(session, symbol)
     
     path = "/openApi/swap/v2/trade/order"
