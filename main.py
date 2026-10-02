@@ -422,6 +422,9 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     can_long = price_above_ema and (current_k > current_d and prev_k > prev_d) and no_large_upper_shadow
     can_short = price_below_ema and (current_k < current_d and prev_k < prev_d) and no_large_lower_shadow
 
+    momentum_long = (cur_price > ema_val) and has_volume_spike and is_solid_candle
+    momentum_short = (cur_price < ema_val) and has_volume_spike and is_solid_candle
+
     if not is_sideways:
         if near_support and has_volume_spike and is_solid_candle and can_short:
             level = sup
