@@ -439,16 +439,16 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     momentum_short = (cur_price < ema_val) and has_volume_spike and is_solid_candle
 
     if not is_sideways:
-        if near_support and has_volume_spike and is_solid_candle and can_short:
+        if near_support and has_volume_spike and is_solid_candle and can_long:
             level = sup
-            print(f"Знайдено сигнал SHORT (Підтримка + KDJ) для {symbol}", flush=True)
-            await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
+            print(f"Знайдено сигнал LONG (Підтримка) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
             return
 
-        elif near_resistance and has_volume_spike and is_solid_candle and can_long:
+        elif near_resistance and has_volume_spike and is_solid_candle and can_short:
             level = res
-            print(f"Знайдено сигнал LONG (Опір + KDJ) для {symbol}", flush=True)
-            await open_bot_position(session, symbol, "LONG", cur_price, level, kdata)
+            print(f"Знайдено сигнал SHORT (Опір) для {symbol}", flush=True)
+            await open_bot_position(session, symbol, "SHORT", cur_price, level, kdata)
             return
 
         elif momentum_long and can_long:
