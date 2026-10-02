@@ -536,6 +536,12 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
+        # Якщо пройшло більше 1 години (3600 сек), є хоч якийсь плюс і об'єм падає нижче середнього
+    if (current_time - open_t) > 3600 and float(pos.get('unrealizedProfit', 0)) > 0:
+        vols = [float(x['volume']) for x in kdata]
+        if vols and vols[-1] < (sum(vols[-5:]) / 5) * 0.7:
+            full_close = True
+            
     full_close = False
     Tp = False
 
