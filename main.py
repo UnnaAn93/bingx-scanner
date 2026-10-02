@@ -439,6 +439,8 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     can_long = price_above_ema and (current_k > current_d and prev_k > prev_d) and no_large_upper_shadow
     can_short = price_below_ema and (current_k < current_d and prev_k < prev_d) and no_large_lower_shadow
 
+    is_sideways = not price_above_ema and not price_below_ema
+    
     # Тепер моментум спрацює тільки якщо ціна йде за трендом, але все ще близько до EMA (в межах 2 * ATR)
     momentum_long = near_ema_long and has_volume_spike and is_solid_candle
     momentum_short = near_ema_short and has_volume_spike and is_solid_candle
