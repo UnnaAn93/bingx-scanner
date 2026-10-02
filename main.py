@@ -238,15 +238,18 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
             res = await r.json()
-            if res.get("code") == 0:
-                position_open_time[symbol] = time.time()
-                msg = f"🟢 ВІДКРИТЬ УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
-                print(msg, flush=True)
-                await send_to_telegram(session, msg)
-                await asyncio.sleep(1)
-                await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
-            else:
-                print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
+        if res.get("code") == 0:
+            position_open_time[symbol] = time.time()
+            msg = f"🟢 ВІДКРИТО УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
+            print(msg, flush=True)
+            await send_to_telegram(session, msg)
+            await asyncio.sleep(1)
+            await set_initial_stop_loss(session, symbol, level, kdata, qty)
+        elif res.get("code") == 109400:
+            print(f"⚠️ Біржа тимчасово заблокувала ордери через волатильність (109400) для {symbol}", flush=True)
+        else:
+            print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
+
     except Exception as e:
         print(f"Помилка запиту open_bot_position: {e}", flush=True)
 
