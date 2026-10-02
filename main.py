@@ -14,7 +14,7 @@ TIMEFRAME = "15m"
 LIMIT_CANDLES = 100
 TOP_COINS_LIMIT = 400
 MIN_24H_VOLUME_USDT = 500_000
-COOLDOWN_SECONDS = 300  # Змінено на 5 хвилин
+COOLDOWN_SECONDS = 900  # Змінено на 5 хвилин
 LEVERAGE = 10
 BOT_MARGIN_USDT = 1.0
 
@@ -28,6 +28,7 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 last_alert_time = {}
+server_time_offset = 0
 last_position_alert_time = {}
 handled_partial_positions = set()
 partial_exit_prices = {}
@@ -120,10 +121,23 @@ def calculate_kd(kdata, n=9, m1=3, m2=3):
     except Exception:
         return [50.0], [50.0], [50.0]
 
+async def sync_time(session):
+    global server_time_offset
+    try:
+        async with session.get("https://open-api.bingx.com/openApi/swap/v2/quote/time") as r:
+            if r.status == 200:
+                data = await r.json()
+                # Перевіряємо різні можливі ключі відповіді сервера BingX
+                s_time = data.get("serverTime") or data.get("data", {}).get("serverTime")
+                if s_time:
+                    server_time_offset = int(s_time) - int(time.time() * 1000)
+    except Exception as e:
+        print(f"Помилка синхронізації часу: {e}")
+
 async def fetch_open_positions(session):
     if not API_KEY or not API_SECRET: return []
     path = "/openApi/swap/v2/user/positions"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     params = f"timestamp={ts}"
     sig = get_sign(API_SECRET, params)
     url = f"{BINGX_BASE_URL}{path}?{params}&signature={sig}"
@@ -146,7 +160,7 @@ async def fetch_open_positions(session):
 
 async def set_leverage(session, symbol, lev, side):
     path = "/openApi/swap/v2/trade/leverage"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"leverage={lev}&positionSide={p_side}&symbol={symbol}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
@@ -159,7 +173,7 @@ async def set_leverage(session, symbol, lev, side):
 async def cancel_existing_stop_orders(session, symbol):
     try:
         path = "/openApi/swap/v2/trade/openOrders"
-        ts = str(int(time.time() * 1000))
+        ts = str(int(time.time() * 1000) + server_time_offset)
         p_str = f"symbol={symbol}&timestamp={ts}"
         sig = get_sign(API_SECRET, p_str)
         async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
@@ -170,7 +184,7 @@ async def cancel_existing_stop_orders(session, symbol):
                     if ord.get("type") in ["STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"]:
                         order_id = ord.get("orderId")
                         del_path = "/openApi/swap/v2/trade/order"
-                        del_ts = str(int(time.time() * 1000))
+                        del_ts = str(int(time.time() * 1000) + server_time_offset)
                         del_p_str = f"orderId={order_id}&symbol={symbol}&timestamp={del_ts}"
                         del_sig = get_sign(API_SECRET, del_p_str)
                         await session.delete(f"{BINGX_BASE_URL}{del_path}?{del_p_str}&signature={del_sig}", headers={"X-BX-APIKEY": API_KEY})
@@ -181,7 +195,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     await cancel_existing_stop_orders(session, symbol)
     
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     atr = calculate_atr(kdata, 14)
     if not atr or atr <= 0:
         atr = float(kdata[-1]['close']) * 0.01
@@ -214,7 +228,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
     if not API_KEY or not API_SECRET: return
     await set_leverage(session, symbol, LEVERAGE, side)
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     qty = round(BOT_MARGIN_USDT * LEVERAGE / price, 4)
     if qty == 0: return
     p_side = "LONG" if side == "LONG" else "SHORT"
@@ -240,7 +254,7 @@ async def set_break_even(session, symbol, side, entry, qty):
     if not API_KEY or not API_SECRET: return False
     await cancel_existing_stop_orders(session, symbol)
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     p_side = "LONG" if side == "LONG" else "SHORT"
     c_side = "SELL" if side == "LONG" else "BUY"
     p_str = f"positionSide={p_side}&price={entry}&quantity={qty}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP"
@@ -438,7 +452,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
 async def close_partial(session, symbol, side, qty):
     if not API_KEY or not API_SECRET: return False
     path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
     c_side = "SELL" if side == "LONG" else "BUY"
     p_side = "LONG" if side == "LONG" else "SHORT"
     p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
@@ -560,7 +574,7 @@ async def monitor_pos(session, pos):
             support_touches_count.pop(sym, None)
             resistance_touches_count.pop(sym, None)
             last_touch_candle_time.pop(sym, None)
-            last_alert_time.pop(sym, None)
+            last_alert_time[sym] = time.time()
             msg = f"🔴 ПОВНЕ ЗАКРИТТЯ\n• Монета: {sym} ({side})\n• Ціна: {cur_c}\n• PnL: {pnl} USDT"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
@@ -589,7 +603,9 @@ async def self_ping():
 async def main():
     print("Бот запущено успішно!", flush=True)
     async with aiohttp.ClientSession() as session:
+        await sync_time(session)  # <--- ДОДАЄТЬСЯ ОСЬ ЦЕЙ РЯДОК
         await send_to_telegram(session, "🟢 Скрипт успішно оновлено та запущено!")
+        
 
         asyncio.create_task(self_ping())
         previous_open_syms = set()
