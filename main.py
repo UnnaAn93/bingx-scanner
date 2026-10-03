@@ -436,8 +436,14 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     else:
         current_k, current_d, prev_k, prev_d = 0.0, 0.0, 0.0, 0.0
 
-    near_support = (sup > 0) and ((cur_price - sup) / sup <= APPROACH_PERCENT)
-    near_resistance = (res > 0) and ((res - cur_price) / res <= APPROACH_PERCENT)
+        # Считаем ATR сразу
+    atr = calculate_atr(kdata, 14)
+    if not atr or atr <= 0:
+        atr = float(kdata[-1]['close']) * 0.01
+
+    # Используем ATR вместо фиксированного APPROACH_PERCENT
+    near_support = (sup > 0) and ((cur_price - sup) <= 1.5 * atr)
+    near_resistance = (res > 0) and ((res - cur_price) <= 1.5 * atr)
 
     candle_body = abs(cur_price - cur_open)
     candle_range = cur_high - cur_low
@@ -458,11 +464,6 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     # Отримуємо закриття попередньої свічки для перевірки повного закріплення
     prev_close = float(kdata[-2]['close'])
     ema_val = ema
-
-    # Рахуємо ATR для динамічного фільтра відстані від EMA
-    atr = calculate_atr(kdata, 14)
-    if not atr or atr <= 0:
-        atr = float(kdata[-1]['close']) * 0.01
 
     # Перевіряємо, щоб ціна була вище/нижче EMA, але не далі ніж на 2 * ATR (щоб не заходити на хаях/лоу)
     near_ema_long = (cur_price > ema_val) and ((cur_price - ema_val) <= 2 * atr)
