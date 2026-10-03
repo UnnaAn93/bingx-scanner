@@ -436,9 +436,20 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     price_above_ema = cur_price > ema_val and prev_close > ema_val
     price_below_ema = cur_price < ema_val and prev_close < ema_val
 
-    can_long = price_above_ema and (current_k > current_d and prev_k > prev_d) and no_large_upper_shadow
-    can_short = price_below_ema and (current_k < current_d and prev_k < prev_d) and no_large_lower_shadow
-
+    can_long = (
+        price_above_ema 
+        and (current_k > current_d and prev_k > prev_d) 
+        and no_large_upper_shadow 
+        and (cur_price - ema_val <= 1.5 * atr_val)  # Заборона входу, якщо ціна надто далеко від EMA
+    )
+    
+    can_short = (
+        price_below_ema 
+        and (current_k < current_d and prev_k < prev_d) 
+        and no_large_lower_shadow 
+        and (ema_val - cur_price <= 1.5 * atr_val)  # Заборона входу, якщо ціна надто далеко від EMA
+    )
+    
     is_sideways = not price_above_ema and not price_below_ema
 
     # Забороняємо будь-які відкриття у флеті
