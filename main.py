@@ -595,10 +595,7 @@ async def monitor_pos(session, pos):
             full_close = True
             print(f"Об'єми згасли для {sym}, ініціюємо закриття в плюс.", flush=True)
 
-            
-    full_close = False
     Tp = False
-
     if side == "LONG":
         if cur_c <= stop_trigger_long:
             full_close = True
