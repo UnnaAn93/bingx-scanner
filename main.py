@@ -253,7 +253,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             msg = f"🟢 ВІДКРИТО УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
             print(msg, flush=True)
             await send_to_telegram(session, msg)
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)
             await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
         elif res.get("code") == 109400:
             print(f"⚠️ Біржа тимчасово заблокувала ордери через волатильність (109400) для {symbol}", flush=True)
