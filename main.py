@@ -76,6 +76,11 @@ def calculate_atr(kdata, period=14):
         h, l, pc = float(kdata[i]['high']), float(kdata[i]['low']), float(kdata[i-1]['close'])
         tr.append(max(h - l, abs(h - pc), abs(l - pc)))
     return sum(tr[-period:]) / period if len(tr) >= period else (tr[-1] if tr else 0.0)
+def highest(kdata, period=14):
+    if not kdata or len(kdata) < 2:
+        return 0.0
+    highs = [float(x['high']) for x in kdata[-period:]]
+    return max(highs) if highs else 0.0
 
 def calculate_kd(kdata, n=9, m1=3, m2=3):
     try:
