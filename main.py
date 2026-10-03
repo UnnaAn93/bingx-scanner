@@ -240,33 +240,47 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     return None
     
 async def open_bot_position(session, symbol, side, price, level, kdata):
-    if not API_KEY or not API_SECRET: return
-    await set_leverage(session, symbol, LEVERAGE, side)
-    path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000) + server_time_offset)
-    qty = round(BOT_MARGIN_USDT * LEVERAGE / price, 4)
-    if qty == 0: return
-    p_side = "LONG" if side == "LONG" else "SHORT"
-    c_side = "BUY" if side == "LONG" else "SELL"
-    p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
-    sig = get_sign(API_SECRET, p_str)
+    if not API_KEY or not API_SECRET: 
+        return
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
-            res = await r.json()
-        if res.get("code") == 0:
-            position_open_time[symbol] = time.time()
-            msg = f"🟢 ВІДКРИТО УГОДУ ({side})\n• Монета: {symbol}\n• Ціна: {price}"
-            print(msg, flush=True)
-            await send_to_telegram(session, msg)
-            await asyncio.sleep(5)
-            await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
-        elif res.get("code") == 109400:
-            print(f"⚠️ Біржа тимчасово заблокувала ордери через волатильність (109400) для {symbol}", flush=True)
-        else:
-            print(f"ПОМИЛКА БІРЖІ (код {res.get('code')}): {res.get('msg')}", flush=True)
-
+        await set_leverage(session, symbol, LEVERAGE, side)
+        path = "/openApi/swap/v2/trade/order"
+        ts = str(int(time.time() * 1000) + server_time_offset)
+        qty = round(BOT_MARGIN_USD * LEVERAGE / price, 4)
+        if qty <= 0: 
+            return
+            
+        p_side = "LONG" if side == "SHORT" else "SHORT"
+        c_side = "BUY" if side == "LONG" else "SELL"
+        p_str = f"positionSide={p_side}&quantity={qty}&side={c_side}&symbol={symbol}&timestamp={ts}&type=MARKET"
+        sig = get_sign(API_SECRET, p_str)
+        
+        async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
+            raw = await r.json()
+            if raw.get("code") == 0:
+                position_open_time[symbol] = time.time()
+                
+                # Формуємо детальне обґрунтування входу для сповіщення
+                reason_desc = f"Ціна: {price} | Рівень: {level}"
+                msg = f"🚀 ВІДКРИТО УГОДУ ({side}) по монеті: {symbol}\n📊 Підстава: {reason_desc}"
+                print(msg, flush=True)
+                await send_to_telegram(session, msg)
+                await asyncio.sleep(1)
+                
+                # Встановлення стоп-лосу звіт у телеграм
+                stop_res = await set_initial_stop_loss(session, symbol, side, level, kdata, qty)
+                if not stop_res:
+                    err_stop = f"⚠️ УВАГА: Не вдалося встановити початковий стоп-лос для {symbol} ({side})!"
+                    print(err_stop, flush=True)
+                    await send_to_telegram(session, err_stop)
+            else:
+                err_msg = f"⚠️ ПОМИЛКА БІРЖІ (відкриття {symbol}): {raw.get('code')} - {raw.get('msg')}"
+                print(err_msg, flush=True)
+                await send_to_telegram(session, err_msg)
     except Exception as e:
-        print(f"Помилка запиту open_bot_position: {e}", flush=True)
+        err_msg = f"❌ Виняток у open_bot_position ({symbol}): {e}"
+        print(err_msg, flush=True)
+        await send_to_telegram(session, err_msg)
 
 async def set_break_even(session, symbol, side, entry, qty):
     if not API_KEY or not API_SECRET: return False
