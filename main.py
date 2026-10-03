@@ -730,7 +730,7 @@ async def main():
                 elapsed = asyncio.get_event_loop().time() - start
                 print(f"⏱️ Цикл завершено за {elapsed:.2f} сек. Чекаємо на наступний...", flush=True)
 
-                await asyncio.sleep(max(1, 300 - elapsed))
+                await asyncio.sleep(max(1, 60 - elapsed))
             except Exception as e:
                 print(f"⚠️ Помилка у головному циклі: {e}", flush=True)
                 await asyncio.sleep(10)
