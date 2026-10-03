@@ -586,8 +586,9 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
+    full_close = False
     # Закриваємо по затуханню об'ємів у плюсі без жорсткого часового ліміту в годину
-    if float(pos.get('unrealizedProfit', 0)) > 0 and len(kdata) >= 6:
+    if float(pos.get('unrealizedProfit', 0)) > 0 and len(kdata) >= 7:
         vols = [float(x['volume']) for x in kdata[-7:-1]]
         recent_vols = vols[:-1]
         last_closed_vol = vols[-1]
