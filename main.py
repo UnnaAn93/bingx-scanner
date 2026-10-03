@@ -200,16 +200,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     await cancel_existing_stop_orders(session, symbol)
 
     path = "/openApi/swap/v2/trade/order"
-    try:
-        async with session.get("https://open-api.bingx.com/openApi/swap/v2/quote/time") as r:
-            if r.status == 200:
-                data = await r.json()
-                st = data.get("serverTime") or data.get("data", {}).get("serverTime")
-                ts = str(st) if st else str(int(time.time() * 1000))
-            else:
-                ts = str(int(time.time() * 1000))
-    except:
-        ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + server_time_offset)
 
     atr = calculate_atr(kdata, 14)
     if not atr or atr <= 0:
