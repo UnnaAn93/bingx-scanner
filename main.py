@@ -560,11 +560,14 @@ async def monitor_pos(session, pos):
     stop_trigger_long = support_level - (1.5 * atr)
     stop_trigger_short = resistance_level + (1.5 * atr)
 
-        # Якщо пройшло більше 1 години (3600 сек), є хоч якийсь плюс і об'єм падає нижче середнього
-    if (current_time - open_t) > 3600 and float(pos.get('unrealizedProfit', 0)) > 0:
-        vols = [float(x['volume']) for x in kdata]
-        if vols and vols[-1] < (sum(vols[-5:]) / 5) * 0.7:
+    # Закриваємо по затуханню об'ємів у плюсі без жорсткого часового ліміту в годину
+    if float(pos.get('unrealizedProfit', 0)) > 0 and len(kdata) >= 6:
+        vols = [float(x['volume']) for x in kdata[-6:]]
+        recent_vols = vols[:-1]  # попередні 5 свічок
+        last_vol = vols[-1]      # остання поточна свічка
+        if sum(recent_vols) > 0 and last_vol < (sum(recent_vols) / 5) * 0.7:
             full_close = True
+            print(f"Об'єми згасли для {sym}, ініціюємо закриття в плюс.", flush=True)
             
     full_close = False
     Tp = False
