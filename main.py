@@ -49,7 +49,7 @@ async def send_to_telegram(session, msg):
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
             "text": msg,
-            "parse_mode": "Markdown"
+            #"parse_mode": "Markdown"
         }
         headers = {"User-Agent": "Mozilla/5.0 (Compatible; TelegramBot/1.0)"}
         async with session.post(url, json=payload, headers=headers, timeout=5) as r:
@@ -246,7 +246,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
         await set_leverage(session, symbol, LEVERAGE, side)
         path = "/openApi/swap/v2/trade/order"
         ts = str(int(time.time() * 1000) + server_time_offset)
-        raw_qty = (BOT_MARGIN * LEVERAGE) / price
+        raw_qty = (BOT_MARGIN_USDT * LEVERAGE) / price
         qty = int(raw_qty) if raw_qty >= 1 else round(raw_qty, 2)
         if qty <= 0:
             qty = 1
