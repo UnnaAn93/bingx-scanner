@@ -588,12 +588,13 @@ async def monitor_pos(session, pos):
 
     # Закриваємо по затуханню об'ємів у плюсі без жорсткого часового ліміту в годину
     if float(pos.get('unrealizedProfit', 0)) > 0 and len(kdata) >= 6:
-        vols = [float(x['volume']) for x in kdata[-6:]]
-        recent_vols = vols[:-1]  # попередні 5 свічок
-        last_vol = vols[-1]      # остання поточна свічка
-        if sum(recent_vols) > 0 and last_vol < (sum(recent_vols) / 5) * 0.7:
+        vols = [float(x['volume']) for x in kdata[-7:-1]]
+        recent_vols = vols[:-1]
+        last_closed_vol = vols[-1]
+        if sum(recent_vols) > 0 and last_closed_vol < (sum(recent_vols) / len(recent_vols)) * 0.7:
             full_close = True
             print(f"Об'єми згасли для {sym}, ініціюємо закриття в плюс.", flush=True)
+
             
     full_close = False
     Tp = False
