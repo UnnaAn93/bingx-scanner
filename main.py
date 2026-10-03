@@ -240,15 +240,16 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     return None
     
 async def open_bot_position(session, symbol, side, price, level, kdata):
-    if not API_KEY or not API_SECRET: 
+    if not API_KEY or not API_SECRET:
         return
     try:
         await set_leverage(session, symbol, LEVERAGE, side)
         path = "/openApi/swap/v2/trade/order"
         ts = str(int(time.time() * 1000) + server_time_offset)
-        qty = round(BOT_MARGIN * LEVERAGE / price, 4)
-        if qty <= 0: 
-            return
+        raw_qty = (BOT_MARGIN * LEVERAGE) / price
+        qty = int(raw_qty) if raw_qty >= 1 else round(raw_qty, 2)
+        if qty <= 0:
+            qty = 1
             
         p_side = "LONG" if side == "SHORT" else "SHORT"
         c_side = "BUY" if side == "LONG" else "SELL"
