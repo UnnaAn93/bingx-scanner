@@ -253,7 +253,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
             
         p_side = "LONG" if side == "SHORT" else "SHORT"
         c_side = "BUY" if side == "LONG" else "SELL"
-        p_str = f"symbol={symbol}&side={c_side}&positionSide={p_side}&type=MARKET&quantity={qty}"
+        p_str = f"symbol={symbol}&side={c_side}&positionSide={p_side}&type=MARKET&quantity={qty}&timestamp={ts}"
         sig = get_sign(API_SECRET, p_str)
         
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}) as r:
