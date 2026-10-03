@@ -592,7 +592,7 @@ async def monitor_pos(session, pos):
         vols = [float(x['volume']) for x in kdata[-7:-1]]
         recent_vols = vols[:-1]
         last_closed_vol = vols[-1]
-        if sum(recent_vols) > 0 and last_closed_vol < (sum(recent_vols) / len(recent_vols)) * 0.7:
+        if sum(recent_vols) > 0 and last_closed_vol < (sum(recent_vols) / len(recent_vols)) * 0.4:
             full_close = True
             print(f"Об'єми згасли для {sym}, ініціюємо закриття в плюс.", flush=True)
 
