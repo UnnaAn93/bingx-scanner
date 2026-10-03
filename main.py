@@ -246,7 +246,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
         await set_leverage(session, symbol, LEVERAGE, side)
         path = "/openApi/swap/v2/trade/order"
         ts = str(int(time.time() * 1000) + server_time_offset)
-        qty = round(BOT_MARGIN_USD * LEVERAGE / price, 4)
+        qty = round(BOT_MARGIN * LEVERAGE / price, 4)
         if qty <= 0: 
             return
             
