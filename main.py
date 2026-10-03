@@ -200,6 +200,7 @@ async def set_initial_stop_loss(session, symbol, side, level, kdata, qty):
     await cancel_existing_stop_orders(session, symbol)
 
     path = "/openApi/swap/v2/trade/order"
+    print(f"DEBUG server_time_offset: {server_time_offset}", flush=True)
     ts = str(int(time.time() * 1000) + server_time_offset)
 
     atr = calculate_atr(kdata, 14)
