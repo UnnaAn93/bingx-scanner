@@ -443,14 +443,14 @@ async def scan_coin(session, symbol, open_count, open_symbols):
         price_above_ema 
         and (current_k > current_d and prev_k > prev_d) 
         and no_large_upper_shadow 
-        and (cur_price - ema_val <= 1.5 * atr_val)  # Заборона входу, якщо ціна надто далеко від EMA
+        and (cur_price - ema_val <= 1.5 * atr)  # Заборона входу, якщо ціна надто далеко від EMA
     )
     
     can_short = (
         price_below_ema 
         and (current_k < current_d and prev_k < prev_d) 
         and no_large_lower_shadow 
-        and (ema_val - cur_price <= 1.5 * atr_val)  # Заборона входу, якщо ціна надто далеко від EMA
+        and (ema_val - cur_price <= 1.5 * atr)  # Заборона входу, якщо ціна надто далеко від EMA
     )
     
     is_sideways = not price_above_ema and not price_below_ema
