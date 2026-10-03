@@ -288,9 +288,9 @@ async def set_break_even(session, symbol, side, entry, qty):
     await cancel_existing_stop_orders(session, symbol)
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    p_side = "LONG" if side == "LONG" else "SHORT"
-    c_side = "SELL" if side == "LONG" else "BUY"
-    p_str = f"positionSide={p_side}&price={entry}&quantity={qty}&side={c_side}&stopPrice={entry}&symbol={symbol}&timestamp={ts}&type=STOP"
+    p_side = side
+    c_side = "BUY" if side == "LONG" else "SELL"
+    p_str = f"positionSide={p_side}&price={entry}&quantity={qty}&side={c_side}&stopPrice={entry}&symbol={symbol}&type=STOP&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers={"X-BX-APIKEY": API_KEY}, timeout=5) as r:
