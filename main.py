@@ -420,6 +420,9 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     no_large_upper_shadow = upper_shadow <= candle_body * 1.5
     no_large_lower_shadow = lower_shadow <= candle_body * 1.5
 
+    momentum_long = has_momentum_volume_spike and (cur_price > ema_val)
+    momentum_short = has_momentum_volume_spike and (cur_price < ema_val)
+
     # Отримуємо закриття попередньої свічки для перевірки повного закріплення
     prev_close = float(kdata[-2]['close'])
     ema_val = ema
