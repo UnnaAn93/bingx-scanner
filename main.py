@@ -362,7 +362,17 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     if symbol in last_alert_time and now - last_alert_time[symbol] < COOLDOWN_SECONDS: return
     kdata = await fetch_kline(session, symbol)
     if not kdata or len(kdata) < 60: return
-
+    flat_count = 0
+    for i in range(1, len(kdata)):
+        if float(kdata[i]['close']) == float(kdata[i-1]['close']):
+            flat_count += 1
+            if flat_count >= 5:
+                return
+        else:
+            flat_count = 0
+        if float(kdata[i]['high']) == float(kdata[i]['low']):
+            return
+            
     closes = [x['close'] for x in kdata]
     opens = [x['open'] for x in kdata]
     vols = [x['volume'] for x in kdata]
