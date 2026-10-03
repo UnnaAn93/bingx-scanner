@@ -417,7 +417,7 @@ async def scan_coin(session, symbol, open_count, open_symbols):
 
     ema = calculate_ema(closes, 50)
     ema_val = ema[-1] if isinstance(ema, list) else ema
-    sup, res = highest(kdata), lows[-1]
+    res, sup = highest(kdata), lows[-1]
 
 
     # Надійний індикатор KD у сканері
