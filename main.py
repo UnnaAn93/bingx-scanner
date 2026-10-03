@@ -251,7 +251,7 @@ async def open_bot_position(session, symbol, side, price, level, kdata):
         if qty <= 0:
             qty = 1
             
-        p_side = "LONG" if side == "SHORT" else "SHORT"
+        p_side = side
         c_side = "BUY" if side == "LONG" else "SELL"
         p_str = f"symbol={symbol}&side={c_side}&positionSide={p_side}&type=MARKET&quantity={qty}&timestamp={ts}"
         sig = get_sign(API_SECRET, p_str)
@@ -458,8 +458,8 @@ async def scan_coin(session, symbol, open_count, open_symbols):
     no_large_upper_shadow = upper_shadow <= candle_body * 1.5
     no_large_lower_shadow = lower_shadow <= candle_body * 1.5
 
-    momentum_long = has_momentum_volume_spike and (cur_price > ema_val)
-    momentum_short = has_momentum_volume_spike and (cur_price < ema_val)
+    momentum_long = has_momentum_volume_spike and (cur_price > ema_val) and (prev_close <= ema_val)
+    momentum_short = has_momentum_volume_spike and (cur_price < ema_val) and (prev_close >= ema_val)
 
     # Отримуємо закриття попередньої свічки для перевірки повного закріплення
     prev_close = float(kdata[-2]['close'])
