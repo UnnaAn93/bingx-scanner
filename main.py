@@ -95,23 +95,15 @@ async def get_open_positions(session):
         print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
-async def get_klines(session, symbol, interval="1m", limit=60, debug=False):
+async def get_klines(session, symbol, interval="1m", limit=60):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
-            text = await resp.text()
-            data = json.loads(text)
-            
-            if debug:
-                print(f"🐛 DEBUG [символ: {symbol}] сырой ответ свечей: {text[:300]}", flush=True)
-                
+            data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"⚠️ Помилка свічок для {symbol}: code={data.get('code')}, msg={data.get('msg')}, full={text[:150]}", flush=True)
                 return []
             klines = data.get("data", [])
             if not isinstance(klines, list) or len(klines) == 0:
-                if debug:
-                    print(f"⚠️️ DEBUG [символ: {symbol}] массив klines пустой или не список!", flush=True)
                 return []
             return klines
     except Exception as e:
@@ -162,7 +154,6 @@ async def scan_market(session):
             matched_count = 0
             passed_ema = 0
             passed_vol = 0
-            first_debug_done = False
 
             for ticker in tickers:
                 if not isinstance(ticker, dict):
@@ -182,21 +173,16 @@ async def scan_market(session):
                 if 1.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
-                    # Вмикаємо дебаг для першої ж монети, яка пройшла фільтр росту
-                    should_debug = not first_debug_done
-                    if should_debug:
-                        first_debug_done = True
-
                     # Отримуємо 15m свічки для EMA50
-                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60, debug=should_debug)
+                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 10:
                         continue
                     
                     try:
                         closes_15m = []
                         for k in klines_15m:
-                            if isinstance(k, (list, tuple)) and len(k) > 4:
-                                closes_15m.append(float(k[4]))
+                            if isinstance(k, dict) and "close" in k:
+                                closes_15m.append(float(k["close"]))
                         
                         if len(closes_15m) < 10:
                             continue
@@ -214,20 +200,20 @@ async def scan_market(session):
                     passed_ema += 1
 
                     # Отримуємо 1m свічки для об'єму
-                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25, debug=False)
+                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
                         
                     try:
                         valid_1m = []
                         for k in klines_1m:
-                            if isinstance(k, (list, tuple)) and len(k) > 5:
+                            if isinstance(k, dict) and "volume" in k and "close" in k:
                                 valid_1m.append(k)
                         
                         if len(valid_1m) < 15:
                             continue
 
-                        volumes_1m = [float(k[5]) for k in valid_1m]
+                        volumes_1m = [float(k["volume"]) for k in valid_1m]
                         avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
                         last_vol_1m = volumes_1m[-1]
                     except Exception:
@@ -238,7 +224,7 @@ async def scan_market(session):
                         passed_vol += 1
                         print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри! (Ціна: {current_price}, EMA50: {round(ema_50, 4)})", flush=True)
                         try:
-                            lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
+                            lows_1m = [float(k["low"]) for k in valid_1m if "low" in k]
                             low_price = min(lows_1m[-10:]) if lows_1m else current_price * 0.99
                             entry_price = current_price
                         except Exception:
@@ -260,7 +246,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: примусовий дебаг першої монети!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено парсинг свічок (словники BingX)!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -274,4 +260,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                                       
+    
