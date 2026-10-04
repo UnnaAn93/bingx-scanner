@@ -147,6 +147,8 @@ def calculate_exit_levels(entry_price, low_price, total_qty):
 # --- Відкриття позиції та ордерів ---
 async def execute_trade(session, symbol, entry_price, low_price):
     open_pos = await get_open_positions(session)
+    if open_pos is None:
+        open_pos = []
     if len(open_pos) >= MAX_OPEN_POSITIONS:
         print(f"Ліміт позицій вичерпано ({len(open_pos)}/{MAX_OPEN_POSITIONS}). Пропускаємо {symbol}.", flush=True)
         return
@@ -238,6 +240,8 @@ async def status_reporter(session):
         await asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
+            if positions is None:
+                positions = []
             if not positions:
                 report = "📊 *ЗВІТ БОТА (15 хв)*\nАктивних позицій немає."
             else:
@@ -253,24 +257,41 @@ async def status_reporter(session):
 
 # --- Сканер ринку ---
 async def scan_market(session):
-    open_pos = await get_open_positions(session)
-    if len(open_pos) >= MAX_OPEN_POSITIONS:
-        return
-
-    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
+        open_pos = await get_open_positions(session)
+        if open_pos is None:
+            open_pos = []
+        if len(open_pos) >= MAX_OPEN_POSITIONS:
+            return
+
+        url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
                 print(f"Помилка HTTP: {resp.status}", flush=True)
                 return
+            
             data = await resp.json()
-            if data.get("code") != 0:
-                print(f"Помилка API BingX: код {data.get('code')}, повідомлення: {data.get('msg')}", flush=True)
+            
+            tickers = []
+            if isinstance(data, dict):
+                code = data.get("code", 0)
+                if code != 0:
+                    print(f"Помилка API BingX: код {code}, повідомлення: {data.get('msg', 'невідомо')}", flush=True)
+                    return
+                tickers = data.get("data", [])
+            elif isinstance(data, list):
+                tickers = data
+
+            if not isinstance(tickers, list):
                 return
-            tickers = data.get("data", [])
             
             for ticker in tickers:
+                if not isinstance(ticker, dict):
+                    continue
+                    
                 current_pos = await get_open_positions(session)
+                if current_pos is None:
+                    current_pos = []
                 if len(current_pos) >= MAX_OPEN_POSITIONS:
                     break
 
@@ -281,7 +302,7 @@ async def scan_market(session):
                 change_24h = float(ticker.get("priceChangePercent", 0))
                 if 3.0 <= change_24h <= 20.0:
                     klines = await get_klines(session, symbol, interval="1m", limit=15)
-                    if len(klines) < 15:
+                    if not klines or len(klines) < 15:
                         continue
                         
                     volumes = [float(k[5]) for k in klines]
