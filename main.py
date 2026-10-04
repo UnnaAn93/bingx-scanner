@@ -8,6 +8,7 @@ import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import traceback
+import urllib.parse
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -17,7 +18,7 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 LEVERAGE = 10
-MARGIN_USD = 5.0  # Збільшено мінімальну маржу до $5 (у більшості бірж є мінімальний ліміт на ордер)
+MARGIN_USD = 5.0  
 MAX_OPEN_POSITIONS = 2  
 server_time_offset = 0
 
@@ -96,17 +97,20 @@ async def get_open_positions(session):
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    body = {
-        "symbol": symbol,
-        "leverage": LEVERAGE,
+    
+    # Для POST запитів BingX вимагає формувати рядок підпису з параметрів, переданих у тілі / рядку
+    params = {
+        "leverage": str(LEVERAGE),
         "side": "BOTH",
+        "symbol": symbol,
         "timestamp": ts
     }
-    query_str = f"leverage={LEVERAGE}&side=BOTH&symbol={symbol}&timestamp={ts}"
+    query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
+    
     headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, json=body) as resp:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, json=params) as resp:
             res = await resp.json()
             print(f"⚙️ Встановлення плеча для {symbol}: {res}", flush=True)
     except Exception as e:
@@ -115,11 +119,8 @@ async def set_leverage(session, symbol):
 async def execute_trade(session, symbol, entry_price):
     print(f"🚀 Спроба реального відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
     
-    # 1. Спочатку встановлюємо плече
     await set_leverage(session, symbol)
 
-    # 2. Розраховуємо кількість монет для ордера
-    # Кількість = (Маржа * Плече) / Ціна
     try:
         target_usd = MARGIN_USD * LEVERAGE
         quantity = round(target_usd / entry_price, 4)
@@ -130,15 +131,10 @@ async def execute_trade(session, symbol, entry_price):
         print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
         return
 
-    # 3. Відправляємо ринковий ордер на покупку (LONG)
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     
-    query_str = f"price={entry_price}&quantity={quantity}&side=BUY&positionSide=LONG&symbol={symbol}&timeInForce=IOC&type=MARKET&timestamp={ts}"
-    sig = get_sign(API_SECRET, query_str)
-    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
-    
-    body = {
+    params = {
         "symbol": symbol,
         "side": "BUY",
         "positionSide": "LONG",
@@ -146,9 +142,14 @@ async def execute_trade(session, symbol, entry_price):
         "quantity": str(quantity),
         "timestamp": ts
     }
+    
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/json"}
 
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, json=body) as resp:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, json=params) as resp:
             res = await resp.json()
             print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
@@ -219,7 +220,6 @@ async def scan_market(session):
                     continue
                 symbol = ticker.get("symbol", "")
                 
-                # Жорсткий фільтр: тільки чисті USDT-пари, без індексів та зайвих символів на кшталт USD-USDT
                 if not symbol.endswith("USDT") or "-" in symbol[:-5] or "USD" in symbol[:-4]:
                     continue
                 
@@ -230,11 +230,9 @@ async def scan_market(session):
                 except (ValueError, TypeError):
                     continue
 
-                # Фільтр зростання (1% - 35%)
                 if 1.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
-                    # Отримуємо 15m свічки для EMA50
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 10:
                         continue
@@ -252,7 +250,6 @@ async def scan_market(session):
                         if current_price == 0:
                             current_price = closes_15m[-1]
                         
-                        # М'який фільтр EMA50 (допускаємо відкат до 98.5%)
                         if ema_50 > 0 and current_price < ema_50 * 0.985:
                             continue
                     except Exception:
@@ -260,7 +257,6 @@ async def scan_market(session):
 
                     passed_ema += 1
 
-                    # Отримуємо 1m свічки для об'єму
                     klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
@@ -280,7 +276,6 @@ async def scan_market(session):
                     except Exception:
                         continue
                     
-                    # Множник об'єму 1.4
                     if last_vol_1m > avg_vol_1m * 1.4:
                         passed_vol += 1
                         print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри! (Ціна: {current_price}, EMA50: {round(ema_50, 4)})", flush=True)
@@ -300,7 +295,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: активовано реальну торгівлю та фільтрацію індексів!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено формування підпису для POST-запитів!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -314,4 +309,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                                                   
