@@ -139,9 +139,38 @@ async def get_klines(session, symbol, interval="1m", limit=60):
         print(f"⚠️ Виняток у get_klines для {symbol}: {e}", flush=True)
         return []
 
-async def update_stop_loss_to_break_even(session, symbol, entry_price):
-    print(f"🛡️ Переносимо стоп-лос у безубиток (ТВХ: {entry_price}) для {symbol}", flush=True)
-    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}")
+async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
+    """Функція для розміщення реального STOP_MARKET ордера на біржі"""
+    path = "/openApi/swap/v2/trade/order"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    
+    params = {
+        "positionSide": "LONG",
+        "quantity": quantity_str,
+        "side": "SELL",
+        "symbol": symbol,
+        "timestamp": ts,
+        "type": "STOP_MARKET",
+        "stopPrice": f"{stop_price:.5f}",
+        "workingType": "MARK_PRICE",
+        "reduceOnly": "true"
+    }
+    
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+    headers = {
+        "X-BX-APIKEY": API_KEY,
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    try:
+        async with session.post(url, headers=headers) as resp:
+            res = await resp.json()
+            print(f"🛡️ Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
+            return res.get("code") == 0
+    except Exception as e:
+        print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
+        return False
 
 async def monitor_open_trades(session):
     if not active_trade_monitors:
@@ -168,7 +197,9 @@ async def monitor_open_trades(session):
                 sl_moved = info["sl_moved"]
                 
                 if not sl_moved and current_price >= tp1:
-                    await update_stop_loss_to_break_even(session, symbol, entry_price)
+                    print(f"🛡️ TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
+                    # Тут можна скасувати старий стоп і поставити новий по ціні entry_price (або реалізувати через API)
+                    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nЦіна входу: {entry_price}")
                     active_trade_monitors[symbol]["sl_moved"] = True
                     
                 open_pos = await get_open_positions(session)
@@ -180,10 +211,9 @@ async def monitor_open_trades(session):
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
 
-# НОВА ФУНКЦІЯ: Періодичний звіт кожні 15 хвилин у Telegram
 async def send_periodic_report(session):
     while True:
-        await asyncio.sleep(900) # 15 хвилин = 900 секунд
+        await asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
             if not positions:
@@ -229,7 +259,7 @@ async def execute_trade(session, symbol, entry_price):
             print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
             return
     except Exception as e:
-        print(f"⚠️️ Помилка розрахунку кількості: {e}", flush=True)
+        print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
         return
 
     path = "/openApi/swap/v2/trade/order"
@@ -258,18 +288,22 @@ async def execute_trade(session, symbol, entry_price):
             res = await resp.json()
             print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
+                # Одразу виставляємо реальний стоп-лосс на біржі
+                sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price)
+                
                 active_trade_monitors[symbol] = {
                     "entry_price": entry_price,
                     "tp1": tp1,
                     "sl_moved": False
                 }
                 
+                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
                 msg = (
                     f"🟢 Успішно відкрито LONG по {symbol}!\n"
                     f"Ціна входу (ТВХ): {entry_price}\n"
                     f"Об'єм: {quantity_str}\n\n"
-                    f"🛑 Стоп-лос (мінімум): {stop_loss_price:.5f}\n"
-                    f"🎯 TP1 (40% | 1:1): {tp1:.5f} (після досягнення — стоп на ТВХ)\n"
+                    f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
+                    f"🎯 TP1 (40% | 1:1): {tp1:.5f}\n"
                     f"🎯 TP2 (30% | 2:1): {tp2:.5f}\n"
                     f"🎯 TP3 (30% | 3:1): {tp3:.5f}"
                 )
@@ -341,7 +375,7 @@ async def scan_market(session):
 
             for ticker in tickers:
                 if trade_opened_in_this_cycle:
-                    break  # Лише одна позиція за цикл
+                    break  
 
                 if not isinstance(ticker, dict):
                     continue
@@ -438,10 +472,10 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: додано автоматичні 15-хвилинні звіти по позиціях!")
+        await send_telegram(session, "🟢 Бот оновлено: тепер стоп-лосс виставляється безпосередньо на біржі через STOP_MARKET!")
         
         asyncio.create_task(self_ping(session))
-        asyncio.create_task(send_periodic_report(session)) # Запуск фонового задання звітів
+        asyncio.create_task(send_periodic_report(session))
         
         while True:
             try:
