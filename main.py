@@ -253,7 +253,7 @@ async def execute_trade(session, symbol, entry_price):
     
     await set_leverage(session, symbol)
 
-    klines = await get_klines(session, symbol, interval="15m", limit=10)
+    klines = await get_klines(session, symbol, interval="15m", limit=40)
     if klines and len(klines) >= 5:
         lows = [float(k["low"]) for k in klines if isinstance(k, dict) and "low" in k]
         stop_loss_price = min(lows) if lows else entry_price * 0.98
