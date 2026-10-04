@@ -172,7 +172,9 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
         return False
 
 async def monitor_open_trades(session):
-    if not active_trade_monitors:
+    open_pos = await get_open_positions(session)
+    if not open_pos:
+        active_trade_monitors.clear()
         return
     
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
@@ -186,25 +188,42 @@ async def monitor_open_trades(session):
             
             tickers = {t.get("symbol"): float(t.get("lastPrice", 0)) for t in data.get("data", []) if isinstance(t, dict)}
             
-            for symbol, info in list(active_trade_monitors.items()):
+            for p in open_pos:
+                symbol = p.get("symbol")
+                entry_price = float(p.get("avgPrice", 0))
+                if entry_price == 0:
+                    continue
+                
                 current_price = tickers.get(symbol, 0)
                 if current_price == 0:
                     continue
                 
+                # Якщо позиції немає в моніторингу (наприклад, відкрита раніше або вручну), підхоплюємо її
+                if symbol not in active_trade_monitors:
+                    risk = entry_price * 0.02  # Стандартний розрахунок ризику для зовнішніх позицій
+                    tp1 = entry_price + risk
+                    active_trade_monitors[symbol] = {
+                        "entry_price": entry_price,
+                        "tp1": tp1,
+                        "sl_moved": False
+                    }
+                    print(f"📥 Автоматично додано до моніторингу активну позицію {symbol} (ТВХ: {entry_price}, TP1: {tp1})", flush=True)
+                
+                info = active_trade_monitors[symbol]
                 tp1 = info["tp1"]
-                entry_price = info["entry_price"]
                 sl_moved = info["sl_moved"]
                 
                 if not sl_moved and current_price >= tp1:
                     print(f"🛡️ TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
                     active_trade_monitors[symbol]["sl_moved"] = True
                     await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}\n(Позиція звільнила ліміт для нового входу)")
-                    
-                open_pos = await get_open_positions(session)
-                open_symbols = [p.get("symbol") for p in open_pos]
-                if symbol not in open_symbols:
-                    del active_trade_monitors[symbol]
-                    print(f"🧹 Позиція {symbol} закрита, видалено з моніторингу.", flush=True)
+
+            # Очистка закритих позицій
+            open_symbols = [p.get("symbol") for p in open_pos]
+            for monitored_sym in list(active_trade_monitors.keys()):
+                if monitored_sym not in open_symbols:
+                    del active_trade_monitors[monitored_sym]
+                    print(f"🧹 Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
                     
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
@@ -295,7 +314,7 @@ async def execute_trade(session, symbol, entry_price):
                     "sl_moved": False
                 }
                 
-                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
+                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️️ Помилка встановлення на біржі"
                 msg = (
                     f"🟢 Успішно відкрито LONG по {symbol}!\n"
                     f"Ціна входу (ТВХ): {entry_price}\n"
@@ -480,20 +499,4 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: виправлено синтаксис та активовано ліміт ризику на 2 позиції!")
-        
-        asyncio.create_task(self_ping(session))
-        asyncio.create_task(send_periodic_report(session))
-        
-        while True:
-            try:
-                await scan_market(session)
-                await monitor_open_trades(session)
-            except Exception as e:
-                print(f"❌ Помилка у загальному циклі: {e}", flush=True)
-            print("⏳ Очікування 60 секунд до наступного циклу...\n", flush=True)
-            await asyncio.sleep(60)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+        await send_telegram(session,
