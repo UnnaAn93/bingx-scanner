@@ -22,8 +22,6 @@ MARGIN_USD = 0.5
 MAX_OPEN_POSITIONS = 2  
 server_time_offset = 0
 
-# Словник для відстеження стану відкритих позицій (для перенесення стопа в безубиток)
-# Формат: {symbol: {"entry_price": float, "tp1": float, "sl_moved": bool}}
 active_trade_monitors = {}
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -63,10 +61,12 @@ async def send_telegram(session, message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         async with session.post(url, json=payload) as resp:
-            pass
+            res_text = await resp.text()
+            if resp.status != 200:
+                print(f"⚠️ Telegram API помилка: {resp.status} - {res_text}", flush=True)
     except Exception as e:
         print(f"Telegram error: {e}", flush=True)
 
@@ -96,7 +96,7 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
+        print(f"⚠️️ Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def set_leverage(session, symbol):
@@ -140,9 +140,8 @@ async def get_klines(session, symbol, interval="1m", limit=60):
         return []
 
 async def update_stop_loss_to_break_even(session, symbol, entry_price):
-    # Приклад запиту на оновлення/встановлення стопу на біржі (або відправка сповіщення)
     print(f"🛡️ Переносимо стоп-лос у безубиток (ТВХ: {entry_price}) для {symbol}", flush=True)
-    await send_telegram(session, f"🛡️ *TP1 досягнуто по `{symbol}`! Стоп перенесено в безубиток на ТВХ: `{entry_price}`*")
+    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}")
 
 async def monitor_open_trades(session):
     if not active_trade_monitors:
@@ -168,12 +167,10 @@ async def monitor_open_trades(session):
                 entry_price = info["entry_price"]
                 sl_moved = info["sl_moved"]
                 
-                # Якщо ціна досягла або перевищила TP1, а стоп ще не перенесено
                 if not sl_moved and current_price >= tp1:
                     await update_stop_loss_to_break_even(session, symbol, entry_price)
                     active_trade_monitors[symbol]["sl_moved"] = True
                     
-                # Очищаємо моніторинг, якщо позиція закрита на біржі
                 open_pos = await get_open_positions(session)
                 open_symbols = [p.get("symbol") for p in open_pos]
                 if symbol not in open_symbols:
@@ -240,7 +237,6 @@ async def execute_trade(session, symbol, entry_price):
             res = await resp.json()
             print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
-                # Додаємо в моніторинг для відстеження TP1 і перенесення стопа
                 active_trade_monitors[symbol] = {
                     "entry_price": entry_price,
                     "tp1": tp1,
@@ -248,17 +244,18 @@ async def execute_trade(session, symbol, entry_price):
                 }
                 
                 msg = (
-                    f"🟢 *Успішно відкрито LONG по `{symbol}`*!\n"
-                    f"Ціна входу (ТВХ): `{entry_price}`\n"
-                    f"Об'єм: `{quantity_str}`\n\n"
-                    f"🛑 *Стоп-лос (мінімум)*: `{stop_loss_price:.5f}`\n"
-                    f"🎯 *TP1 (40% | 1:1)*: `{tp1:.5f}` *(після досягнення — стоп на ТВХ)*\n"
-                    f"🎯 *TP2 (30% | 2:1)*: `{tp2:.5f}`\n"
-                    f"🎯 *TP3 (30% | 3:1)*: `{tp3:.5f}`"
+                    f"🟢 Успішно відкрито LONG по {symbol}!\n"
+                    f"Ціна входу (ТВХ): {entry_price}\n"
+                    f"Об'єм: {quantity_str}\n\n"
+                    f"🛑 Стоп-лос (мінімум): {stop_loss_price:.5f}\n"
+                    f"🎯 TP1 (40% | 1:1): {tp1:.5f} (після досягнення — стоп на ТВХ)\n"
+                    f"🎯 TP2 (30% | 2:1): {tp2:.5f}\n"
+                    f"🎯 TP3 (30% | 3:1): {tp3:.5f}"
                 )
                 await send_telegram(session, msg)
             else:
-                await send_telegram(session, f"🔴 Помилка відкриття `{symbol}`: {res.get('msg')}")
+                err_msg = res.get('msg', 'Unknown error')
+                await send_telegram(session, f"🔴 Помилка відкриття {symbol}: {err_msg}")
     except Exception as e:
         print(f"⚠️ Виняток при відправці ордера для {symbol}: {e}", flush=True)
 
@@ -272,6 +269,22 @@ def calculate_ema(closes, period=50):
     for price in closes[period:]:
         ema = (price - ema) * multiplier + ema
     return ema
+
+def calculate_atr(klines, period=14):
+    if len(klines) < period + 1:
+        return 0
+    tr_list = []
+    for i in range(1, len(klines)):
+        high = float(klines[i]["high"])
+        low = float(klines[i]["low"])
+        prev_close = float(klines[i-1]["close"])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+    
+    if not tr_list:
+        return 0
+    recent_tr = tr_list[-period:]
+    return sum(recent_tr) / len(recent_tr)
 
 async def scan_market(session):
     print("🔄 Початок нового циклу сканування ринку...", flush=True)
@@ -303,7 +316,12 @@ async def scan_market(session):
             passed_ema = 0
             passed_vol = 0
 
+            trade_opened_in_this_cycle = False
+
             for ticker in tickers:
+                if trade_opened_in_this_cycle:
+                    break  # Лише одна позиція за цикл
+
                 if not isinstance(ticker, dict):
                     continue
                 symbol = ticker.get("symbol", "")
@@ -328,11 +346,19 @@ async def scan_market(session):
                 if 5.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
-                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_15m) < 10:
+                    klines_15m = await get_klines(session, symbol, interval="15m", limit=30)
+                    if not klines_15m or len(klines_15m) < 15:
                         continue
                     
                     try:
+                        # ФІЛЬТР ІМПУЛЬСУ ЗА ДОПОМОГОЮ ATR
+                        atr_value = calculate_atr(klines_15m, period=14)
+                        last_c = klines_15m[-1]
+                        last_candle_range = float(last_c["high"]) - float(last_c["low"])
+                        
+                        if atr_value > 0 and last_candle_range > atr_value * 1.8:
+                            continue  # Занадто різкий виліт за межі ATR
+
                         closes_15m = []
                         for k in klines_15m:
                             if isinstance(k, dict) and "close" in k:
@@ -371,12 +397,15 @@ async def scan_market(session):
                     except Exception:
                         continue
                     
-                    if last_vol_1m > avg_vol_1m * 1.4:
+                    # ПІДВИЩЕНИЙ МНОЖНИК ОБ'ЄМУ НА 1ХВ (з 1.4 до 2.0)
+                    if last_vol_1m > avg_vol_1m * 2.0:
                         passed_vol += 1
                         print(f"🎯 Успіх! Малокап {symbol} пройшов усі фільтри! (Ціна: {current_price}, Об'єм 24h: ${int(volume_24h)}, Ріст: {change_24h}%)", flush=True)
                         
                         await execute_trade(session, symbol, current_price)
+                        trade_opened_in_this_cycle = True
                         await asyncio.sleep(5)
+                        break
                         
             print(f"🔍 Підсумок: перевірено {scanned_count}, ріст 5-35%: {matched_count}, пройшли EMA50: {passed_ema}, пройшли об'єм: {passed_vol}", flush=True)
             
@@ -390,14 +419,14 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: стоп на ТВХ після TP1!*")
+        await send_telegram(session, "🟢 Бот оновлено: об'єм на 1хв збільшено до 2.0x, ATR-фільтр, 1 позиція за цикл!")
         
         asyncio.create_task(self_ping(session))
         
         while True:
             try:
                 await scan_market(session)
-                await monitor_open_trades(session) # Моніторинг активних угод для перенесення стопу
+                await monitor_open_trades(session)
             except Exception as e:
                 print(f"❌ Помилка у загальному циклі: {e}", flush=True)
             print("⏳ Очікування 60 секунд до наступного циклу...\n", flush=True)
@@ -405,4 +434,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
