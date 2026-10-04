@@ -522,8 +522,9 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("🤖 Бот успішно запущено, переходимо до безперервного циклу.", flush=True)
-        async.create_task(self_ping(session))
-        async.create_task(send_periodic_report(session))
+        asyncio.create_task(self_ping(session))
+        asyncio.create_task(send_periodic_report(session))
+
         while True:
             try:
                 await scan_market(session)
