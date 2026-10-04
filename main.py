@@ -151,8 +151,8 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
         "timestamp": ts,
         "type": "STOP_MARKET",
         "stopPrice": f"{stop_price:.5f}",
-        "workingType": "MARK_PRICE",
-        "reduceOnly": "true"
+        "workingType": "MARK_PRICE"
+        # "reduceOnly": "true"  <-- ПРИБРАНО через Hedge mode
     }
     
     query_str = urllib.parse.urlencode(sorted(params.items()))
@@ -170,7 +170,7 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
     except Exception as e:
         print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
         return False
-
+        
 async def monitor_open_trades(session):
     open_pos = await get_open_positions(session)
     if not open_pos:
