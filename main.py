@@ -81,11 +81,12 @@ async def sync_time(session):
 async def get_open_positions(session):
     path = "/openApi/swap/v2/user/positions"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    p_str = f"timestamp={ts}"
-    sig = get_sign(API_SECRET, p_str)
+    params = {"timestamp": ts}
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
     headers = {"X-BX-APIKEY": API_KEY}
     try:
-        async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
+        async with session.get(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers) as resp:
             res = await resp.json()
             if res.get("code") == 0:
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
@@ -100,11 +101,11 @@ async def set_leverage(session, symbol):
     
     params = {
         "leverage": str(LEVERAGE),
-        "side": "BOTH",
+        "side": "LONG",  # Виправлено з BOTH на LONG для Hedge mode
         "symbol": symbol,
         "timestamp": ts
     }
-    query_str = urllib.parse.urlencode(params)
+    query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     
     headers = {
@@ -112,7 +113,7 @@ async def set_leverage(session, symbol):
         "Content-Type": "application/x-www-form-urlencoded"
     }
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers) as resp:
+        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, data=query_str) as resp:
             res = await resp.json()
             print(f"⚙️ Встановлення плеча для {symbol}: {res}", flush=True)
     except Exception as e:
@@ -137,15 +138,15 @@ async def execute_trade(session, symbol, entry_price):
     ts = str(int(time.time() * 1000) + server_time_offset)
     
     params = {
-        "symbol": symbol,
-        "side": "BUY",
         "positionSide": "LONG",
-        "type": "MARKET",
         "quantity": str(quantity),
-        "timestamp": ts
+        "side": "BUY",
+        "symbol": symbol,
+        "timestamp": ts,
+        "type": "MARKET"
     }
     
-    query_str = urllib.parse.urlencode(params)
+    query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
@@ -177,7 +178,7 @@ async def get_klines(session, symbol, interval="1m", limit=60):
                 return []
             return klines
     except Exception as e:
-        print(f"⚠️️ Виняток у get_klines для {symbol}: {e}", flush=True)
+        print(f"⚠️ Виняток у get_klines для {symbol}: {e}", flush=True)
         return []
 
 def calculate_ema(closes, period=50):
@@ -244,7 +245,7 @@ async def scan_market(session):
                     matched_count += 1
                     
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_15m) < 10:  # ВИПРАВЛЕНО ТУТ (було klines_1m)
+                    if not klines_15m or len(klines_15m) < 10:
                         continue
                     
                     try:
@@ -305,7 +306,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: виправлено помилку змінної klines_15m!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено side='LONG' та сортування сигнатури!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -319,4 +320,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                    
+              
