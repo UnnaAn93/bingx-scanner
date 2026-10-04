@@ -80,7 +80,6 @@ async def get_open_positions(session):
         async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
             res = await resp.json()
             if res.get("code") == 0:
-                # Фільтруємо лише позиції з ненульовим об'ємом
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
@@ -122,7 +121,7 @@ async def get_klines(session, symbol, interval="1m", limit=20):
 
 # --- Розрахунок виходів (1R, 2R, 3R) ---
 def calculate_exit_levels(entry_price, low_price, total_qty):
-    stop_loss = low_price * 0.995  # Стоп трохи нижче мінімуму
+    stop_loss = low_price * 0.995
     risk = entry_price - stop_loss
     
     if risk <= 0:
@@ -147,7 +146,6 @@ def calculate_exit_levels(entry_price, low_price, total_qty):
 
 # --- Відкриття позиції та ордерів ---
 async def execute_trade(session, symbol, entry_price, low_price):
-    # Додаткова перевірка кількості позицій перед входом
     open_pos = await get_open_positions(session)
     if len(open_pos) >= MAX_OPEN_POSITIONS:
         print(f"Ліміт позицій вичерпано ({len(open_pos)}/{MAX_OPEN_POSITIONS}). Пропускаємо {symbol}.", flush=True)
@@ -237,7 +235,7 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
 # --- Періодичний звіт кожні 15 хвилин ---
 async def status_reporter(session):
     while True:
-        await asyncio.sleep(900)  # 15 хвилин = 900 секунд
+        await asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
             if not positions:
@@ -255,7 +253,6 @@ async def status_reporter(session):
 
 # --- Сканер ринку ---
 async def scan_market(session):
-    # Перед скануванням перевіряємо ліміт позицій
     open_pos = await get_open_positions(session)
     if len(open_pos) >= MAX_OPEN_POSITIONS:
         return
@@ -269,7 +266,6 @@ async def scan_market(session):
             tickers = data.get("data", [])
             
             for ticker in tickers:
-                # Подвійна перевірка ліміту в циклі
                 current_pos = await get_open_positions(session)
                 if len(current_pos) >= MAX_OPEN_POSITIONS:
                     break
@@ -306,7 +302,9 @@ async def main():
         await sync_time(session)
         print("Бот запущено та сканує ринок...", flush=True)
         
-        # Запускаємо фоновий звіт кожні 15 хвилин у паралельній задачі
+        # Надсилаємо сповіщення в телеграм про успішний старт/оновлення
+        await send_telegram(session, "🟢 *Бот успішно запущено та оновлено!*\nЗв'язок з Telegram стабільний, сканування ринку розпочато.")
+        
         asyncio.create_task(status_reporter(session))
         
         while True:
@@ -316,4 +314,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                    
+        
