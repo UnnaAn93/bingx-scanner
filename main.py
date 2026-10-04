@@ -19,6 +19,7 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 # Торгові параметри
 LEVERAGE = 10
 MARGIN_USD = 0.5  # Маржа на позицію
+MAX_OPEN_POSITIONS = 2  # Максимум одночасних позицій
 server_time_offset = 0
 
 # --- Keep-alive сервер для Render ---
@@ -64,6 +65,23 @@ async def sync_time(session):
             print(f"Час синхронізовано. Offset: {server_time_offset} ms", flush=True)
     except Exception as e:
         print(f"Помилка синхронізації часу: {e}", flush=True)
+
+async def get_open_positions(session):
+    path = "/openApi/swap/v2/user/positions"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    p_str = f"timestamp={ts}"
+    sig = get_sign(API_SECRET, p_str)
+    headers = {"X-BX-APIKEY": API_KEY}
+    try:
+        async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
+            res = await resp.json()
+            if res.get("code") == 0:
+                # Фільтруємо лише позиції з ненульовим об'ємом
+                positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
+                return positions
+    except Exception as e:
+        print(f"Помилка отримання позицій: {e}", flush=True)
+    return []
 
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
@@ -125,6 +143,12 @@ def calculate_exit_levels(entry_price, low_price, total_qty):
 
 # --- Відкриття позиції та ордерів ---
 async def execute_trade(session, symbol, entry_price, low_price):
+    # Додаткова перевірка кількості позицій перед входом
+    open_pos = await get_open_positions(session)
+    if len(open_pos) >= MAX_OPEN_POSITIONS:
+        print(f"Ліміт позицій вичерпано ({len(open_pos)}/{MAX_OPEN_POSITIONS}). Пропускаємо {symbol}.", flush=True)
+        return
+
     if not await set_leverage(session, symbol):
         return
 
@@ -136,7 +160,6 @@ async def execute_trade(session, symbol, entry_price, low_price):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     
-    # 1. Відкриття ринкового ордера (LONG)
     p_str = f"positionSide=LONG&side=BUY&symbol={symbol}&type=MARKET&quantity={qty}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
     headers = {"X-BX-APIKEY": API_KEY}
@@ -166,10 +189,8 @@ async def execute_trade(session, symbol, entry_price, low_price):
     await send_telegram(session, msg)
     print(msg, flush=True)
 
-    # 2. Встановлення Стоп-Лосу
     await set_stop_loss(session, symbol, levels["stop_loss"], qty)
 
-    # 3. Встановлення 3 Тейк-Профітів
     for i, tp in enumerate(levels["tps"], 1):
         await set_take_profit(session, symbol, tp["price"], tp["qty"], i)
 
@@ -209,8 +230,32 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
         print(err_msg, flush=True)
         await send_telegram(session, err_msg)
 
+# --- Періодичний звіт кожні 15 хвилин ---
+async def status_reporter(session):
+    while True:
+        await asyncio.sleep(900)  # 15 хвилин = 900 секунд
+        try:
+            positions = await get_open_positions(session)
+            if not positions:
+                report = "📊 *ПЗВІТ БОТА (15 хв)*\nАктивних позицій немає."
+            else:
+                report = f"📊 *ЗВІТ БОТА (15 хв)*\nАктивні позиції ({len(positions)}/{MAX_OPEN_POSITIONS}):\n"
+                for p in positions:
+                    sym = p.get("symbol")
+                    amt = p.get("positionAmt")
+                    pnl = p.get("unrealizedProfit", "0")
+                    report += f"• `{sym}` | Об'єм: `{amt}` | PnL: `{pnl}$`\n"
+            await send_telegram(session, report)
+        except Exception as e:
+            print(f"Помилка відправки звіту: {e}", flush=True)
+
 # --- Сканер ринку ---
 async def scan_market(session):
+    # Перед скануванням перевіряємо ліміт позицій
+    open_pos = await get_open_positions(session)
+    if len(open_pos) >= MAX_OPEN_POSITIONS:
+        return
+
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url) as resp:
@@ -220,6 +265,11 @@ async def scan_market(session):
             tickers = data.get("data", [])
             
             for ticker in tickers:
+                # Подвійна перевірка ліміту в циклі
+                current_pos = await get_open_positions(session)
+                if len(current_pos) >= MAX_OPEN_POSITIONS:
+                    break
+
                 symbol = ticker.get("symbol", "")
                 if not symbol.endswith("USDT"):
                     continue
@@ -251,6 +301,10 @@ async def main():
     async with aiohttp.ClientSession() as session:
         await sync_time(session)
         print("Бот запущено та сканує ринок...", flush=True)
+        
+        # Запускаємо фоновий звіт кожні 15 хвилин у паралельній задачі
+        asyncio.create_task(status_reporter(session))
+        
         while True:
             await sync_time(session)
             await scan_market(session)
@@ -258,4 +312,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+        
