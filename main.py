@@ -29,6 +29,10 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is alive and running!")
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
@@ -237,7 +241,7 @@ async def status_reporter(session):
         try:
             positions = await get_open_positions(session)
             if not positions:
-                report = "📊 *ПЗВІТ БОТА (15 хв)*\nАктивних позицій немає."
+                report = "📊 *ЗВІТ БОТА (15 хв)*\nАктивних позицій немає."
             else:
                 report = f"📊 *ЗВІТ БОТА (15 хв)*\nАктивні позиції ({len(positions)}/{MAX_OPEN_POSITIONS}):\n"
                 for p in positions:
@@ -312,4 +316,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+                    
