@@ -96,7 +96,7 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️️ Помилка отримання позицій: {e}", flush=True)
+        print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def set_leverage(session, symbol):
@@ -180,6 +180,27 @@ async def monitor_open_trades(session):
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
 
+# НОВА ФУНКЦІЯ: Періодичний звіт кожні 15 хвилин у Telegram
+async def send_periodic_report(session):
+    while True:
+        await asyncio.sleep(900) # 15 хвилин = 900 секунд
+        try:
+            positions = await get_open_positions(session)
+            if not positions:
+                report = "📊 Періодичний звіт: наразі немає відкритих позицій."
+            else:
+                report = "📊 Періодичний звіт по активних позиціях:\n"
+                for p in positions:
+                    sym = p.get("symbol")
+                    amt = p.get("positionAmt")
+                    entry = p.get("avgPrice")
+                    pnl = p.get("unrealizedProfit", "0")
+                    report += f"🔹 {sym} | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
+            
+            await send_telegram(session, report)
+        except Exception as e:
+            print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
+
 async def execute_trade(session, symbol, entry_price):
     print(f"🚀 Спроба реального відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
     
@@ -208,7 +229,7 @@ async def execute_trade(session, symbol, entry_price):
             print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
             return
     except Exception as e:
-        print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
+        print(f"⚠️️ Помилка розрахунку кількості: {e}", flush=True)
         return
 
     path = "/openApi/swap/v2/trade/order"
@@ -351,13 +372,12 @@ async def scan_market(session):
                         continue
                     
                     try:
-                        # ФІЛЬТР ІМПУЛЬСУ ЗА ДОПОМОГОЮ ATR
                         atr_value = calculate_atr(klines_15m, period=14)
                         last_c = klines_15m[-1]
                         last_candle_range = float(last_c["high"]) - float(last_c["low"])
                         
                         if atr_value > 0 and last_candle_range > atr_value * 1.8:
-                            continue  # Занадто різкий виліт за межі ATR
+                            continue  
 
                         closes_15m = []
                         for k in klines_15m:
@@ -397,7 +417,6 @@ async def scan_market(session):
                     except Exception:
                         continue
                     
-                    # ПІДВИЩЕНИЙ МНОЖНИК ОБ'ЄМУ НА 1ХВ (з 1.4 до 2.0)
                     if last_vol_1m > avg_vol_1m * 2.0:
                         passed_vol += 1
                         print(f"🎯 Успіх! Малокап {symbol} пройшов усі фільтри! (Ціна: {current_price}, Об'єм 24h: ${int(volume_24h)}, Ріст: {change_24h}%)", flush=True)
@@ -419,9 +438,10 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: об'єм на 1хв збільшено до 2.0x, ATR-фільтр, 1 позиція за цикл!")
+        await send_telegram(session, "🟢 Бот оновлено: додано автоматичні 15-хвилинні звіти по позиціях!")
         
         asyncio.create_task(self_ping(session))
+        asyncio.create_task(send_periodic_report(session)) # Запуск фонового задання звітів
         
         while True:
             try:
