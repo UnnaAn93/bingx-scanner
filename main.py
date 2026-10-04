@@ -92,23 +92,23 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️️ Ошибка получения позиций: {e}", flush=True)
+        print(f"⚠ Ошибка получения позиций: {e}", flush=True)
     return []
 
 async def get_klines(session, symbol, interval="1m", limit=60):
-    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
-            text = await resp.text()
-            data = json.loads(text)
+            data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
-                # Выведем ошибку для первой попавшейся монеты, чтобы видеть причину
+                print(f"⚠️ Ошибка свечей для {symbol}: code={data.get('code')}, msg={data.get('msg')}", flush=True)
                 return []
             klines = data.get("data", [])
             if not isinstance(klines, list):
                 return []
             return klines
     except Exception as e:
+        print(f"⚠️️ Исключение в get_klines для {symbol}: {e}", flush=True)
         return []
 
 def calculate_ema(closes, period=50):
@@ -192,7 +192,7 @@ async def scan_market(session):
                         if current_price == 0:
                             current_price = closes_15m[-1]
                         
-                        # Мягкий фильтр EMA50 (допускаем небольшой откатов до 98.5%)
+                        # Мягкий фильтр EMA50 (допускаем небольшой откат до 98.5%)
                         if ema_50 > 0 and current_price < ema_50 * 0.985:
                             continue
                     except Exception:
@@ -247,7 +247,7 @@ async def main():
         print("🚀 Запуск главной функции бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успешно запущен, переходим к непрерывному циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот обновлен: исправлен эндпоинт свечей v2!*")
+        await send_telegram(session, "🟢 *Бот обновлен: добавлено логирование ошибок свечей!*")
         
         asyncio.create_task(self_ping(session))
         
