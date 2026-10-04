@@ -174,15 +174,10 @@ async def scan_market(session):
                     
                     # Отримуємо 15m свічки для EMA50
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_1m_check := klines_15m: # перевірка
-                        pass
-
-                    if len(klines_15m) < 20:
+                    if not klines_15m or len(klines_15m) < 20:
                         continue
                     
                     try:
-                        # BingX зазвичай віддає свічки від найстаріших до найновіших, але на всяк випадок сортуємо за часом (index 0) якщо є
-                        # зазвичай k[4] це close
                         closes_15m = []
                         for k in klines_15m:
                             if isinstance(k, (list, tuple)) and len(k) > 4:
@@ -250,7 +245,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: виправлено розрахунок EMA50 та об'ємів!*")
+        await send_telegram(session, "🟢 *Бот оновлено: синтаксичну помилку виправлено!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -264,4 +259,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+                        
