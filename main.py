@@ -19,11 +19,10 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 
 # Торгові параметри
 LEVERAGE = 10
-MARGIN_USD = 0.5  # Маржа на позицію
-MAX_OPEN_POSITIONS = 2  # Максимум одночасних позицій
+MARGIN_USD = 0.5  
+MAX_OPEN_POSITIONS = 2  
 server_time_offset = 0
 
-# Словник для відстеження стану позицій (для перенесення стопа в б/у після TP1)
 tracked_positions = {}
 
 # --- Keep-alive сервер для Render ---
@@ -128,15 +127,8 @@ async def set_leverage(session, symbol):
             res = await resp.json()
             if res.get("code") == 0:
                 return True
-            else:
-                err_msg = f"❌ *Помилка встановлення плеча* `{symbol}`\nПричина: `{res}`"
-                print(err_msg, flush=True)
-                await send_telegram(session, err_msg)
-                return False
-    except Exception as e:
-        err_msg = f"❌ *Виняток встановлення плеча* `{symbol}`\nПричина: `{e}`"
-        print(err_msg, flush=True)
-        await send_telegram(session, err_msg)
+            return False
+    except Exception:
         return False
 
 async def get_klines(session, symbol, interval="1m", limit=50):
@@ -144,18 +136,20 @@ async def get_klines(session, symbol, interval="1m", limit=50):
     try:
         async with session.get(url) as resp:
             data = await resp.json()
-            if data.get("code") != 0:
+            if not isinstance(data, dict) or data.get("code") != 0:
                 return []
-            return data.get("data", [])
-    except Exception as e:
-        print(f"Помилка отримання свічок для {symbol}: {e}", flush=True)
-    return []
+            klines = data.get("data", [])
+            if not isinstance(klines, list):
+                return []
+            return klines
+    except Exception:
+        return []
 
 def calculate_ema(closes, period=50):
     if len(closes) < period:
         return sum(closes) / len(closes) if closes else 0
     multiplier = 2 / (period + 1)
-    ema = sum(closes[:period]) / period  # Початкове просте середнє
+    ema = sum(closes[:period]) / period
     for price in closes[period:]:
         ema = (price - ema) * multiplier + ema
     return ema
@@ -163,10 +157,8 @@ def calculate_ema(closes, period=50):
 def calculate_exit_levels(entry_price, low_price, total_qty):
     stop_loss = low_price * 0.995
     risk = entry_price - stop_loss
-    
     if risk <= 0:
         return None
-        
     tp1 = entry_price + (risk * 1.0)
     tp2 = entry_price + (risk * 2.0)
     tp3 = entry_price + (risk * 3.0)
@@ -201,7 +193,6 @@ async def execute_trade(session, symbol, entry_price, low_price):
 
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    
     p_str = f"positionSide=LONG&side=BUY&symbol={symbol}&type=MARKET&quantity={qty}&timestamp={ts}"
     sig = get_sign(API_SECRET, p_str)
     headers = {"X-BX-APIKEY": API_KEY}
@@ -220,7 +211,6 @@ async def execute_trade(session, symbol, entry_price, low_price):
 
     msg = f"🚀 *Вхід на відкаті (EMA50 + 1m імпульс)*\nМонета: `{symbol}`\nЦіна входу: `{entry_price}`\nСтоп-лос: `{levels['stop_loss']}`"
     await send_telegram(session, msg)
-    print(msg, flush=True)
 
     await set_stop_loss(session, symbol, levels["stop_loss"], qty)
     for i, tp in enumerate(levels["tps"], 1):
@@ -256,7 +246,6 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
     except Exception:
         pass
 
-# --- Фоновий менеджер позицій ---
 async def manage_positions(session):
     while True:
         await asyncio.sleep(10)
@@ -276,8 +265,6 @@ async def manage_positions(session):
                     
                     if len(tp_orders) < 3:
                         info["tp1_hit"] = True
-                        print(f"Спрацював TP1 для {sym}! Переносимо стоп-лос у безубиток (ТВХ)...", flush=True)
-                        
                         await cancel_all_symbol_orders(session, sym)
                         
                         current_amt = 0
@@ -297,19 +284,15 @@ async def manage_positions(session):
                             
                             await set_take_profit(session, sym, tp2_price, qty2, 2)
                             await set_take_profit(session, sym, tp3_price, qty3, 3)
-
-                            await send_telegram(session, f"🛡 *Стоп перенесено в безубиток (ТВХ)*\nМонета: `{sym}`\nЦіна входу: `{entry_p}`")
-
-        except Exception as e:
-            print(f"Помилка в manage_positions: {e}", flush=True)
+                            await send_telegram(session, f"🛡 *Стоп перенесено в безубиток*\nМонета: `{sym}`")
+        except Exception:
+            pass
 
 async def status_reporter(session):
     while True:
-        asyncio.sleep(900)
+        await asyncio.sleep(900)  # Виправлено відсутній await
         try:
             positions = await get_open_positions(session)
-            if positions is None:
-                positions = []
             if not positions:
                 report = "📊 *ЗВІТ БОТА (15 хв)*\nАктивних позицій немає."
             else:
@@ -320,10 +303,9 @@ async def status_reporter(session):
                     pnl = p.get("unrealizedProfit", "0")
                     report += f"• `{sym}` | Об'єм: `{amt}` | PnL: `{pnl}$`\n"
             await send_telegram(session, report)
-        except Exception as e:
-            print(f"Помилка відправки звіту: {e}", flush=True)
+        except Exception:
+            pass
 
-# --- Сканер ринку за новою стратегією ---
 async def scan_market(session):
     try:
         open_pos = await get_open_positions(session)
@@ -336,7 +318,6 @@ async def scan_market(session):
         async with session.get(url) as resp:
             if resp.status != 200:
                 return
-            
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
                 return
@@ -348,7 +329,6 @@ async def scan_market(session):
             for ticker in tickers:
                 if not isinstance(ticker, dict):
                     continue
-                
                 symbol = ticker.get("symbol", "")
                 if not symbol.endswith("USDT"):
                     continue
@@ -358,31 +338,29 @@ async def scan_market(session):
                 except (ValueError, TypeError):
                     continue
 
-                # Крок 1: Відбираємо монети у хорошому зростанні за добу
                 if 3.0 <= change_24h <= 25.0:
-                    
-                    # Крок 2: Аналізуємо 15-хвилинний таймфрейм (Фільтр EMA50 та підтримка)
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 50:
                         continue
                     
                     try:
-                        closes_15m = [float(k[4]) for k in klines_15m]
+                        # Безпечний парсинг свічок (перевірка чи елемент є списком/кортежем)
+                        closes_15m = [float(k[4]) for k in klines_15m if isinstance(k, (list, tuple)) and len(k) > 4]
+                        if len(closes_15m) < 50:
+                            continue
+                        
                         ema_50 = calculate_ema(closes_15m, period=50)
                         current_price = float(ticker.get("lastPrice", closes_15m[-1]))
                         
-                        # Ціна має бути вище EMA50 (висхідний тренд)
                         if current_price < ema_50:
                             continue
                         
-                        # Перевіряємо, чи був відкат (нещодавній мінімум за останніх 10 свічок 15m знаходився ближче до EMA або підтримки)
-                        lows_15m = [float(k[3]) for k in klines_15m[-10:]]
-                        support_level = min(lows_15m)
-                        
+                        lows_15m = [float(k[3]) for k in klines_15m if isinstance(k, (list, tuple)) and len(k) > 3]
+                        if not lows_15m:
+                            continue
                     except (ValueError, TypeError, IndexError):
                         continue
 
-                    # Крок 3: Переходимо на 1-хвилинний таймфрейм (1m) для пошуку імпульсу об'єму від підтримки
                     klines_1m = await get_klines(session, symbol, interval="1m", limit=20)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
@@ -398,30 +376,25 @@ async def scan_market(session):
                     except (IndexError, ValueError, TypeError):
                         continue
                     
-                    # Якщо на 1-хвилинці з'явився сплеск об'єму (відбиття від підтримки)
                     if last_vol_1m > avg_vol_1m * 3.0:
                         try:
-                            lows_1m = [float(k[3]) for k in valid_1m]
-                            low_price = min(lows_1m[-10:])
+                            lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
+                            low_price = min(lows_1m[-10:]) if lows_1m else current_price * 0.99
                             entry_price = current_price
                         except (IndexError, ValueError, TypeError):
                             continue
                         
-                        print(f"Знайдено відбиття від підтримки на 1m для {symbol} (Тренд 15m вище EMA50)! Входимо...", flush=True)
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
     except Exception as e:
-        print(f"Помилка сканування (виняток): {e}", flush=True)
-        traceback.print_exc()
+        print(f"Помилка сканування: {e}", flush=True)
 
 async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
         await sync_time(session)
-        print("Бот запущено за новою стратегією (EMA50 15m + сплеск 1m)...", flush=True)
-        
-        await send_telegram(session, "🟢 *Бот оновлений до стратегії 'Відкат до EMA50 + 1m об'єм'*!")
+        print("Бот запущено за оновленою стратегією...", flush=True)
         
         asyncio.create_task(status_reporter(session))
         asyncio.create_task(manage_positions(session))
@@ -433,4 +406,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+                            
