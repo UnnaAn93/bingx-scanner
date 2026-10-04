@@ -19,8 +19,8 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 LEVERAGE = 10
-MARGIN_USD = 0.5  
-MAX_RISK_POSITIONS = 2  # Максимум позицій із початковим ризиком (до TP1)
+MARGIN_USD = 0.5
+MAX_RISK_POSITIONS = 2
 server_time_offset = 0
 
 active_trade_monitors = {}
@@ -29,7 +29,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is alive and running!")
+        self.wfile.write(b"Bot is alive and running")
 
     def do_HEAD(self):
         self.send_response(200)
@@ -51,7 +51,7 @@ async def self_ping(session):
         if RENDER_URL:
             try:
                 async with session.get(RENDER_URL) as resp:
-                    print(f"🏓 Self-ping виконано, статус: {resp.status}", flush=True)
+                    print(f"🔄 Self-ping виконано, статус: {resp.status}", flush=True)
             except Exception as e:
                 print(f"⚠️ Помилка self-ping: {e}", flush=True)
 
@@ -67,19 +67,19 @@ async def send_telegram(session, message):
         async with session.post(url, json=payload) as resp:
             res_text = await resp.text()
             if resp.status != 200:
-                print(f"⚠️ Telegram API помилка: {resp.status} - {res_text}", flush=True)
+                print(f"⚠️️ Telegram API помилка: {resp.status} - {res_text}", flush=True)
     except Exception as e:
-        print(f"Telegram error: {e}", flush=True)
+        print(f"⚠️ Telegram error: {e}", flush=True)
 
 async def sync_time(session):
     global server_time_offset
     try:
-        async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v1/server/time") as resp:
+        async with session.post(f"{BINGX_BASE_URL}/openApi/swap/v1/server/time") as resp:
             data = await resp.json()
             server_time = data.get("serverTime", int(time.time() * 1000))
             local_time = int(time.time() * 1000)
             server_time_offset = server_time - local_time
-            print(f"🕒 Час синхронізовано. Offset: {server_time_offset} ms", flush=True)
+            print(f"⏱ Час синхронізовано. Offset: {server_time_offset} ms", flush=True)
     except Exception as e:
         print(f"⚠️ Помилка синхронізації часу: {e}", flush=True)
 
@@ -103,7 +103,6 @@ async def get_open_positions(session):
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    
     params = {
         "leverage": str(LEVERAGE),
         "side": "LONG",
@@ -112,7 +111,6 @@ async def set_leverage(session, symbol):
     }
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
-    
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {
         "X-BX-APIKEY": API_KEY,
@@ -125,7 +123,7 @@ async def set_leverage(session, symbol):
     except Exception as e:
         print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
 
-async def get_klines(session, symbol, interval="1m", limit=60):
+async def get_klines(session, symbol, interval="15m", limit=60):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
@@ -143,7 +141,6 @@ async def get_klines(session, symbol, interval="1m", limit=60):
 async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    
     params = {
         "positionSide": "LONG",
         "quantity": quantity_str,
@@ -152,10 +149,9 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
         "timestamp": ts,
         "type": "STOP_MARKET",
         "stopPrice": f"{stop_price:.5f}",
-        "workingType": "MARK_PRICE"
-        # "reduceOnly": "true"  <-- ПРИБРАНО через Hedge mode
+        "workingType": "MARK_PRICE",
+        "reduceOnly": "true"
     }
-    
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
@@ -166,18 +162,18 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            print(f"🛡️ Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
+            print(f"🛡 Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
             return res.get("code") == 0
     except Exception as e:
         print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
         return False
-        
+
 async def monitor_open_trades(session):
     open_pos = await get_open_positions(session)
     if not open_pos:
         active_trade_monitors.clear()
         return
-    
+
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url) as resp:
@@ -186,19 +182,19 @@ async def monitor_open_trades(session):
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
                 return
-            
+
             tickers = {t.get("symbol"): float(t.get("lastPrice", 0)) for t in data.get("data", []) if isinstance(t, dict)}
-            
+
             for p in open_pos:
                 symbol = p.get("symbol")
                 entry_price = float(p.get("avgPrice", 0))
                 if entry_price == 0:
                     continue
-                
+
                 current_price = tickers.get(symbol, 0)
                 if current_price == 0:
                     continue
-                
+
                 if symbol not in active_trade_monitors:
                     risk = entry_price * 0.02
                     tp1 = entry_price + risk
@@ -207,23 +203,22 @@ async def monitor_open_trades(session):
                         "tp1": tp1,
                         "sl_moved": False
                     }
-                    print(f"📥 Автоматично додано до моніторингу активну позицію {symbol} (ТВХ: {entry_price}, TP1: {tp1})", flush=True)
-                
-                info = active_trade_monitors[symbol]
-                tp1 = info["tp1"]
-                sl_moved = info["sl_moved"]
-                
-                if not sl_moved and current_price >= tp1:
-                    print(f"🛡️ TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-                    active_trade_monitors[symbol]["sl_moved"] = True
-                    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}\n(Позиція звільнила ліміт для нового входу)")
+                    print(f"🤖 Автоматично додано до моніторингу активну позицію {symbol} (TP1: {tp1})", flush=True)
 
-            open_symbols = [p.get("symbol") for p in open_pos]
+                info = active_trade_monitors[symbol]
+                tp1 = info['tp1']
+                sl_moved = info['sl_moved']
+
+                if not sl_moved and current_price >= tp1:
+                    print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
+                    active_trade_monitors[symbol]['sl_moved'] = True
+                    await send_telegram(session, f"🛡 TP1 досягнуто по {symbol}! Стоп перенесено в Безубиток на ТБХ.")
+
+            open_symbols = {p.get("symbol") for p in open_pos}
             for monitored_sym in list(active_trade_monitors.keys()):
                 if monitored_sym not in open_symbols:
                     del active_trade_monitors[monitored_sym]
-                    print(f"🧹 Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
-                    
+                    print(f"🏁 Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
 
@@ -241,16 +236,14 @@ async def send_periodic_report(session):
                     amt = p.get("positionAmt")
                     entry = p.get("avgPrice")
                     pnl = p.get("unrealizedProfit", "0")
-                    status = "🛡️ Безубиток" if sym in active_trade_monitors and active_trade_monitors[sym]["sl_moved"] else "⚠️ З ризиком"
-                    report += f"🔹 {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
-            
+                    status = "🛡 Безубиток" if sym in active_trade_monitors and active_trade_monitors[sym]['sl_moved'] else "⏳ В роботі"
+                    report += f"• {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
             await send_telegram(session, report)
         except Exception as e:
             print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
 
 async def execute_trade(session, symbol, entry_price):
     print(f"🚀 Спроба реального відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
-    
     await set_leverage(session, symbol)
 
     klines = await get_klines(session, symbol, interval="15m", limit=40)
@@ -264,11 +257,10 @@ async def execute_trade(session, symbol, entry_price):
         stop_loss_price = entry_price * 0.98
 
     risk = entry_price - stop_loss_price
-    
-    # Округлення TP1 в більший бік до 5 знаків
+
     tp1_raw = entry_price + (risk * 1.0)
     tp1 = math.ceil(tp1_raw * 100000) / 100000
-    
+
     tp2 = entry_price + (risk * 2.0)
     tp3 = entry_price + (risk * 3.0)
 
@@ -276,16 +268,21 @@ async def execute_trade(session, symbol, entry_price):
         target_usd = MARGIN_USD * LEVERAGE
         total_quantity = target_usd / entry_price
         quantity_str = f"{total_quantity:.4f}"
-        if float(quantity_str) <= 0:
+        if float(quantity_str) == 0:
             print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
             return
     except Exception as e:
         print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
         return
 
+    # Розподіл об'єму на частини (40% / 30% / 30%)
+    total_amt = float(quantity_str)
+    q1 = round(total_amt * 0.4, 4)
+    q2 = round(total_amt * 0.3, 4)
+    q3 = round(total_amt - q1 - q2, 4)
+
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    
     params = {
         "positionSide": "LONG",
         "quantity": quantity_str,
@@ -294,45 +291,70 @@ async def execute_trade(session, symbol, entry_price):
         "timestamp": ts,
         "type": "MARKET"
     }
-    
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
-    
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {
         "X-BX-APIKEY": API_KEY,
         "Content-Type": "application/x-www-form-urlencoded"
     }
-
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
+            print(f"📬 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
                 sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price)
                 
+                # Виставлення лімітних тейк-профітів
+                async def place_tp_order(s, sym, price_val, qty_val):
+                    p_path = "/openApi/swap/v2/trade/order"
+                    p_ts = str(int(time.time() * 1000) + server_time_offset)
+                    p_params = {
+                        "positionSide": "LONG",
+                        "quantity": str(qty_val),
+                        "side": "SELL",
+                        "symbol": sym,
+                        "timestamp": p_ts,
+                        "type": "LIMIT",
+                        "price": f"{price_val:.5f}"
+                    }
+                    p_query = urllib.parse.urlencode(sorted(p_params.items()))
+                    p_sig = get_sign(API_SECRET, p_query)
+                    p_url = f"{BINGX_BASE_URL}{p_path}?{p_query}&signature={p_sig}"
+                    p_headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+                    try:
+                        async with session.post(p_url, headers=p_headers) as p_resp:
+                            p_res = await p_resp.json()
+                            return p_res.get("code") == 0
+                    except Exception:
+                        return False
+
+                await place_tp_order(session, symbol, tp1, q1)
+                await place_tp_order(session, symbol, tp2, q2)
+                await place_tp_order(session, symbol, tp3, q3)
+
                 active_trade_monitors[symbol] = {
                     "entry_price": entry_price,
                     "tp1": tp1,
                     "sl_moved": False
                 }
-                
+
                 sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
                 msg = (
                     f"🟢 Успішно відкрито LONG по {symbol}!\n"
-                    f"Ціна входу (ТВХ): {entry_price}\n"
-                    f"Об'єм: {quantity_str}\n\n"
+                    f"📌 Ціна входу (TBX): {entry_price:.5f}\n"
+                    f"💰 Об'єм: {quantity_str}\n"
                     f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
                     f"🎯 TP1 (40% | 1:1): {tp1:.5f}\n"
-                    f"🎯 TP2 (30% | 2:1): {tp2:.5f}\n"
-                    f"🎯 TP3 (30% | 3:1): {tp3:.5f}"
+                    f"🎯 TP2 (30% | 1:2): {tp2:.5f}\n"
+                    f"🎯 TP3 (30% | 1:3): {tp3:.5f}"
                 )
                 await send_telegram(session, msg)
             else:
-                err_msg = res.get('msg', 'Unknown error')
-                await send_telegram(session, f"🔴 Помилка відкриття {symbol}: {err_msg}")
+                err_msg = res.get("msg", "Unknown error")
+                await send_telegram(session, f"❌ Помилка відкриття {symbol}: {err_msg}")
     except Exception as e:
-        print(f"⚠️ Виняток при відправці ордера для {symbol}: {e}", flush=True)
+        print(f"⚠️ Виняток при проводці ордера для {symbol}: {e}", flush=True)
 
 def calculate_ema(closes, period=50):
     if not closes:
@@ -352,30 +374,28 @@ def calculate_atr(klines, period=14):
     for i in range(1, len(klines)):
         high = float(klines[i]["high"])
         low = float(klines[i]["low"])
-        prev_close = float(klines[i-1]["close"])
+        prev_close = float(klines[i - 1]["close"])
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         tr_list.append(tr)
-    
     if not tr_list:
         return 0
     recent_tr = tr_list[-period:]
     return sum(recent_tr) / len(recent_tr)
 
 async def scan_market(session):
-    print("🔄 Початок нового циклу сканування ринку...", flush=True)
+    print("🔍 Початок нового циклу сканування ринку...", flush=True)
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
             open_pos = []
-        
+
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym not in active_trade_monitors or not active_trade_monitors[sym]["sl_moved"]:
+            if sym not in active_trade_monitors or not active_trade_monitors[sym]['sl_moved']:
                 risk_positions_count += 1
 
-        print(f"💼 Ризикових позицій (до TP1): {risk_positions_count}/{MAX_RISK_POSITIONS} | Всього на біржі: {len(open_pos)}", flush=True)
-        
+        print(f"📊 Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржі: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
             print("⛔ Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
@@ -388,32 +408,30 @@ async def scan_market(session):
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
                 return
-            
+
             tickers = data.get("data", [])
             if not isinstance(tickers, list):
                 return
-            
+
             scanned_count = 0
             matched_count = 0
             passed_ema = 0
             passed_vol = 0
-
             trade_opened_in_this_cycle = False
 
             for ticker in tickers:
                 if trade_opened_in_this_cycle:
-                    break  
-
+                    break
                 if not isinstance(ticker, dict):
                     continue
+
                 symbol = ticker.get("symbol", "")
-                
                 if any(p.get("symbol") == symbol for p in open_pos):
                     continue
 
-                if not symbol.endswith("USDT") or "-" in symbol[:-5] or "USD" in symbol[:-4]:
+                if not symbol.endswith("USDT") or "-" in symbol or "USD" in symbol[-3:]:
                     continue
-                
+
                 if "BNB" in symbol or "BTC" in symbol or "ETH" in symbol or "SOL" in symbol or "XRP" in symbol:
                     continue
 
@@ -430,33 +448,36 @@ async def scan_market(session):
 
                 if 5.0 <= change_24h <= 35.0:
                     matched_count += 1
-                    
-                    klines_15m = await get_klines(session, symbol, interval="15m", limit=30)
+
+                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 15:
                         continue
-                    
+
                     try:
                         atr_value = calculate_atr(klines_15m, period=14)
                         last_c = klines_15m[-1]
                         last_candle_range = float(last_c["high"]) - float(last_c["low"])
-                        
+
                         if atr_value > 0 and last_candle_range > atr_value * 1.8:
-                            continue  
+                            continue
 
                         closes_15m = []
                         for k in klines_15m:
-                            if isinstance(k, dict) and "close" in k:
-                                closes_15m.append(float(k["close"]))
-                        
-                        if len(closes_15m) < 10:
+                            if isinstance(k, dict) and 'close' in k:
+                                closes_15m.append(float(k['close']))
+
+                        if len(closes_15m) < 55:
                             continue
-                        
-                        ema_50 = calculate_ema(closes_15m, period=50)
+
+                        ema_current = calculate_ema(closes_15m, period=50)
+                        ema_past = calculate_ema(closes_15m[:-5], period=50)
+
                         if current_price == 0:
                             current_price = closes_15m[-1]
-                        
-                        if ema_50 > 0 and current_price < ema_50 * 0.985:
+
+                        if ema_current == 0 or ema_current <= ema_past or current_price < ema_current * 0.985:
                             continue
+
                     except Exception:
                         continue
 
@@ -465,33 +486,32 @@ async def scan_market(session):
                     klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
-                        
+
                     try:
                         valid_1m = []
                         for k in klines_1m:
                             if isinstance(k, dict) and "volume" in k and "close" in k:
                                 valid_1m.append(k)
-                        
+
                         if len(valid_1m) < 15:
                             continue
 
                         volumes_1m = [float(k["volume"]) for k in valid_1m]
-                        avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
+                        avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else volumes_1m[-1]
                         last_vol_1m = volumes_1m[-1]
                     except Exception:
                         continue
-                    
-                    if last_vol_1m > avg_vol_1m * 2.0:
+
+                    if last_vol_1m >= avg_vol_1m * 2.0:
                         passed_vol += 1
-                        print(f"🎯 Успіх! Малокап {symbol} пройшов усі фільтри! (Ціна: {current_price}, Об'єм 24h: ${int(volume_24h)}, Ріст: {change_24h}%)", flush=True)
-                        
+                        print(f"🎯 УСПІХ! Монета {symbol} пройшла усі фільтри! (Ціна: {current_price}, 24h %: {change_24h})", flush=True)
+
                         await execute_trade(session, symbol, current_price)
                         trade_opened_in_this_cycle = True
                         await asyncio.sleep(5)
                         break
-                        
-            print(f"🔍 Підсумок: перевірено {scanned_count}, ріст 5-35%: {matched_count}, пройшли EMA50: {passed_ema}, пройшли об'єм: {passed_vol}", flush=True)
-            
+
+            print(f"📊 Підсумок: перевірено ({scanned_count}), ріст 5-35% ({matched_count}), пройшли EMA50 та нахил ({passed_ema}), пройшли об'єм ({passed_vol})", flush=True)
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
@@ -501,18 +521,16 @@ async def main():
     async with aiohttp.ClientSession() as session:
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
-        print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: виправлено синтаксис та активовано автоконтроль усіх позицій!")
-        
-        asyncio.create_task(self_ping(session))
-        asyncio.create_task(send_periodic_report(session))
+        print("🤖 Бот успішно запущено, переходимо до безперервного циклу.", flush=True)
+        async.create_task(self_ping(session))
+        async.create_task(send_periodic_report(session))
         while True:
             try:
                 await scan_market(session)
                 await monitor_open_trades(session)
             except Exception as e:
                 print(f"❌ Помилка у загальному циклі: {e}", flush=True)
-            print("⏳ Очікування 60 секунд до наступного циклу...\n", flush=True)
+            print("⏳ Очікування 60 секунд до наступного циклу...", flush=True)
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
