@@ -22,6 +22,10 @@ MARGIN_USD = 0.5  # Маржа на позицію
 MAX_OPEN_POSITIONS = 2  # Максимум одночасних позицій
 server_time_offset = 0
 
+# Словник для відстеження стану позицій (для перенесення стопа в б/у після TP1)
+# Формат: {symbol: {"entry_price": float, "tp1_hit": bool, "stop_order_id": str}}
+tracked_positions = {}
+
 # --- Keep-alive сервер для Render ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -85,6 +89,33 @@ async def get_open_positions(session):
     except Exception as e:
         print(f"Помилка отримання позицій: {e}", flush=True)
     return []
+
+async def get_open_orders(session, symbol):
+    path = "/openApi/swap/v2/trade/openOrders"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    p_str = f"symbol={symbol}&timestamp={ts}"
+    sig = get_sign(API_SECRET, p_str)
+    headers = {"X-BX-APIKEY": API_KEY}
+    try:
+        async with session.get(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
+            res = await resp.json()
+            if res.get("code") == 0:
+                return res.get("data", {}).get("orders", [])
+    except Exception as e:
+        print(f"Помилка отримання відкритих ордерів для {symbol}: {e}", flush=True)
+    return []
+
+async def cancel_all_symbol_orders(session, symbol):
+    path = "/openApi/swap/v2/trade/allOpenOrders"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    p_str = f"symbol={symbol}&timestamp={ts}"
+    sig = get_sign(API_SECRET, p_str)
+    headers = {"X-BX-APIKEY": API_KEY}
+    try:
+        async with session.delete(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
+            pass
+    except Exception as e:
+        print(f"Помилка скасування ордерів для {symbol}: {e}", flush=True)
 
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
@@ -170,7 +201,7 @@ async def execute_trade(session, symbol, entry_price, low_price):
             res = await resp.json()
             if res.get("code") != 0:
                 return
-    except Exception as e:
+    except Exception:
         return
 
     levels = calculate_exit_levels(entry_price, low_price, qty)
@@ -184,6 +215,13 @@ async def execute_trade(session, symbol, entry_price, low_price):
     await set_stop_loss(session, symbol, levels["stop_loss"], qty)
     for i, tp in enumerate(levels["tps"], 1):
         await set_take_profit(session, symbol, tp["price"], tp["qty"], i)
+
+    # Зберігаємо для трекінгу перенесення стопа в безубиток
+    tracked_positions[symbol] = {
+        "entry_price": entry_price,
+        "tp1_hit": False,
+        "total_qty": qty
+    }
 
 async def set_stop_loss(session, symbol, stop_price, qty):
     path = "/openApi/swap/v2/trade/order"
@@ -209,6 +247,63 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
     except Exception:
         pass
 
+# --- Фоновий менеджер позицій (Перенесення стопа в б/у після TP1) ---
+async def manage_positions(session):
+    while True:
+        await asyncio.sleep(10)
+        try:
+            positions = await get_open_positions(session)
+            active_symbols = {p.get("symbol") for p in positions}
+
+            # Видаляємо з трекінгу закриті позиції
+            for sym in list(tracked_positions.keys()):
+                if sym not in active_symbols:
+                    tracked_positions.pop(sym, None)
+                    continue
+
+                info = tracked_positions[sym]
+                if not info["tp1_hit"]:
+                    # Перевіряємо відкриті ордери: якщо TP1 зник (спрацював), переносимо стоп на точку входу
+                    orders = await get_open_orders(session, sym)
+                    tp_orders = [o for o in orders if o.get("type") == "TAKE_PROFIT_MARKET"]
+                    
+                    # Якщо залишилось менше Тейк-Профітів (значить перший спрацював)
+                    if len(tp_orders) < 3:
+                        info["tp1_hit"] = True
+                        print(f"Спрацював TP1 для {sym}! Переносимо стоп-лос у безубиток (ТВХ)...", flush=True)
+                        
+                        # Скасовуємо старий стоп-лос та інші лімітки/тейки перед перенесенням
+                        await cancel_all_symbol_orders(session, sym)
+                        
+                        # Знаходимо поточний об'єм позиції, що залишився
+                        current_amt = 0
+                        for p in positions:
+                            if p.get("symbol") == sym:
+                                current_amt = float(p.get("positionAmt", 0))
+                                break
+                        
+                        if current_amt > 0:
+                            # Встановлюємо новий стоп-лос на ціну входу (безубиток)
+                            entry_p = info["entry_price"]
+                            await set_stop_loss(session, sym, entry_p, current_amt)
+                            
+                            # Переставляємо решту Тейк-Профітів (TP2 та TP3)
+                            risk = entry_p * 0.005 # Приблизний крок ризику для перерахунку, або залишаємо початкові пропорції
+                            # Або просто залишаємо старий TP2/TP3 якщо вони не скасовувались, або виставляємо заново
+                            # Оскільки cancel_all скасував усе, відновимо TP2 та TP3 на основі залишку об'єму
+                            qty2 = round(current_amt * 0.6, 4)
+                            qty3 = round(current_amt - qty2, 4)
+                            tp2_price = entry_p + ((entry_p - (entry_p * 0.995)) * 2.0)
+                            tp3_price = entry_p + ((entry_p - (entry_p * 0.995)) * 3.0)
+                            
+                            await set_take_profit(session, sym, tp2_price, qty2, 2)
+                            await set_take_profit(session, sym, tp3_price, qty3, 3)
+
+                            await send_telegram(session, f"🛡 *Стоп перенесено в безубиток (ТВХ)*\nМонета: `{sym}`\nЦіна входу: `{entry_p}`")
+
+        except Exception as e:
+            print(f"Помилка в manage_positions: {e}", flush=True)
+
 async def status_reporter(session):
     while True:
         await asyncio.sleep(900)
@@ -229,7 +324,7 @@ async def status_reporter(session):
         except Exception as e:
             print(f"Помилка відправки звіту: {e}", flush=True)
 
-# --- Сканер ринку з використанням безпечного списку монет ---
+# --- Сканер ринку ---
 async def scan_market(session):
     try:
         open_pos = await get_open_positions(session)
@@ -238,7 +333,6 @@ async def scan_market(session):
         if len(open_pos) >= MAX_OPEN_POSITIONS:
             return
 
-        # Використовуємо стабільний ендпоінт для отримання списку контрактів замість сирого ticker
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
@@ -256,7 +350,6 @@ async def scan_market(session):
                 if not isinstance(ticker, dict):
                     continue
                 
-                # Безпечне витягування даних через .get() з дефолтними значеннями
                 symbol = ticker.get("symbol", "")
                 if not symbol.endswith("USDT"):
                     continue
@@ -299,9 +392,10 @@ async def main():
         await sync_time(session)
         print("Бот запущено та сканує ринок...", flush=True)
         
-        await send_telegram(session, "🟢 *Бот успішно запущено та оновлено!*\nЗв'язок з Telegram стабільний, сканування ринку (інтервал 1 хв) розпочато.")
+        await send_telegram(session, "🟢 *Бот успішно запущено та оновлено!*\nДодано перенесення стопа в безубиток після TP1, інтервал сканування — 1 хв.")
         
         asyncio.create_task(status_reporter(session))
+        asyncio.create_task(manage_positions(session))
         
         while True:
             await sync_time(session)
@@ -310,3 +404,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
