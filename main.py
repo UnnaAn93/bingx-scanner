@@ -92,7 +92,7 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
+        print(f"⚠️️ Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def get_klines(session, symbol, interval="1m", limit=60):
@@ -174,7 +174,7 @@ async def scan_market(session):
                     
                     # Отримуємо 15m свічки для EMA50
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_15m) < 20:
+                    if not klines_15m or len(klines_15m) < 10:
                         continue
                     
                     try:
@@ -183,7 +183,7 @@ async def scan_market(session):
                             if isinstance(k, (list, tuple)) and len(k) > 4:
                                 closes_15m.append(float(k[4]))
                         
-                        if len(closes_15m) < 15:
+                        if len(closes_15m) < 10:
                             continue
                         
                         ema_50 = calculate_ema(closes_15m, period=50)
@@ -192,8 +192,11 @@ async def scan_market(session):
                         
                         # М'який фільтр EMA50 (допускаємо невеликий відкат до 98.5%)
                         if ema_50 > 0 and current_price < ema_50 * 0.985:
+                            # Дебаг: чому не пройшло EMA
+                            # print(f"❌ {symbol} не пройшов EMA: ціна {current_price} < {ema_50 * 0.985}", flush=True)
                             continue
-                    except Exception:
+                    except Exception as e:
+                        print(f"⚠️ Помилка EMA для {symbol}: {e}", flush=True)
                         continue
 
                     passed_ema += 1
@@ -215,7 +218,8 @@ async def scan_market(session):
                         volumes_1m = [float(k[5]) for k in valid_1m]
                         avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
                         last_vol_1m = volumes_1m[-1]
-                    except Exception:
+                    except Exception as e:
+                        print(f"⚠️ Помилка об'єму для {symbol}: {e}", flush=True)
                         continue
                     
                     # Множник об'єму 1.4
@@ -245,7 +249,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: синтаксичну помилку виправлено!*")
+        await send_telegram(session, "🟢 *Бот оновлено: додано відлагодження для EMA!*")
         
         asyncio.create_task(self_ping(session))
         
