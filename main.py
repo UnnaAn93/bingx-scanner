@@ -19,7 +19,7 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 
 LEVERAGE = 10
 MARGIN_USD = 0.5  
-MAX_OPEN_POSITIONS = 2  
+MAX_RISK_POSITIONS = 2  # Максимум позицій із початковим ризиком (до TP1)
 server_time_offset = 0
 
 active_trade_monitors = {}
@@ -140,7 +140,6 @@ async def get_klines(session, symbol, interval="1m", limit=60):
         return []
 
 async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
-    """Функція для розміщення реального STOP_MARKET ордера на біржі"""
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     
@@ -176,6 +175,8 @@ async def monitor_open_trades(session):
     if not active_trade_monitors:
         return
     
+    url = f"{BINGX_BASE_URL}{path if 'path' in locals() else '/openApi/swap/v2/quote/ticker'}"
+    # Використовуємо прямий шлях до тікерів
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url) as resp:
@@ -198,9 +199,9 @@ async def monitor_open_trades(session):
                 
                 if not sl_moved and current_price >= tp1:
                     print(f"🛡️ TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-                    # Тут можна скасувати старий стоп і поставити новий по ціні entry_price (або реалізувати через API)
-                    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nЦіна входу: {entry_price}")
+                    # Оновлюємо прапорець в пам'яті бота, що ризику по цій позиції більше немає
                     active_trade_monitors[symbol]["sl_moved"] = True
+                    await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}\n(Позиція звільнила ліміт для нового входу)")
                     
                 open_pos = await get_open_positions(session)
                 open_symbols = [p.get("symbol") for p in open_pos]
@@ -225,7 +226,8 @@ async def send_periodic_report(session):
                     amt = p.get("positionAmt")
                     entry = p.get("avgPrice")
                     pnl = p.get("unrealizedProfit", "0")
-                    report += f"🔹 {sym} | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
+                    status = "🛡️ Безубиток" if sym in active_trade_monitors and active_trade_monitors[sym]["sl_moved"] else "⚠️ З ризиком"
+                    report += f"🔹 {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
             
             await send_telegram(session, report)
         except Exception as e:
@@ -288,7 +290,6 @@ async def execute_trade(session, symbol, entry_price):
             res = await resp.json()
             print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
-                # Одразу виставляємо реальний стоп-лосс на біржі
                 sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price)
                 
                 active_trade_monitors[symbol] = {
@@ -348,9 +349,18 @@ async def scan_market(session):
         if open_pos is None:
             open_pos = []
         
-        print(f"💼 Активних позицій на біржах: {len(open_pos)}/{MAX_OPEN_POSITIONS}", flush=True)
-        if len(open_pos) >= MAX_OPEN_POSITIONS:
-            print("⛔ Сканування зупинено: досягнуто ліміт відкритих позицій.", flush=True)
+        # РАХУЄМО ЛИШЕ ТІ ПОЗИЦІЇ, ЩО ЩЕ НЕ ПЕРЕВЕДЕНІ В БЕЗУБИТОК (тобто мають активний ризик)
+        risk_positions_count = 0
+        for p in open_pos:
+            sym = p.get("symbol")
+            # Якщо монети немає в моніторингу або стоп ще не перенесено — вона вважається ризиковою
+            if sym not in active_trade_monitors or not active_trade_monitors[sym]["sl_moved"]:
+                risk_positions_count += 1
+
+        print(f"💼 Ризикових позицій (до TP1): {risk_positions_count}/{MAX_RISK_POSITIONS} | Всього на біржі: {len(open_pos)}", flush=True)
+        
+        if risk_positions_count >= MAX_RISK_POSITIONS:
+            print("⛔ Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
@@ -381,6 +391,10 @@ async def scan_market(session):
                     continue
                 symbol = ticker.get("symbol", "")
                 
+                # Не відкриваємо повторно ту саму монету, яка вже є в позиціях
+                if any(p.get("symbol") == symbol for p in open_pos):
+                    continue
+
                 if not symbol.endswith("USDT") or "-" in symbol[:-5] or "USD" in symbol[:-4]:
                     continue
                 
@@ -472,7 +486,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: тепер стоп-лосс виставляється безпосередньо на біржі через STOP_MARKET!")
+        await send_telegram(session, "🟢 Бот оновлено: тепер ліміт 2 позиції діє лише на ризикові угоди, а після TP1 відкриваються нові!")
         
         asyncio.create_task(self_ping(session))
         asyncio.create_task(send_periodic_report(session))
@@ -482,10 +496,4 @@ async def main():
                 await scan_market(session)
                 await monitor_open_trades(session)
             except Exception as e:
-                print(f"❌ Помилка у загальному циклі: {e}", flush=True)
-            print("⏳ Очікування 60 секунд до наступного циклу...\n", flush=True)
-            await asyncio.sleep(60)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+                print(f"❌ Помилк
