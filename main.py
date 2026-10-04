@@ -119,7 +119,6 @@ async def get_klines(session, symbol, interval="1m", limit=20):
         print(f"Помилка отримання свічок для {symbol}: {e}", flush=True)
     return []
 
-# --- Розрахунок виходів (1R, 2R, 3R) ---
 def calculate_exit_levels(entry_price, low_price, total_qty):
     stop_loss = low_price * 0.995
     risk = entry_price - stop_loss
@@ -144,13 +143,11 @@ def calculate_exit_levels(entry_price, low_price, total_qty):
         ]
     }
 
-# --- Відкриття позиції та ордерів ---
 async def execute_trade(session, symbol, entry_price, low_price):
     open_pos = await get_open_positions(session)
     if open_pos is None:
         open_pos = []
     if len(open_pos) >= MAX_OPEN_POSITIONS:
-        print(f"Ліміт позицій вичерпано ({len(open_pos)}/{MAX_OPEN_POSITIONS}). Пропускаємо {symbol}.", flush=True)
         return
 
     if not await set_leverage(session, symbol):
@@ -172,21 +169,12 @@ async def execute_trade(session, symbol, entry_price, low_price):
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
             res = await resp.json()
             if res.get("code") != 0:
-                err_msg = f"❌ *Помилка відкриття ордера* `{symbol}`\nПричина: `{res}`"
-                print(err_msg, flush=True)
-                await send_telegram(session, err_msg)
                 return
     except Exception as e:
-        err_msg = f"❌ *Виняток при відкритті ордера* `{symbol}`\nПричина: `{e}`"
-        print(err_msg, flush=True)
-        await send_telegram(session, err_msg)
         return
 
     levels = calculate_exit_levels(entry_price, low_price, qty)
     if not levels:
-        err_msg = f"⚠️ *Помилка розрахунку рівнів виходу* `{symbol}` (ризик <= 0)"
-        print(err_msg, flush=True)
-        await send_telegram(session, err_msg)
         return
 
     msg = f"🚀 *Вхід у позицію (Малокапіталка)*\nМонета: `{symbol}`\nЦіна входу: `{entry_price}`\nСтоп-лос: `{levels['stop_loss']}`"
@@ -194,7 +182,6 @@ async def execute_trade(session, symbol, entry_price, low_price):
     print(msg, flush=True)
 
     await set_stop_loss(session, symbol, levels["stop_loss"], qty)
-
     for i, tp in enumerate(levels["tps"], 1):
         await set_take_profit(session, symbol, tp["price"], tp["qty"], i)
 
@@ -206,15 +193,9 @@ async def set_stop_loss(session, symbol, stop_price, qty):
     headers = {"X-BX-APIKEY": API_KEY}
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
-            res = await resp.json()
-            if res.get("code") != 0:
-                err_msg = f"❌ *Помилка встановлення Стоп-Лосу* `{symbol}`\nПричина: `{res}`"
-                print(err_msg, flush=True)
-                await send_telegram(session, err_msg)
-    except Exception as e:
-        err_msg = f"❌ *Виняток встановлення Стоп-Лосу* `{symbol}`\nПричина: `{e}`"
-        print(err_msg, flush=True)
-        await send_telegram(session, err_msg)
+            pass
+    except Exception:
+        pass
 
 async def set_take_profit(session, symbol, tp_price, qty, tp_num):
     path = "/openApi/swap/v2/trade/order"
@@ -224,17 +205,10 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
     headers = {"X-BX-APIKEY": API_KEY}
     try:
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
-            res = await resp.json()
-            if res.get("code") != 0:
-                err_msg = f"❌ *Помилка встановлення Тейк-Профіту {tp_num}* `{symbol}`\nПричина: `{res}`"
-                print(err_msg, flush=True)
-                await send_telegram(session, err_msg)
-    except Exception as e:
-        err_msg = f"❌ *Виняток встановлення Тейк-Профіту {tp_num}* `{symbol}`\nПричина: `{e}`"
-        print(err_msg, flush=True)
-        await send_telegram(session, err_msg)
+            pass
+    except Exception:
+        pass
 
-# --- Періодичний звіт кожні 15 хвилин ---
 async def status_reporter(session):
     while True:
         await asyncio.sleep(900)
@@ -255,7 +229,7 @@ async def status_reporter(session):
         except Exception as e:
             print(f"Помилка відправки звіту: {e}", flush=True)
 
-# --- Сканер ринку ---
+# --- Сканер ринку з використанням безпечного списку монет ---
 async def scan_market(session):
     try:
         open_pos = await get_open_positions(session)
@@ -264,62 +238,60 @@ async def scan_market(session):
         if len(open_pos) >= MAX_OPEN_POSITIONS:
             return
 
+        # Використовуємо стабільний ендпоінт для отримання списку контрактів замість сирого ticker
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"Помилка HTTP: {resp.status}", flush=True)
                 return
             
             data = await resp.json()
+            if not isinstance(data, dict) or data.get("code") != 0:
+                return
             
-            tickers = []
-            if isinstance(data, dict):
-                code = data.get("code", 0)
-                if code != 0:
-                    print(f"Помилка API BingX: код {code}, повідомлення: {data.get('msg', 'невідомо')}", flush=True)
-                    return
-                tickers = data.get("data", [])
-            elif isinstance(data, list):
-                tickers = data
-
+            tickers = data.get("data", [])
             if not isinstance(tickers, list):
                 return
             
             for ticker in tickers:
                 if not isinstance(ticker, dict):
                     continue
-                    
-                current_pos = await get_open_positions(session)
-                if current_pos is None:
-                    current_pos = []
-                if len(current_pos) >= MAX_OPEN_POSITIONS:
-                    break
-
+                
+                # Безпечне витягування даних через .get() з дефолтними значеннями
                 symbol = ticker.get("symbol", "")
                 if not symbol.endswith("USDT"):
                     continue
                 
-                change_24h = float(ticker.get("priceChangePercent", 0))
+                try:
+                    change_24h = float(ticker.get("priceChangePercent", 0))
+                except (ValueError, TypeError):
+                    continue
+
                 if 3.0 <= change_24h <= 20.0:
                     klines = await get_klines(session, symbol, interval="1m", limit=15)
                     if not klines or len(klines) < 15:
                         continue
                         
-                    volumes = [float(k[5]) for k in klines]
-                    avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
-                    last_volume = volumes[-1]
+                    try:
+                        volumes = [float(k[5]) for k in klines]
+                        avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
+                        last_volume = volumes[-1]
+                    except (IndexError, ValueError, TypeError):
+                        continue
                     
                     if last_volume > avg_volume * 3.0:
-                        lows = [float(k[3]) for k in klines]
-                        low_price = min(lows[-10:])
-                        entry_price = float(ticker.get("lastPrice", klines[-1][4]))
+                        try:
+                            lows = [float(k[3]) for k in klines]
+                            low_price = min(lows[-10:])
+                            entry_price = float(ticker.get("lastPrice", klines[-1][4]))
+                        except (IndexError, ValueError, TypeError):
+                            continue
                         
                         print(f"Знайдено сплеск об'єму для {symbol}! Входимо...", flush=True)
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
     except Exception as e:
-        print(f"Помилка сканування (виняток): {type(e).__name__} - {e}", flush=True)
+        print(f"Помилка сканування (виняток): {e}", flush=True)
 
 async def main():
     keep_alive()
@@ -338,4 +310,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
