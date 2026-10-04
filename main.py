@@ -475,6 +475,10 @@ async def scan_market(session):
                         if current_price == 0:
                             current_price = closes_15m[-1]
 
+                        # Если цена улетела выше EMA50 больше чем на 2 ATR — пропускаем (не заходим на пике)
+                        if current_price > ema_current + (atr_value * 2):
+                            continue
+
                         if ema_current == 0 or ema_current <= ema_past or current_price < ema_current * 0.985:
                             continue
 
