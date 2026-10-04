@@ -95,7 +95,7 @@ async def get_open_positions(session):
         print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
-async def get_klines(session, symbol, interval="1m", limit=50):
+async def get_klines(session, symbol, interval="1m", limit=60):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
@@ -110,8 +110,10 @@ async def get_klines(session, symbol, interval="1m", limit=50):
         return []
 
 def calculate_ema(closes, period=50):
+    if not closes:
+        return 0
     if len(closes) < period:
-        return sum(closes) / len(closes) if closes else 0
+        period = len(closes)
     multiplier = 2 / (period + 1)
     ema = sum(closes[:period]) / period
     for price in closes[period:]:
@@ -162,6 +164,7 @@ async def scan_market(session):
                 scanned_count += 1
                 try:
                     change_24h = float(ticker.get("priceChangePercent", 0))
+                    current_price = float(ticker.get("lastPrice", 0))
                 except (ValueError, TypeError):
                     continue
 
@@ -169,50 +172,68 @@ async def scan_market(session):
                 if 1.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
+                    # Отримуємо 15m свічки для EMA50
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_15m) < 50:
+                    if not klines_1m_check := klines_15m: # перевірка
+                        pass
+
+                    if len(klines_15m) < 20:
                         continue
                     
                     try:
-                        closes_15m = [float(k[4]) for k in klines_15m if isinstance(k, (list, tuple)) and len(k) > 4]
-                        if len(closes_15m) < 50:
+                        # BingX зазвичай віддає свічки від найстаріших до найновіших, але на всяк випадок сортуємо за часом (index 0) якщо є
+                        # зазвичай k[4] це close
+                        closes_15m = []
+                        for k in klines_15m:
+                            if isinstance(k, (list, tuple)) and len(k) > 4:
+                                closes_15m.append(float(k[4]))
+                        
+                        if len(closes_15m) < 15:
                             continue
                         
                         ema_50 = calculate_ema(closes_15m, period=50)
-                        current_price = float(ticker.get("lastPrice", closes_15m[-1]))
+                        if current_price == 0:
+                            current_price = closes_15m[-1]
                         
-                        if current_price < ema_50:
+                        # М'який фільтр EMA50 (допускаємо невеликий відкат до 98.5%)
+                        if ema_50 > 0 and current_price < ema_50 * 0.985:
                             continue
-                    except (ValueError, TypeError, IndexError):
+                    except Exception:
                         continue
 
-                    passed_ema += 1  # Пройшли EMA50
+                    passed_ema += 1
 
-                    klines_1m = await get_klines(session, symbol, interval="1m", limit=20)
+                    # Отримуємо 1m свічки для об'єму
+                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
                         
                     try:
-                        valid_1m = [k for k in klines_1m if isinstance(k, (list, tuple)) and len(k) > 5]
+                        valid_1m = []
+                        for k in klines_1m:
+                            if isinstance(k, (list, tuple)) and len(k) > 5:
+                                valid_1m.append(k)
+                        
                         if len(valid_1m) < 15:
                             continue
 
                         volumes_1m = [float(k[5]) for k in valid_1m]
                         avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
                         last_vol_1m = volumes_1m[-1]
-                    except (IndexError, ValueError, TypeError):
+                    except Exception:
                         continue
                     
-                    # Пом'якшений множник об'єму (1.4 замість 2.2)
+                    # Множник об'єму 1.4
                     if last_vol_1m > avg_vol_1m * 1.4:
                         passed_vol += 1
-                        print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри!", flush=True)
+                        print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри! (Ціна: {current_price}, EMA50: {round(ema_50, 4)})", flush=True)
                         try:
                             lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
                             low_price = min(lows_1m[-10:]) if lows_1m else current_price * 0.99
                             entry_price = current_price
-                        except (IndexError, ValueError, TypeError):
-                            continue
+                        except Exception:
+                            entry_price = current_price
+                            low_price = current_price * 0.99
                         
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
@@ -229,7 +250,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено з розширеною деталізацією логів!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено розрахунок EMA50 та об'ємів!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -243,4 +264,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                        
+            
