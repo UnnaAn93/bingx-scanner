@@ -91,7 +91,7 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️️ Помилка отримання позицій: {e}", flush=True)
+        print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def set_leverage(session, symbol):
@@ -116,7 +116,7 @@ async def set_leverage(session, symbol):
             res = await resp.json()
             print(f"⚙️ Встановлення плеча для {symbol}: {res}", flush=True)
     except Exception as e:
-        print(f"⚠️️ Помилка встановлення плеча: {e}", flush=True)
+        print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
 
 async def execute_trade(session, symbol, entry_price):
     print(f"🚀 Спроба реального відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
@@ -148,7 +148,6 @@ async def execute_trade(session, symbol, entry_price):
     query_str = urllib.parse.urlencode(params)
     sig = get_sign(API_SECRET, query_str)
     
-    # Передаємо підпис у вигляді параметра signature, а самі параметри як data у форматі urlencoded
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {
         "X-BX-APIKEY": API_KEY,
@@ -178,7 +177,7 @@ async def get_klines(session, symbol, interval="1m", limit=60):
                 return []
             return klines
     except Exception as e:
-        print(f"⚠️ Виняток у get_klines для {symbol}: {e}", flush=True)
+        print(f"⚠️️ Виняток у get_klines для {symbol}: {e}", flush=True)
         return []
 
 def calculate_ema(closes, period=50):
@@ -227,7 +226,6 @@ async def scan_market(session):
                     continue
                 symbol = ticker.get("symbol", "")
                 
-                # Тільки чисті USDT пари
                 if not symbol.endswith("USDT") or "-" in symbol[:-5] or "USD" in symbol[:-4]:
                     continue
                 
@@ -235,20 +233,18 @@ async def scan_market(session):
                 try:
                     change_24h = float(ticker.get("priceChangePercent", 0))
                     current_price = float(ticker.get("lastPrice", 0))
-                    volume_24h = float(ticker.get("volume", 0)) * current_price # Орієнтовний оборот в USDT
+                    volume_24h = float(ticker.get("volume", 0)) * current_price
                 except (ValueError, TypeError):
                     continue
 
-                # ФІЛЬТР МАЛОКАПІВ: Добовий об'єм від $500k до $30M (відсікаємо гігантів типу SOL, BTC, NEAR тощо)
                 if volume_24h < 500_000 or volume_24h > 30_000_000:
                     continue
 
-                # Фільтр зростання (1% - 35%)
                 if 1.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_1m) < 10:
+                    if not klines_15m or len(klines_15m) < 10:  # ВИПРАВЛЕНО ТУТ (було klines_1m)
                         continue
                     
                     try:
@@ -309,7 +305,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: активовано фільтр малокапів та виправлено підпис POST-запитів!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено помилку змінної klines_15m!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -323,4 +319,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                    
