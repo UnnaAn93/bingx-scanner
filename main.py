@@ -7,6 +7,7 @@ import hashlib
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import traceback
 
 # --- Налаштування середовища ---
 API_KEY = os.environ.get("BINGX_API_KEY", "")
@@ -144,8 +145,11 @@ async def get_klines(session, symbol, interval="1m", limit=20):
     try:
         async with session.get(url) as resp:
             data = await resp.json()
-            if data.get("code") == 0:
-                return data.get("data", [])
+            # Додаємо вивід "сирої" відповіді для діагностики, якщо код не 0
+            if data.get("code") != 0:
+                print(f"⚠️ [Див. відповідь API] klines для {symbol}: {data}", flush=True)
+                return []
+            return data.get("data", [])
     except Exception as e:
         print(f"Помилка отримання свічок для {symbol}: {e}", flush=True)
     return []
@@ -200,8 +204,10 @@ async def execute_trade(session, symbol, entry_price, low_price):
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
             res = await resp.json()
             if res.get("code") != 0:
+                print(f"⚠️ Помилка створення ордера для {symbol}: {res}", flush=True)
                 return
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Виняток створення ордера для {symbol}: {e}", flush=True)
         return
 
     levels = calculate_exit_levels(entry_price, low_price, qty)
@@ -216,7 +222,6 @@ async def execute_trade(session, symbol, entry_price, low_price):
     for i, tp in enumerate(levels["tps"], 1):
         await set_take_profit(session, symbol, tp["price"], tp["qty"], i)
 
-    # Зберігаємо для трекінгу перенесення стопа в безубиток
     tracked_positions[symbol] = {
         "entry_price": entry_price,
         "tp1_hit": False,
@@ -247,7 +252,7 @@ async def set_take_profit(session, symbol, tp_price, qty, tp_num):
     except Exception:
         pass
 
-# --- Фоновий менеджер позицій (Перенесення стопа в б/у після TP1) ---
+# --- Фоновий менеджер позицій ---
 async def manage_positions(session):
     while True:
         await asyncio.sleep(10)
@@ -255,7 +260,6 @@ async def manage_positions(session):
             positions = await get_open_positions(session)
             active_symbols = {p.get("symbol") for p in positions}
 
-            # Видаляємо з трекінгу закриті позиції
             for sym in list(tracked_positions.keys()):
                 if sym not in active_symbols:
                     tracked_positions.pop(sym, None)
@@ -263,19 +267,15 @@ async def manage_positions(session):
 
                 info = tracked_positions[sym]
                 if not info["tp1_hit"]:
-                    # Перевіряємо відкриті ордери: якщо TP1 зник (спрацював), переносимо стоп на точку входу
                     orders = await get_open_orders(session, sym)
                     tp_orders = [o for o in orders if o.get("type") == "TAKE_PROFIT_MARKET"]
                     
-                    # Якщо залишилось менше Тейк-Профітів (значить перший спрацював)
                     if len(tp_orders) < 3:
                         info["tp1_hit"] = True
                         print(f"Спрацював TP1 для {sym}! Переносимо стоп-лос у безубиток (ТВХ)...", flush=True)
                         
-                        # Скасовуємо старий стоп-лос та інші лімітки/тейки перед перенесенням
                         await cancel_all_symbol_orders(session, sym)
                         
-                        # Знаходимо поточний об'єм позиції, що залишився
                         current_amt = 0
                         for p in positions:
                             if p.get("symbol") == sym:
@@ -283,14 +283,9 @@ async def manage_positions(session):
                                 break
                         
                         if current_amt > 0:
-                            # Встановлюємо новий стоп-лос на ціну входу (безубиток)
                             entry_p = info["entry_price"]
                             await set_stop_loss(session, sym, entry_p, current_amt)
                             
-                            # Переставляємо решту Тейк-Профітів (TP2 та TP3)
-                            risk = entry_p * 0.005 # Приблизний крок ризику для перерахунку, або залишаємо початкові пропорції
-                            # Або просто залишаємо старий TP2/TP3 якщо вони не скасовувались, або виставляємо заново
-                            # Оскільки cancel_all скасував усе, відновимо TP2 та TP3 на основі залишку об'єму
                             qty2 = round(current_amt * 0.6, 4)
                             qty3 = round(current_amt - qty2, 4)
                             tp2_price = entry_p + ((entry_p - (entry_p * 0.995)) * 2.0)
@@ -340,6 +335,7 @@ async def scan_market(session):
             
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
+                print(f"⚠️ Помилка тікерів від API: {data}", flush=True)
                 return
             
             tickers = data.get("data", [])
@@ -361,22 +357,29 @@ async def scan_market(session):
 
                 if 3.0 <= change_24h <= 20.0:
                     klines = await get_klines(session, symbol, interval="1m", limit=15)
-                    if not klines or len(klines) < 15:
+                    if not klines or not isinstance(klines, list) or len(klines) < 15:
                         continue
                         
                     try:
-                        volumes = [float(k[5]) for k in klines]
+                        # Захисна перевірка: кожна свічка повинна мати принаймні 6 елементів (індекс 0..5)
+                        valid_klines = [k for k in klines if isinstance(k, (list, tuple)) and len(k) > 5]
+                        if len(valid_klines) < 15:
+                            continue
+
+                        volumes = [float(k[5]) for k in valid_klines]
                         avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
                         last_volume = volumes[-1]
-                    except (IndexError, ValueError, TypeError):
+                    except (IndexError, ValueError, TypeError) as ex:
+                        print(f"⚠️ Помилка обробки об'ємів для {symbol}: {ex} | Сирі дані: {klines[:2]}", flush=True)
                         continue
                     
                     if last_volume > avg_volume * 3.0:
                         try:
-                            lows = [float(k[3]) for k in klines]
+                            lows = [float(k[3]) for k in valid_klines]
                             low_price = min(lows[-10:])
-                            entry_price = float(ticker.get("lastPrice", klines[-1][4]))
-                        except (IndexError, ValueError, TypeError):
+                            entry_price = float(ticker.get("lastPrice", valid_klines[-1][4]))
+                        except (IndexError, ValueError, TypeError) as ex:
+                            print(f"⚠️ Помилка обробки ціни для {symbol}: {ex}", flush=True)
                             continue
                         
                         print(f"Знайдено сплеск об'єму для {symbol}! Входимо...", flush=True)
@@ -385,6 +388,7 @@ async def scan_market(session):
                         
     except Exception as e:
         print(f"Помилка сканування (виняток): {e}", flush=True)
+        traceback.print_exc()  # Виведе повний стек помилки в логи Render
 
 async def main():
     keep_alive()
