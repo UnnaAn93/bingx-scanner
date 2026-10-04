@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
-# Торгові параметри
+# Торгові параметри (пом'якшені для кращої чутливості)
 LEVERAGE = 10
 MARGIN_USD = 0.5  
 MAX_OPEN_POSITIONS = 2  
@@ -69,7 +69,6 @@ async def sync_time(session):
             server_time = data.get("serverTime", int(time.time() * 1000))
             local_time = int(time.time() * 1000)
             server_time_offset = server_time - local_time
-            print(f"Час синхронізовано. Offset: {server_time_offset} ms", flush=True)
     except Exception as e:
         print(f"Помилка синхронізації часу: {e}", flush=True)
 
@@ -101,7 +100,7 @@ async def get_open_orders(session, symbol):
             if res.get("code") == 0:
                 return res.get("data", {}).get("orders", [])
     except Exception as e:
-        print(f"Помилка отримання відкритих ордерів для {symbol}: {e}", flush=True)
+        print(f"Помилка отримання ордерів: {e}", flush=True)
     return []
 
 async def cancel_all_symbol_orders(session, symbol):
@@ -114,7 +113,7 @@ async def cancel_all_symbol_orders(session, symbol):
         async with session.delete(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
             pass
     except Exception as e:
-        print(f"Помилка скасування ордерів для {symbol}: {e}", flush=True)
+        print(f"Помилка скасування ордерів: {e}", flush=True)
 
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
@@ -290,7 +289,7 @@ async def manage_positions(session):
 
 async def status_reporter(session):
     while True:
-        await asyncio.sleep(900)  # Виправлено відсутній await
+        await asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
             if not positions:
@@ -338,13 +337,13 @@ async def scan_market(session):
                 except (ValueError, TypeError):
                     continue
 
-                if 3.0 <= change_24h <= 25.0:
+                # Пом'якшений фільтр добового зростання (від 1% до 35%)
+                if 1.0 <= change_24h <= 35.0:
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 50:
                         continue
                     
                     try:
-                        # Безпечний парсинг свічок (перевірка чи елемент є списком/кортежем)
                         closes_15m = [float(k[4]) for k in klines_15m if isinstance(k, (list, tuple)) and len(k) > 4]
                         if len(closes_15m) < 50:
                             continue
@@ -353,10 +352,6 @@ async def scan_market(session):
                         current_price = float(ticker.get("lastPrice", closes_15m[-1]))
                         
                         if current_price < ema_50:
-                            continue
-                        
-                        lows_15m = [float(k[3]) for k in klines_15m if isinstance(k, (list, tuple)) and len(k) > 3]
-                        if not lows_15m:
                             continue
                     except (ValueError, TypeError, IndexError):
                         continue
@@ -376,7 +371,8 @@ async def scan_market(session):
                     except (IndexError, ValueError, TypeError):
                         continue
                     
-                    if last_vol_1m > avg_vol_1m * 3.0:
+                    # Пом'якшений сплеск об'єму (у 2.2 рази замість 3)
+                    if last_vol_1m > avg_vol_1m * 2.2:
                         try:
                             lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
                             low_price = min(lows_1m[-10:]) if lows_1m else current_price * 0.99
@@ -384,24 +380,29 @@ async def scan_market(session):
                         except (IndexError, ValueError, TypeError):
                             continue
                         
+                        print(f"Знайдено точку входу для {symbol}! Виконуємо угоду...", flush=True)
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
     except Exception as e:
-        print(f"Помилка сканування: {e}", flush=True)
+        print(f"Помилка сканування ринку: {e}", flush=True)
 
 async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
         await sync_time(session)
-        print("Бот запущено за оновленою стратегією...", flush=True)
+        print("Бот успішно запущено та оновлено!", flush=True)
+        await send_telegram(session, "🟢 *Бот успішно оновлено та перезапущено!*\nСканування ринку відновлено.")
         
         asyncio.create_task(status_reporter(session))
         asyncio.create_task(manage_positions(session))
         
         while True:
-            await sync_time(session)
-            await scan_market(session)
+            try:
+                await sync_time(session)
+                await scan_market(session)
+            except Exception as e:
+                print(f"Виняток у головному циклі: {e}", flush=True)
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
