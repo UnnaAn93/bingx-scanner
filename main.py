@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
-# Торгові параметри (пом'якшені для кращої чутливості)
+# Торгові параметри
 LEVERAGE = 10
 MARGIN_USD = 0.5  
 MAX_OPEN_POSITIONS = 2  
@@ -45,6 +45,17 @@ def keep_alive():
     t = threading.Thread(target=run_server)
     t.daemon = True
     t.start()
+
+# --- Функція самопінгу проти засинання Render ---
+async def self_ping(session):
+    while True:
+        await asyncio.sleep(420)  # Кожні 7 хвилин
+        if RENDER_URL:
+            try:
+                async with session.get(RENDER_URL) as resp:
+                    print(f"Self-ping виконано, статус: {resp.status}", flush=True)
+            except Exception as e:
+                print(f"Помилка self-ping: {e}", flush=True)
 
 # --- Допоміжні функції ---
 def get_sign(secret_key: str, payload: str) -> str:
@@ -306,16 +317,20 @@ async def status_reporter(session):
             pass
 
 async def scan_market(session):
+    scanned_count = 0
+    matched_count = 0
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
             open_pos = []
         if len(open_pos) >= MAX_OPEN_POSITIONS:
+            print(f"Сканування пропущено: досягнуто ліміт відкритих позицій ({len(open_pos)}/{MAX_OPEN_POSITIONS})", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
+                print(f"Помилка отримання тікерів, статус: {resp.status}", flush=True)
                 return
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
@@ -332,13 +347,14 @@ async def scan_market(session):
                 if not symbol.endswith("USDT"):
                     continue
                 
+                scanned_count += 1
                 try:
                     change_24h = float(ticker.get("priceChangePercent", 0))
                 except (ValueError, TypeError):
                     continue
 
-                # Пом'якшений фільтр добового зростання (від 1% до 35%)
                 if 1.0 <= change_24h <= 35.0:
+                    matched_count += 1
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
                     if not klines_15m or len(klines_15m) < 50:
                         continue
@@ -371,7 +387,6 @@ async def scan_market(session):
                     except (IndexError, ValueError, TypeError):
                         continue
                     
-                    # Пом'якшений сплеск об'єму (у 2.2 рази замість 3)
                     if last_vol_1m > avg_vol_1m * 2.2:
                         try:
                             lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
@@ -384,6 +399,7 @@ async def scan_market(session):
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
+        print(f"🔍 Сканування завершено: перевірено {scanned_count} монет USDT, з них підійшли за % зростання: {matched_count}", flush=True)
     except Exception as e:
         print(f"Помилка сканування ринку: {e}", flush=True)
 
@@ -391,11 +407,12 @@ async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
         await sync_time(session)
-        print("Бот успішно запущено та оновлено!", flush=True)
-        await send_telegram(session, "🟢 *Бот успішно оновлено та перезапущено!*\nСканування ринку відновлено.")
+        print("Бот успішно запущено з функцією самопінгу та розширеними логами!", flush=True)
+        await send_telegram(session, "🟢 *Бот оновлено!*\nАктивізовано захист від засинання та детальне логування сканування.")
         
         asyncio.create_task(status_reporter(session))
         asyncio.create_task(manage_positions(session))
+        asyncio.create_task(self_ping(session))
         
         while True:
             try:
@@ -407,4 +424,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                            
+                
