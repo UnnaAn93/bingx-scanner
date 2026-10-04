@@ -120,7 +120,6 @@ def calculate_ema(closes, period=50):
 
 async def execute_trade(session, symbol, entry_price, low_price):
     print(f"🚀 Спроба відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
-    # Тут виконується логіка відкриття ордера на біржі
     await send_telegram(session, f"🟢 Знайдено кандидат для входу: `{symbol}` за ціною `{entry_price}`")
 
 async def scan_market(session):
@@ -150,6 +149,8 @@ async def scan_market(session):
             
             scanned_count = 0
             matched_count = 0
+            passed_ema = 0
+            passed_vol = 0
 
             for ticker in tickers:
                 if not isinstance(ticker, dict):
@@ -185,6 +186,8 @@ async def scan_market(session):
                     except (ValueError, TypeError, IndexError):
                         continue
 
+                    passed_ema += 1  # Пройшли EMA50
+
                     klines_1m = await get_klines(session, symbol, interval="1m", limit=20)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
@@ -202,7 +205,8 @@ async def scan_market(session):
                     
                     # Пом'якшений множник об'єму (1.4 замість 2.2)
                     if last_vol_1m > avg_vol_1m * 1.4:
-                        print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри! (Об'єм у {round(last_vol_1m/avg_vol_1m, 1)} разів вищий)", flush=True)
+                        passed_vol += 1
+                        print(f"🎯 Успіх! Монета {symbol} пройшла всі фільтри!", flush=True)
                         try:
                             lows_1m = [float(k[3]) for k in valid_1m if len(k) > 3]
                             low_price = min(lows_1m[-10:]) if lows_1m else current_price * 0.99
@@ -213,7 +217,7 @@ async def scan_market(session):
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
-            print(f"🔍 Сканування завершено: перевірено {scanned_count} монет, підійшло за %: {matched_count}", flush=True)
+            print(f"🔍 Підсумок: перевірено {scanned_count}, ріст 1-35%: {matched_count}, пройшли EMA50: {passed_ema}, пройшли об'єм: {passed_vol}", flush=True)
             
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
@@ -225,7 +229,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено з пом'якшеними фільтрами сканування!*")
+        await send_telegram(session, "🟢 *Бот оновлено з розширеною деталізацією логів!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -239,4 +243,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                        
