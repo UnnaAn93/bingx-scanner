@@ -95,22 +95,23 @@ async def get_open_positions(session):
         print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
-async def get_klines(session, symbol, interval="1m", limit=60):
+async def get_klines(session, symbol, interval="1m", limit=60, debug=False):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
             text = await resp.text()
             data = json.loads(text)
             
-            # Виведемо у лог першу ж відповідь по будь-якій монеті для перевірки структури
-            if symbol in ["BTC-USDT", "BTCUSDT", "TMXUSDT"]:
-                print(f"🐛 DEBUG {symbol} klines response: {text[:200]}", flush=True)
+            if debug:
+                print(f"🐛 DEBUG [символ: {symbol}] сырой ответ свечей: {text[:300]}", flush=True)
                 
             if not isinstance(data, dict) or data.get("code") != 0:
                 print(f"⚠️ Помилка свічок для {symbol}: code={data.get('code')}, msg={data.get('msg')}, full={text[:150]}", flush=True)
                 return []
             klines = data.get("data", [])
             if not isinstance(klines, list) or len(klines) == 0:
+                if debug:
+                    print(f"⚠️️ DEBUG [символ: {symbol}] массив klines пустой или не список!", flush=True)
                 return []
             return klines
     except Exception as e:
@@ -161,6 +162,7 @@ async def scan_market(session):
             matched_count = 0
             passed_ema = 0
             passed_vol = 0
+            first_debug_done = False
 
             for ticker in tickers:
                 if not isinstance(ticker, dict):
@@ -180,8 +182,13 @@ async def scan_market(session):
                 if 1.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
+                    # Вмикаємо дебаг для першої ж монети, яка пройшла фільтр росту
+                    should_debug = not first_debug_done
+                    if should_debug:
+                        first_debug_done = True
+
                     # Отримуємо 15m свічки для EMA50
-                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60, debug=should_debug)
                     if not klines_15m or len(klines_15m) < 10:
                         continue
                     
@@ -207,7 +214,7 @@ async def scan_market(session):
                     passed_ema += 1
 
                     # Отримуємо 1m свічки для об'єму
-                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
+                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25, debug=False)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
                         
@@ -253,7 +260,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: додано детальний дебаг свічок!*")
+        await send_telegram(session, "🟢 *Бот оновлено: примусовий дебаг першої монети!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -267,4 +274,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                    
+                                       
