@@ -18,7 +18,7 @@ RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.c
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 LEVERAGE = 10
-MARGIN_USD = 5.0  
+MARGIN_USD = 0.5  
 MAX_OPEN_POSITIONS = 2  
 server_time_offset = 0
 
