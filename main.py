@@ -24,7 +24,6 @@ MAX_OPEN_POSITIONS = 2  # Максимум одночасних позицій
 server_time_offset = 0
 
 # Словник для відстеження стану позицій (для перенесення стопа в б/у після TP1)
-# Формат: {symbol: {"entry_price": float, "tp1_hit": bool, "stop_order_id": str}}
 tracked_positions = {}
 
 # --- Keep-alive сервер для Render ---
@@ -140,19 +139,26 @@ async def set_leverage(session, symbol):
         await send_telegram(session, err_msg)
         return False
 
-async def get_klines(session, symbol, interval="1m", limit=20):
+async def get_klines(session, symbol, interval="1m", limit=50):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         async with session.get(url) as resp:
             data = await resp.json()
-            # Додаємо вивід "сирої" відповіді для діагностики, якщо код не 0
             if data.get("code") != 0:
-                print(f"⚠️ [Див. відповідь API] klines для {symbol}: {data}", flush=True)
                 return []
             return data.get("data", [])
     except Exception as e:
         print(f"Помилка отримання свічок для {symbol}: {e}", flush=True)
     return []
+
+def calculate_ema(closes, period=50):
+    if len(closes) < period:
+        return sum(closes) / len(closes) if closes else 0
+    multiplier = 2 / (period + 1)
+    ema = sum(closes[:period]) / period  # Початкове просте середнє
+    for price in closes[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
 
 def calculate_exit_levels(entry_price, low_price, total_qty):
     stop_loss = low_price * 0.995
@@ -204,17 +210,15 @@ async def execute_trade(session, symbol, entry_price, low_price):
         async with session.post(f"{BINGX_BASE_URL}{path}?{p_str}&signature={sig}", headers=headers) as resp:
             res = await resp.json()
             if res.get("code") != 0:
-                print(f"⚠️ Помилка створення ордера для {symbol}: {res}", flush=True)
                 return
-    except Exception as e:
-        print(f"⚠️ Виняток створення ордера для {symbol}: {e}", flush=True)
+    except Exception:
         return
 
     levels = calculate_exit_levels(entry_price, low_price, qty)
     if not levels:
         return
 
-    msg = f"🚀 *Вхід у позицію (Малокапіталка)*\nМонета: `{symbol}`\nЦіна входу: `{entry_price}`\nСтоп-лос: `{levels['stop_loss']}`"
+    msg = f"🚀 *Вхід на відкаті (EMA50 + 1m імпульс)*\nМонета: `{symbol}`\nЦіна входу: `{entry_price}`\nСтоп-лос: `{levels['stop_loss']}`"
     await send_telegram(session, msg)
     print(msg, flush=True)
 
@@ -301,7 +305,7 @@ async def manage_positions(session):
 
 async def status_reporter(session):
     while True:
-        await asyncio.sleep(900)
+        asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
             if positions is None:
@@ -319,7 +323,7 @@ async def status_reporter(session):
         except Exception as e:
             print(f"Помилка відправки звіту: {e}", flush=True)
 
-# --- Сканер ринку ---
+# --- Сканер ринку за новою стратегією ---
 async def scan_market(session):
     try:
         open_pos = await get_open_positions(session)
@@ -335,7 +339,6 @@ async def scan_market(session):
             
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"⚠️ Помилка тікерів від API: {data}", flush=True)
                 return
             
             tickers = data.get("data", [])
@@ -355,48 +358,70 @@ async def scan_market(session):
                 except (ValueError, TypeError):
                     continue
 
-                if 3.0 <= change_24h <= 20.0:
-                    klines = await get_klines(session, symbol, interval="1m", limit=15)
-                    if not klines or not isinstance(klines, list) or len(klines) < 15:
+                # Крок 1: Відбираємо монети у хорошому зростанні за добу
+                if 3.0 <= change_24h <= 25.0:
+                    
+                    # Крок 2: Аналізуємо 15-хвилинний таймфрейм (Фільтр EMA50 та підтримка)
+                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+                    if not klines_15m or len(klines_15m) < 50:
+                        continue
+                    
+                    try:
+                        closes_15m = [float(k[4]) for k in klines_15m]
+                        ema_50 = calculate_ema(closes_15m, period=50)
+                        current_price = float(ticker.get("lastPrice", closes_15m[-1]))
+                        
+                        # Ціна має бути вище EMA50 (висхідний тренд)
+                        if current_price < ema_50:
+                            continue
+                        
+                        # Перевіряємо, чи був відкат (нещодавній мінімум за останніх 10 свічок 15m знаходився ближче до EMA або підтримки)
+                        lows_15m = [float(k[3]) for k in klines_15m[-10:]]
+                        support_level = min(lows_15m)
+                        
+                    except (ValueError, TypeError, IndexError):
+                        continue
+
+                    # Крок 3: Переходимо на 1-хвилинний таймфрейм (1m) для пошуку імпульсу об'єму від підтримки
+                    klines_1m = await get_klines(session, symbol, interval="1m", limit=20)
+                    if not klines_1m or len(klines_1m) < 15:
                         continue
                         
                     try:
-                        # Захисна перевірка: кожна свічка повинна мати принаймні 6 елементів (індекс 0..5)
-                        valid_klines = [k for k in klines if isinstance(k, (list, tuple)) and len(k) > 5]
-                        if len(valid_klines) < 15:
+                        valid_1m = [k for k in klines_1m if isinstance(k, (list, tuple)) and len(k) > 5]
+                        if len(valid_1m) < 15:
                             continue
 
-                        volumes = [float(k[5]) for k in valid_klines]
-                        avg_volume = sum(volumes[:-1]) / len(volumes[:-1]) if len(volumes) > 1 else 1
-                        last_volume = volumes[-1]
-                    except (IndexError, ValueError, TypeError) as ex:
-                        print(f"⚠️ Помилка обробки об'ємів для {symbol}: {ex} | Сирі дані: {klines[:2]}", flush=True)
+                        volumes_1m = [float(k[5]) for k in valid_1m]
+                        avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
+                        last_vol_1m = volumes_1m[-1]
+                    except (IndexError, ValueError, TypeError):
                         continue
                     
-                    if last_volume > avg_volume * 3.0:
+                    # Якщо на 1-хвилинці з'явився сплеск об'єму (відбиття від підтримки)
+                    if last_vol_1m > avg_vol_1m * 3.0:
                         try:
-                            lows = [float(k[3]) for k in valid_klines]
-                            low_price = min(lows[-10:])
-                            entry_price = float(ticker.get("lastPrice", valid_klines[-1][4]))
-                        except (IndexError, ValueError, TypeError) as ex:
-                            print(f"⚠️ Помилка обробки ціни для {symbol}: {ex}", flush=True)
+                            lows_1m = [float(k[3]) for k in valid_1m]
+                            low_price = min(lows_1m[-10:])
+                            entry_price = current_price
+                        except (IndexError, ValueError, TypeError):
                             continue
                         
-                        print(f"Знайдено сплеск об'єму для {symbol}! Входимо...", flush=True)
+                        print(f"Знайдено відбиття від підтримки на 1m для {symbol} (Тренд 15m вище EMA50)! Входимо...", flush=True)
                         await execute_trade(session, symbol, entry_price, low_price)
                         await asyncio.sleep(5)
                         
     except Exception as e:
         print(f"Помилка сканування (виняток): {e}", flush=True)
-        traceback.print_exc()  # Виведе повний стек помилки в логи Render
+        traceback.print_exc()
 
 async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
         await sync_time(session)
-        print("Бот запущено та сканує ринок...", flush=True)
+        print("Бот запущено за новою стратегією (EMA50 15m + сплеск 1m)...", flush=True)
         
-        await send_telegram(session, "🟢 *Бот успішно запущено та оновлено!*\nДодано перенесення стопа в безубиток після TP1, інтервал сканування — 1 хв.")
+        await send_telegram(session, "🟢 *Бот оновлений до стратегії 'Відкат до EMA50 + 1m об'єм'*!")
         
         asyncio.create_task(status_reporter(session))
         asyncio.create_task(manage_positions(session))
@@ -408,4 +433,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+        
