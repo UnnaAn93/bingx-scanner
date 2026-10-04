@@ -96,7 +96,7 @@ async def get_open_positions(session):
                 positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
                 return positions
     except Exception as e:
-        print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
+        print(f"⚠️️ Помилка отримання позицій: {e}", flush=True)
     return []
 
 async def set_leverage(session, symbol):
@@ -175,8 +175,6 @@ async def monitor_open_trades(session):
     if not active_trade_monitors:
         return
     
-    url = f"{BINGX_BASE_URL}{path if 'path' in locals() else '/openApi/swap/v2/quote/ticker'}"
-    # Використовуємо прямий шлях до тікерів
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url) as resp:
@@ -199,7 +197,6 @@ async def monitor_open_trades(session):
                 
                 if not sl_moved and current_price >= tp1:
                     print(f"🛡️ TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-                    # Оновлюємо прапорець в пам'яті бота, що ризику по цій позиції більше немає
                     active_trade_monitors[symbol]["sl_moved"] = True
                     await send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}!\nСтоп перенесено в безубиток на ТВХ: {entry_price}\n(Позиція звільнила ліміт для нового входу)")
                     
@@ -349,11 +346,9 @@ async def scan_market(session):
         if open_pos is None:
             open_pos = []
         
-        # РАХУЄМО ЛИШЕ ТІ ПОЗИЦІЇ, ЩО ЩЕ НЕ ПЕРЕВЕДЕНІ В БЕЗУБИТОК (тобто мають активний ризик)
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            # Якщо монети немає в моніторингу або стоп ще не перенесено — вона вважається ризиковою
             if sym not in active_trade_monitors or not active_trade_monitors[sym]["sl_moved"]:
                 risk_positions_count += 1
 
@@ -391,7 +386,6 @@ async def scan_market(session):
                     continue
                 symbol = ticker.get("symbol", "")
                 
-                # Не відкриваємо повторно ту саму монету, яка вже є в позиціях
                 if any(p.get("symbol") == symbol for p in open_pos):
                     continue
 
@@ -486,7 +480,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 Бот оновлено: тепер ліміт 2 позиції діє лише на ризикові угоди, а після TP1 відкриваються нові!")
+        await send_telegram(session, "🟢 Бот оновлено: виправлено синтаксис та активовано ліміт ризику на 2 позиції!")
         
         asyncio.create_task(self_ping(session))
         asyncio.create_task(send_periodic_report(session))
@@ -496,4 +490,10 @@ async def main():
                 await scan_market(session)
                 await monitor_open_trades(session)
             except Exception as e:
-                print(f"❌ Помилк
+                print(f"❌ Помилка у загальному циклі: {e}", flush=True)
+            print("⏳ Очікування 60 секунд до наступного циклу...\n", flush=True)
+            await asyncio.sleep(60)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    
