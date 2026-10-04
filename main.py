@@ -260,9 +260,12 @@ async def scan_market(session):
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
     try:
         async with session.get(url) as resp:
+            if resp.status != 200:
+                print(f"Помилка HTTP: {resp.status}", flush=True)
+                return
             data = await resp.json()
             if data.get("code") != 0:
-                print(f"Помилка сканування (код біржі): {data.get('code')}", flush=True)
+                print(f"Помилка API BingX: код {data.get('code')}, повідомлення: {data.get('msg')}", flush=True)
                 return
             tickers = data.get("data", [])
             
@@ -295,7 +298,7 @@ async def scan_market(session):
                         await asyncio.sleep(5)
                         
     except Exception as e:
-        print(f"Помилка сканування (виняток): {e}", flush=True)
+        print(f"Помилка сканування (виняток): {type(e).__name__} - {e}", flush=True)
 
 async def main():
     keep_alive()
@@ -310,7 +313,7 @@ async def main():
         while True:
             await sync_time(session)
             await scan_market(session)
-            await asyncio.sleep(60)  # Змінено затримку на 60 секунд (1 хвилина)
+            await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
