@@ -101,7 +101,7 @@ async def set_leverage(session, symbol):
     
     params = {
         "leverage": str(LEVERAGE),
-        "side": "LONG",  # Виправлено з BOTH на LONG для Hedge mode
+        "side": "LONG",
         "symbol": symbol,
         "timestamp": ts
     }
@@ -230,6 +230,10 @@ async def scan_market(session):
                 if not symbol.endswith("USDT") or "-" in symbol[:-5] or "USD" in symbol[:-4]:
                     continue
                 
+                # Відсікаємо топ-монети за назвою
+                if "BNB" in symbol or "BTC" in symbol or "ETH" in symbol or "SOL" in symbol or "XRP" in symbol:
+                    continue
+
                 scanned_count += 1
                 try:
                     change_24h = float(ticker.get("priceChangePercent", 0))
@@ -238,10 +242,12 @@ async def scan_market(session):
                 except (ValueError, TypeError):
                     continue
 
-                if volume_24h < 500_000 or volume_24h > 30_000_000:
+                # Фільтр об'єму: від 300k до 20 млн доларів
+                if volume_24h < 300_000 or volume_24h > 20_000_000:
                     continue
 
-                if 1.0 <= change_24h <= 35.0:
+                # Діапазон росту від 5% до 35%
+                if 5.0 <= change_24h <= 35.0:
                     matched_count += 1
                     
                     klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
@@ -289,12 +295,12 @@ async def scan_market(session):
                     
                     if last_vol_1m > avg_vol_1m * 1.4:
                         passed_vol += 1
-                        print(f"🎯 Успіх! Малокап {symbol} пройшов усі фільтри! (Ціна: {current_price}, Об'єм 24h: ${int(volume_24h)})", flush=True)
+                        print(f"🎯 Успіх! Малокап {symbol} пройшов усі фільтри! (Ціна: {current_price}, Об'єм 24h: ${int(volume_24h)}, Ріст: {change_24h}%)", flush=True)
                         
                         await execute_trade(session, symbol, current_price)
                         await asyncio.sleep(5)
                         
-            print(f"🔍 Підсумок: перевірено {scanned_count}, ріст 1-35%: {matched_count}, пройшли EMA50: {passed_ema}, пройшли об'єм: {passed_vol}", flush=True)
+            print(f"🔍 Підсумок: перевірено {scanned_count}, ріст 5-35%: {matched_count}, пройшли EMA50: {passed_ema}, пройшли об'єм: {passed_vol}", flush=True)
             
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
@@ -306,7 +312,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: виправлено side='LONG' та сортування сигнатури!*")
+        await send_telegram(session, "🟢 *Бот оновлено: об'єм $300k-$20M, ріст 5-35%!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -320,4 +326,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-              
+                        
