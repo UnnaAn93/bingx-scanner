@@ -108,12 +108,13 @@ async def set_leverage(session, symbol):
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {
         "X-BX-APIKEY": API_KEY,
         "Content-Type": "application/x-www-form-urlencoded"
     }
     try:
-        async with session.post(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers, data=query_str) as resp:
+        async with session.post(url, headers=headers) as resp:
             res = await resp.json()
             print(f"⚙️ Встановлення плеча для {symbol}: {res}", flush=True)
     except Exception as e:
@@ -126,8 +127,8 @@ async def execute_trade(session, symbol, entry_price):
 
     try:
         target_usd = MARGIN_USD * LEVERAGE
-        quantity = round(target_usd / entry_price, 4)
-        if quantity <= 0:
+        quantity = f"{target_usd / entry_price:.4f}"
+        if float(quantity) <= 0:
             print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
             return
     except Exception as e:
@@ -156,11 +157,11 @@ async def execute_trade(session, symbol, entry_price):
     }
 
     try:
-        async with session.post(url, headers=headers, data=query_str) as resp:
+        async with session.post(url, headers=headers) as resp:
             res = await resp.json()
             print(f"📦 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
-                await send_telegram(session, f"🟢 *Успішно відкрито LONG по `{symbol}`*!\nЦіна: `{entry_price}`\nОб'єм: `{quantity}`")
+                await send_telegram(session, f"🟢 *Успішно відкрито LONG по `{symbol}`*!\nЦіна: `{entry_price}`\nКількість: `{quantity}`")
             else:
                 await send_telegram(session, f"🔴 Помилка відкриття `{symbol}`: {res.get('msg')}")
     except Exception as e:
@@ -312,7 +313,7 @@ async def main():
         print("🚀 Запуск головної функції бота...", flush=True)
         await sync_time(session)
         print("✅ Бот успішно запущено, переходимо до безперервного циклу!", flush=True)
-        await send_telegram(session, "🟢 *Бот оновлено: об'єм $300k-$20M, ріст 5-35%!*")
+        await send_telegram(session, "🟢 *Бот оновлено: виправлено підпис API, об'єм $300k-$20M, ріст 5-35%!*")
         
         asyncio.create_task(self_ping(session))
         
@@ -326,4 +327,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                        
+        
