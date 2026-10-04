@@ -9,6 +9,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 import traceback
 import urllib.parse
+import math
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -263,7 +264,11 @@ async def execute_trade(session, symbol, entry_price):
         stop_loss_price = entry_price * 0.98
 
     risk = entry_price - stop_loss_price
-    tp1 = entry_price + (risk * 1.0)
+    
+    # Округлення TP1 в більший бік до 5 знаків
+    tp1_raw = entry_price + (risk * 1.0)
+    tp1 = math.ceil(tp1_raw * 100000) / 100000
+    
     tp2 = entry_price + (risk * 2.0)
     tp3 = entry_price + (risk * 3.0)
 
