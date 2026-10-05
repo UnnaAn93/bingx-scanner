@@ -396,7 +396,7 @@ async def scan_market(session):
             if sym not in active_trade_monitors or not active_trade_monitors[sym]['sl_moved']:
                 risk_positions_count += 1
 
-        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на блоку: {MAX_RISK_POSITIONS}", flush=True)
+        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на блоці: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
             print(f"🛑 Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
@@ -408,126 +408,114 @@ async def scan_market(session):
                 return
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"⚠️ Коректна відповідь тікерів від біржа: {data}", flush=True)
+                print(f"⚠️ Коректна відповідь тікерів від біржі: {data}", flush=True)
                 return
 
-            tickers = data.get("data", [])
-            print(f"📊 Отримано тікерів від біржі: {len(tickers)}", flush=True)
-            if not isinstance(tickers, list):
-                return
+        tickers = data.get("data", [])
+        print(f"📊 Отримано тікерів від біржі: {len(tickers)}", flush=True)
+        if not isinstance(tickers, list):
+            return
 
-            scanned_count = 0
-            matched_count = 0
-            passed_ema = 0
-            passed_vol = 0
-            trade_opened_in_this_cycle = False
+        scanned_count = 0
+        matched_count = 0
+        passed_ema = 0
+        trade_opened_in_this_cycle = False
 
-            for ticker in tickers:
-                if trade_opened_in_this_cycle:
-                    break
-                if not isinstance(ticker, dict):
+        for ticker in tickers:
+            if trade_opened_in_this_cycle:
+                break
+            if not isinstance(ticker, dict):
+                continue
+
+            symbol = ticker.get("symbol", "")
+
+            if any(p.get("symbol") == symbol for p in open_pos):
+                continue
+
+            if not symbol.endswith("USDT"):
+                continue
+
+            if "BNB" in symbol or "BTC" in symbol or "ETH" in symbol or "SOL" in symbol or "XRP" in symbol:
+                continue
+
+            scanned_count += 1
+
+            try:
+                change_24h = float(ticker.get("priceChangePercent", 0))
+                current_price = float(ticker.get("lastPrice", 0))
+                volume_24h = float(ticker.get("volume", 0)) * current_price
+            except (ValueError, TypeError):
+                continue
+
+            if volume_24h < 300_000 or volume_24h > 20_000_000:
+                continue
+
+            if 5.0 <= change_24h <= 35.0:
+                matched_count += 1
+
+                klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+                if not klines_15m or len(klines_15m) < 15:
                     continue
-
-                symbol = ticker.get("symbol", "")
-
-                if any(p.get("symbol") == symbol for p in open_pos):
-                    continue
-
-                if not symbol.endswith("USDT"):
-                    continue
-
-                if "BNB" in symbol or "BTC" in symbol or "ETH" in symbol or "SOL" in symbol or "XRP" in symbol:
-                    continue
-
-                scanned_count += 1
 
                 try:
-                    change_24h = float(ticker.get("priceChangePercent", 0))
-                    current_price = float(ticker.get("lastPrice", 0))
-                    volume_24h = float(ticker.get("volume", 0)) * current_price
-                except (ValueError, TypeError):
-                    continue
+                    atr_value = calculate_atr(klines_15m, period=14)
+                    last_c = klines_15m[-1]
+                    last_candle_range = float(last_c['high']) - float(last_c['low'])
 
-                if volume_24h < 300_000 or volume_24h > 20_000_000:
-                    continue
-
-                if 5.0 <= change_24h <= 35.0:
-                    matched_count += 1
-
-                    klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                    if not klines_15m or len(klines_15m) < 15:
+                    if atr_value > 0 and last_candle_range > atr_value * 1.8:
                         continue
 
-                    try:
-                        atr_value = calculate_atr(klines_15m, period=14)
-                        last_c = klines_15m[-1]
-                        last_candle_range = float(last_c['high']) - float(last_c['low'])
+                    closes_15m = []
+                    for k in klines_15m:
+                        if isinstance(k, dict) and 'close' in k:
+                            closes_15m.append(float(k['close']))
 
-                        if atr_value > 0 and last_candle_range > atr_value * 1.8:
-                            continue
+                    if len(closes_15m) < 55:
+                        continue
 
-                        closes_15m = []
-                        for k in klines_15m:
-                            if isinstance(k, dict) and 'close' in k:
-                                closes_15m.append(float(k['close']))
+                    ema_current = calculate_ema(closes_15m, period=50)
+                    ema_past = calculate_ema(closes_15m[:-5], period=50)
 
-                        if len(closes_15m) < 55:
-                            continue
+                    if current_price == 0:
+                        current_price = closes_15m[-1]
 
-                        ema_current = calculate_ema(closes_15m, period=50)
-                        ema_past = calculate_ema(closes_15m[:-5], period=50)
+                    if current_price >= ema_current + (atr_value * 2):
+                        continue
 
-                        if current_price == 0:
-                            current_price = closes_15m[-1]
-
-                        if current_price >= ema_current + (atr_value * 2):
-                            continue
-
-                        if ema_current == 0 or ema_current <= ema_past or current_price < ema_current * 0.995:
-                            continue
-
-                        recent_closes = closes_15m[-5:]
-                        choppy_count = sum(1 for c in recent_closes if c < ema_current)
-                        if choppy_count >= 2:
-                            continue
-
-                    except Exception as e:
+                    if ema_current == 0 or ema_current <= ema_past or current_price < ema_current * 0.995:
                         continue
 
                     passed_ema += 1
 
+                    # Перевірка локального тренду на 1-хвилинному таймфреймі
                     klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                     if not klines_1m or len(klines_1m) < 15:
                         continue
-
-                    try:
-                        valid_tm = []
-                        for k in klines_1m:
-                            if isinstance(k, dict) and 'volume' in k and 'close' in k:
-                                valid_tm.append(k)
-
-                        if len(valid_tm) < 15:
-                            continue
-
-                        volumes_tm = [float(k['volume']) for k in valid_tm]
-                        avg_vol_tm = sum(volumes_tm[:-1]) / len(volumes_tm[:-1]) if len(volumes_tm[:-1]) > 0 else volumes_tm[-1]
-                        last_vol_tm = volumes_tm[-1]
-                    except Exception:
+                        
+                    closes_1m = []
+                    for k in klines_1m:
+                        if isinstance(k, dict) and 'close' in k:
+                            closes_1m.append(float(k['close']))
+                            
+                    if len(closes_1m) < 15:
                         continue
-                    # Отладка объема для монет, прошедших EMA
-                        is_green = float(valid_tm[-1]['close']) > float(valid_tm[-1]['open'])
-                        print(f"🔍 [DEBUG] {symbol}: об'єм за хв = {last_vol_tm:.1f}, сер.об'єм = {avg_vol_tm:.1f}, зелена = {is_green}", flush=True)
+                        
+                    ema_1m_current = calculate_ema(closes_1m, period=50)
+                    ema_1m_past = calculate_ema(closes_1m[:-5], period=50)
 
-                    if last_vol_tm >= avg_vol_tm * 1.5 and float(valid_tm[-1]['close']) > float(valid_tm[-1]['open']):
-                        passed_vol += 1
-                        print(f"🔥 УСПІХ! Монета {symbol} пройшла усі фільтри! (Ціна: {current_price}, 24h %: {change_24h})", flush=True)
+                    if ema_1m_current <= ema_1m_past or closes_1m[-1] < ema_1m_current:
+                        continue
 
-                        await execute_trade(session, symbol, current_price)
-                        trade_opened_in_this_cycle = True
-                        await asyncio.sleep(5)
-                        break
+                    print(f"🔥 УСПІХ! Монета {symbol} пройшла фільтри EMA (15м + 1хв)! (Ціна: {current_price})", flush=True)
+                    await execute_trade(session, symbol, current_price)
+                    trade_opened_in_this_cycle = True
+                    await asyncio.sleep(5)
+                    break
 
-            print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA та нахил {passed_ema}, пройшли об'єм {passed_vol}", flush=True)
+                except Exception as e:
+                    continue
+
+        print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA та нахил {passed_ema}", flush=True)
 
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
