@@ -250,7 +250,7 @@ async def execute_trade(session, symbol, entry_price):
     klines = await get_klines(session, symbol, interval="15m", limit=40)
     if klines and len(klines) >= 5:
         lows = [float(k["low"]) for k in klines if isinstance(k, dict) and "low" in k]
-        stop_loss_price = min(lows) if lows else entry_price * 0.98
+        stop_loss_price = (min(lows) * 0.997) if lows else entry_price * 0.98
     else:
         stop_loss_price = entry_price * 0.98
 
