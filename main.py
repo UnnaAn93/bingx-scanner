@@ -540,9 +540,14 @@ async def scan_market(session):
                         continue
                         
                     ema_1m_current = calculate_ema(closes_1m, period=50)
-                    ema_1m_past = calculate_ema(closes_1m[:-5], period=50)
-                    if closes_1m[-1] < ema_1m_current or ema_1m_current <= ema_1m_past:
-                        print(f"❌ Монета {symbol} відсіяна на 1 хв ТФ (Ціна: {closes_1m[-1]} <= EMA: {ema_1m_current:.4f} або нахил вниз)", flush=True)
+                    ema_1m_past = calculate_ema(closes_1m_5, period=50)
+
+                    last_c_1m = klines_1m[-1]
+                    c1m_open = float(last_c_1m.get('open', 0) if isinstance(last_c_1m, dict) else last_c_1m[1])
+                    c1m_close = float(last_c_1m.get('close', 0) if isinstance(last_c_1m, dict) else last_c_1m[4])
+
+                    if ema_1m_current <= ema_1m_past or min(c1m_open, c1m_close) < ema_1m_current:
+                        print(f"❌ Монета {symbol} відсічена на 1м TF (EMA не росте або тіло нижче EMA)", flush=True)
                         continue
 
                     print(f"🔥 УСПІХ! Монета {symbol} пройшла фільтри EMA (15м + 1хв)! (Ціна: {current_price})", flush=True)
