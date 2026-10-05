@@ -435,7 +435,7 @@ async def scan_market(session):
                 if any(p.get("symbol") == symbol for p in open_pos):
                     continue
 
-                if not symbol.endswith("USDT") or "-" in symbol or "USD" in symbol[-3:]:
+                if not symbol.endswith("USDT"):
                     continue
 
                 if "BNB" in symbol or "BTC" in symbol or "ETH" in symbol or "SOL" in symbol or "XRP" in symbol:
