@@ -482,7 +482,7 @@ async def scan_market(session):
                     if current_price >= ema_current + (atr_value * 2):
                         continue
 
-                    if ema_current == 0 or ema_current <= ema_past or current_price < ema_current * 0.995:
+                    if ema_current == ema_past or current_price <= ema_current * 0.995:
                         continue
 
                     passed_ema += 1
