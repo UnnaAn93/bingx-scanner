@@ -513,8 +513,8 @@ async def scan_market(session):
                         last_vol_1m = volumes_1m[-1]
                     except Exception:
                         continue
-
-                    if last_vol_1m >= avg_vol_1m * 2.0:
+                    # Перевіряємо також, щоб остання 1хв свічка була зеленою (closing > opening)
+                    if last_vol_tm >= avg_vol_tm * 2.0 and float(valid_tm[-1]['close']) > float(valid_tm[-1]['open']):
                         passed_vol += 1
                         print(f"🎯 УСПІХ! Монета {symbol} пройшла усі фільтри! (Ціна: {current_price}, 24h %: {change_24h})", flush=True)
 
