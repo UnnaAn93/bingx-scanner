@@ -509,7 +509,7 @@ async def scan_market(session):
                         continue
 
                     ema_current = calculate_ema(closes_15m, period=50)
-                    ema_past = calculate_ema(closes_15m[:-5], period=50)
+                    ema_past = calculate_ema(closes_15m_5, period=50)
 
                     if current_price == 0:
                         current_price = closes_15m[-1]
@@ -517,9 +517,13 @@ async def scan_market(session):
                     if current_price >= ema_current + (atr_value * 2):
                         continue
 
-                    if ema_current == ema_past or current_price <= ema_current * 0.995:
-                        continue
+                    # Перевірка напрямку EMA та того, що тіло 15м свічки вище EMA (а під нею лише тінь)
+                    last_c_15m = klines_15m[-1]
+                    c15_open = float(last_c_15m.get('open', 0) if isinstance(last_c_15m, dict) else last_c_15m[1])
+                    c15_close = float(last_c_15m.get('close', 0) if isinstance(last_c_15m, dict) else last_c_15m[4])
 
+                    if ema_current <= ema_past or min(c15_open, c15_close) < ema_current:
+                        continue
                     passed_ema += 1
 
                     # Перевірка локального тренду на 1-хвилинному таймфреймі
