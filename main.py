@@ -526,7 +526,6 @@ async def scan_market(session):
                         continue
                     passed_ema += 1
 
-
                     # --- ФИЛЬТР ОБЪЕМА И АБСОРБЦИИ НА 15М ---
                     volumes_15m = [float(k.get('volume', 0) if isinstance(k, dict) else k[5]) for k in klines_15m[-20:]]
                     avg_vol_15m = sum(volumes_15m) / len(volumes_15m) if volumes_15m else 1
@@ -537,11 +536,6 @@ async def scan_market(session):
                     if is_volume_spike_15m and c15_close < c15_open:
                         print(f"❌ Монета {symbol}: Аномальный объем на падении на 15м TF (абсорбция/продажи), отменяем вход", flush=True)
                         continue
-
-                     # Перевірка локального тренду на 1-хвилинному таймфреймі
-                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
-                     if not klines_1m or len(klines_1m) < 15:
-                         continue
                         
                     closes_1m = []
                     for k in klines_1m:
