@@ -214,11 +214,12 @@ async def monitor_open_trades(session):
                     active_trade_monitors[symbol]['sl_moved'] = True
                     await send_telegram(session, f"🛡 TP1 досягнуто по {symbol}! Стоп перенесено в Безубиток на ТБХ.")
 
-            open_symbols = {p.get("symbol") for p in open_pos}
+            open_symbols = [p.get("symbol") for p in open_pos]
             for monitored_sym in list(active_trade_monitors.keys()):
                 if monitored_sym not in open_symbols:
                     del active_trade_monitors[monitored_sym]
-                    print(f"🏁 Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
+                    print(f"❌ Позиція {monitored_sym} закрита, видалено з моніторингу.")
+                    asyncio.create_task(send_telegram(session, f"❌ Позицію {monitored_sym} закрито (спрацював стоп або тейк)."))
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
 
