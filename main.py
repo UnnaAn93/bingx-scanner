@@ -203,7 +203,6 @@ async def monitor_open_trades(session):
                         "tp1": tp1,
                         "sl_moved": False
                     }
-                    print(f"🤖 Автоматично додано до моніторингу активну позицію {symbol} (TP1: {tp1})", flush=True)
 
                 info = active_trade_monitors[symbol]
                 tp1 = info['tp1']
@@ -211,15 +210,51 @@ async def monitor_open_trades(session):
 
                 if not sl_moved and current_price >= tp1:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-                    active_trade_monitors[symbol]['sl_moved'] = True
-                    await send_telegram(session, f"🛡 TP1 досягнуто по {symbol}! Стоп перенесено в Безубиток на ТБХ.")
+                    
+                    # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лосса
+                    orders_path = "/openApi/swap/v2/trade/openOrders"
+                    ts = str(int(time.time() * 1000) + server_time_offset)
+                    params = {"symbol": symbol, "timestamp": ts}
+                    query_str = urllib.parse.urlencode(sorted(params.items()))
+                    sig = get_sign(API_SECRET, query_str)
+                    orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
+                    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+                    
+                    async with session.get(orders_url, headers=headers) as o_resp:
+                        o_data = await o_resp.json()
+                        if o_data.get("code") == 0:
+                            orders_list = o_data.get("data", {}).get("orders", [])
+                            for ord_item in orders_list:
+                                # Шукаємо стоп-ордер (наприклад, тип STOP або STOP_MARKET)
+                                if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
+                                    old_order_id = ord_item.get("orderId")
+                                    # Скасовуємо старий стоп
+                                    del_path = "/openApi/swap/v2/trade/order"
+                                    del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": str(int(time.time() * 1000) + server_time_offset)}
+                                    del_query = urllib.parse.urlencode(sorted(del_params.items()))
+                                    del_sig = get_sign(API_SECRET, del_query)
+                                    del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
+                                    async with session.delete(del_url, headers=headers) as d_resp:
+                                        d_res = await d_resp.json()
+                                        print(f"🗑️ Скасовано старий стоп для {symbol}: {d_res}", flush=True)
+
+                    # 2. Виставляємо новий стоп-лосс на ціну входу (безубиток)
+                    quantity_str = str(p.get("positionAmt"))
+                    success = await place_stop_order(session, symbol, quantity_str, entry_price)
+                    
+                    if success:
+                        active_trade_monitors[symbol]['sl_moved'] = True
+                        asyncio.create_task(send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}! Стоп перенесено в Безубиток на ТБХ."))
+                    else:
+                        print(f"⚠️ Помилка встановлення стопу в безубиток для {symbol}", flush=True)
 
             open_symbols = [p.get("symbol") for p in open_pos]
             for monitored_sym in list(active_trade_monitors.keys()):
                 if monitored_sym not in open_symbols:
                     del active_trade_monitors[monitored_sym]
-                    print(f"❌ Позиція {monitored_sym} закрита, видалено з моніторингу.")
-                    asyncio.create_task(send_telegram(session, f"❌ Позицію {monitored_sym} закрито (спрацював стоп або тейк)."))
+                    print(f"❌ Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
+                    asyncio.create_task(send_telegram(session, f"❌ Позиція {monitored_sym} закрита (спрацював стоп або тейк)."))
+
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
 
