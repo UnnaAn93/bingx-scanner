@@ -147,11 +147,11 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
         "side": "SELL",
         "symbol": symbol,
         "timestamp": ts,
-        "type": "STOP_MARKET",
+        "type": "STOP_MARK_MARKET", # або залишається вартість STOP_MARKET як у вас
         "stopPrice": f"{stop_price:.5f}",
-        "workingType": "MARK_PRICE",
-        "reduceOnly": "true"
+        "workingType": "MARK_PRICE"
     }
+
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
