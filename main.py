@@ -480,24 +480,24 @@ async def scan_market(session):
                         ema_current = calculate_ema(closes_15m, period=50)
                         ema_past = calculate_ema(closes_15m[:-5], period=50)
 
-                       if current_price == 0:
-                           current_price = closes_15m[-1]
+                        if current_price == 0:
+                            current_price = closes_15m[-1]
 
-                       if current_price >= ema_current + (atr_value * 2):
+                        if current_price >= ema_current + (atr_value * 2):
+                            continue
+
+                        if ema_current == 0 or ema_current >= ema_past or current_price < ema_current * 0.995:
+                            continue
+
+                       # Фільтр боковику за тілами свічок (ігноруємо тіні/шпильки):
+                       # Якщо за останні 5 свічок тіла закривалися нижче EMA 2 або більше разів — це пила/флет
+                       recent_closes = closes_15m[-5:]
+                       choppy_count = sum(1 for c in recent_closes if c < ema_current)
+                       if choppy_count >= 2:
                            continue
 
-                       if ema_current == 0 or ema_current >= ema_past or current_price < ema_current * 0.995:
-                           continue
-
-                      # Фільтр боковику за тілами свічок (ігноруємо тіні/шпильки):
-                      # Якщо за останні 5 свічок тіла закривалися нижче EMA 2 або більше разів — це пила/флет
-                      recent_closes = closes_15m[-5:]
-                      choppy_count = sum(1 for c in recent_closes if c < ema_current)
-                      if choppy_count >= 2:
-                          continue
-
-                  except Exception as e:
-                      continue
+                   except Exception as e:
+                       continue
 
                     passed_ema += 1
 
