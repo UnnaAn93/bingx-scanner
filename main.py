@@ -407,9 +407,11 @@ async def scan_market(session):
                 return
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
+                print(f"⚠️ Некоректна відповідь тікерів від біржі: {data}", flush=True)
                 return
 
             tickers = data.get("data", [])
+            print(f"📥 Отримано тікерів від біржі: len = {len(tickers)}", flush=True)
             if not isinstance(tickers, list):
                 return
 
@@ -426,6 +428,10 @@ async def scan_market(session):
                     continue
 
                 symbol = ticker.get("symbol", "")
+                
+                # Рядок для перевірки, що взагалі прилітає (подивіться в логах Render)
+                # print(f"Перевіряємо символ: {symbol}", flush=True)
+
                 if any(p.get("symbol") == symbol for p in open_pos):
                     continue
 
@@ -436,6 +442,7 @@ async def scan_market(session):
                     continue
 
                 scanned_count += 1
+
                 try:
                     change_24h = float(ticker.get("priceChangePercent", 0))
                     current_price = float(ticker.get("lastPrice", 0))
