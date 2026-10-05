@@ -514,6 +514,9 @@ async def scan_market(session):
                         last_vol_tm = volumes_tm[-1]
                     except Exception:
                         continue
+                    # Отладка объема для монет, прошедших EMA
+                        is_green = float(valid_tm[-1]['close']) > float(valid_tm[-1]['open'])
+                        print(f"🔍 [DEBUG] {symbol}: об'єм за хв = {last_vol_tm:.1f}, сер.об'єм = {avg_vol_tm:.1f}, зелена = {is_green}", flush=True)
 
                     if last_vol_tm >= avg_vol_tm * 1.5 and float(valid_tm[-1]['close']) > float(valid_tm[-1]['open']):
                         passed_vol += 1
