@@ -539,7 +539,7 @@ async def scan_market(session):
                         continue
 
                      # Перевірка локального тренду на 1-хвилинному таймфреймі
-                     klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
+                    klines_1m = await get_klines(session, symbol, interval="1m", limit=25)
                      if not klines_1m or len(klines_1m) < 15:
                          continue
                         
