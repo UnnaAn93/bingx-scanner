@@ -384,7 +384,7 @@ def calculate_atr(klines, period=14):
     return sum(recent_tr) / len(recent_tr)
 
 async def scan_market(session):
-    print("🔍 Початок нового циклу сканування ринку...", flush=True)
+    print(f"🔍 Початок нового циклу сканування ринку...", flush=True)
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
@@ -396,23 +396,23 @@ async def scan_market(session):
             if sym not in active_trade_monitors or not active_trade_monitors[sym]['sl_moved']:
                 risk_positions_count += 1
 
-        print(f"📊 Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржі: {MAX_RISK_POSITIONS}", flush=True)
+        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на блоку: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
-            print("⛔ Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
+            print(f"🛑 Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"⚠️ Помилка запиту тікерів: статус {resp.status}", flush=True)
+                print(f"❌ Помилка запиту тікерів: статус {resp.status}", flush=True)
                 return
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"⚠️ Некоректна відповідь тікерів від біржі: {data}", flush=True)
+                print(f"⚠️ Коректна відповідь тікерів від біржа: {data}", flush=True)
                 return
 
             tickers = data.get("data", [])
-            print(f"📥 Отримано тікерів від біржі: len = {len(tickers)}", flush=True)
+            print(f"📊 Отримано тікерів від біржі: {len(tickers)}", flush=True)
             if not isinstance(tickers, list):
                 return
 
@@ -429,9 +429,6 @@ async def scan_market(session):
                     continue
 
                 symbol = ticker.get("symbol", "")
-                
-                # Рядок для перевірки, що взагалі прилітає (подивіться в логах Render)
-                # print(f"Перевіряємо символ: {symbol}", flush=True)
 
                 if any(p.get("symbol") == symbol for p in open_pos):
                     continue
@@ -464,7 +461,7 @@ async def scan_market(session):
                     try:
                         atr_value = calculate_atr(klines_15m, period=14)
                         last_c = klines_15m[-1]
-                        last_candle_range = float(last_c["high"]) - float(last_c["low"])
+                        last_candle_range = float(last_c['high']) - float(last_c['low'])
 
                         if atr_value > 0 and last_candle_range > atr_value * 1.8:
                             continue
@@ -489,15 +486,13 @@ async def scan_market(session):
                         if ema_current == 0 or ema_current >= ema_past or current_price < ema_current * 0.995:
                             continue
 
-                       # Фільтр боковику за тілами свічок (ігноруємо тіні/шпильки):
-                       # Якщо за останні 5 свічок тіла закривалися нижче EMA 2 або більше разів — це пила/флет
-                       recent_closes = closes_15m[-5:]
-                       choppy_count = sum(1 for c in recent_closes if c < ema_current)
-                       if choppy_count >= 2:
-                           continue
+                        recent_closes = closes_15m[-5:]
+                        choppy_count = sum(1 for c in recent_closes if c < ema_current)
+                        if choppy_count >= 2:
+                            continue
 
-                   except Exception as e:
-                       continue
+                    except Exception as e:
+                        continue
 
                     passed_ema += 1
 
@@ -506,34 +501,35 @@ async def scan_market(session):
                         continue
 
                     try:
-                        valid_1m = []
+                        valid_tm = []
                         for k in klines_1m:
-                            if isinstance(k, dict) and "volume" in k and "close" in k:
-                                valid_1m.append(k)
+                            if isinstance(k, dict) and 'volume' in k and 'close' in k:
+                                valid_tm.append(k)
 
-                        if len(valid_1m) < 15:
+                        if len(valid_tm) < 15:
                             continue
 
-                        volumes_1m = [float(k["volume"]) for k in valid_1m]
-                        avg_vol_1m = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else volumes_1m[-1]
-                        last_vol_1m = volumes_1m[-1]
+                        volumes_tm = [float(k['volume']) for k in valid_tm]
+                        avg_vol_tm = sum(volumes_tm[:-1]) / len(volumes_tm[:-1]) if len(volumes_tm[:-1]) > 0 else volumes_tm[-1]
+                        last_vol_tm = volumes_tm[-1]
                     except Exception:
                         continue
-                    # Перевіряємо також, щоб остання 1хв свічка була зеленою (closing > opening)
+
                     if last_vol_tm >= avg_vol_tm * 2.0 and float(valid_tm[-1]['close']) > float(valid_tm[-1]['open']):
                         passed_vol += 1
-                        print(f"🎯 УСПІХ! Монета {symbol} пройшла усі фільтри! (Ціна: {current_price}, 24h %: {change_24h})", flush=True)
+                        print(f"🔥 УСПІХ! Монета {symbol} пройшла усі фільтри! (Ціна: {current_price}, 24h %: {change_24h})", flush=True)
 
                         await execute_trade(session, symbol, current_price)
                         trade_opened_in_this_cycle = True
                         await asyncio.sleep(5)
                         break
 
-            print(f"📊 Підсумок: перевірено ({scanned_count}), ріст 5-35% ({matched_count}), пройшли EMA50 та нахил ({passed_ema}), пройшли об'єм ({passed_vol})", flush=True)
+            print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA та нахил {passed_ema}, пройшли об'єм {passed_vol}", flush=True)
+
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
-
+        
 async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
