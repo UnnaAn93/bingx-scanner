@@ -502,8 +502,7 @@ async def scan_market(session):
                         
                     ema_1m_current = calculate_ema(closes_1m, period=50)
                     ema_1m_past = calculate_ema(closes_1m[:-5], period=50)
-
-                    if ema_1m_current <= ema_1m_past or closes_1m[-1] < ema_1m_current:
+                    if closes_1m[-1] < ema_1m_current or ema_1m_current <= ema_1m_past:
                         continue
 
                     print(f"🔥 УСПІХ! Монета {symbol} пройшла фільтри EMA (15м + 1хв)! (Ціна: {current_price})", flush=True)
