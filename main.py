@@ -327,7 +327,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         else:
             stop_loss_price = entry_price * 1.02
 
-        if stop_loss_price <= entry_price:
+        if stop_loss_price >= entry_price:
             stop_loss_price = entry_price * 1.02
 
         risk = stop_loss_price - entry_price
