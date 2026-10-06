@@ -267,8 +267,12 @@ async def monitor_open_trades(session):
                                         print(f"🗑️ Скасовано старий стоп для {symbol}: {d_res}", flush=True)
 
                     # 2. Виставляємо новий стоп-лосс на ціну входу (безубиток)
-                    quantity_str = str(p.get("positionAmt"))
-                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price)
+                    quantity_str = str(p.get('positionAmt', '0'))
+                    # Беремо збережений у моніторингу бік позиції (LONG або SHORT)
+                    pos_side = info.get('side', 'LONG')
+
+                    # Передаємо pos_side у функцію створення стоп-лосу
+                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
                     
                     if success:
                         active_trade_monitors[symbol]['sl_moved'] = True
