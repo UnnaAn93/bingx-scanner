@@ -420,51 +420,30 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
             print(f"📡 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
+            
             if res.get("code") == 0:
                 await asyncio.sleep(1.5)
+                
+                # 1. Встановлюємо початковий стоп-лос (передаємо side!)
                 sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
+                
+                # 2. Встановлюємо лімітні тейк-профіти
+                await place_tp_order(session, symbol, tp1, q1, side, tp_side)
+                await place_tp_order(session, symbol, tp2, q2, side, tp_side)
+                await place_tp_order(session, symbol, tp3, q3, side, tp_side)
 
-                # Встановлення лімітних тейк-профітів
-                async def place_tp_order(s, sym, price_val, qty_val):
-                    p_path = "/openApi/swap/v2/trade/order"
-                    p_ts = str(int(time.time() * 1000) + server_time_offset)
-                    p_params = {
-                        "positionSide": side,
-                        "quantity": str(qty_val),
-                        "side": tp_side,
-                        "symbol": sym,
-                        "timestamp": p_ts,
-                        "type": "LIMIT",
-                        "price": f"{price_val:.5f}"
-                    }
-                    p_query = urllib.parse.urlencode(sorted(p_params.items()))
-                    p_sig = get_sign(API_SECRET, p_query)
-                    p_url = f"{BINGX_BASE_URL}{p_path}?{p_query}&signature={p_sig}"
-                    p_headers = {
-                        "X-BX-APIKEY": API_KEY,
-                        "Content-Type": "application/x-www-form-urlencoded"
-                    }
-                    try:
-                        async with session.post(p_url, headers=p_headers) as p_resp:
-                            p_res = await p_resp.json()
-                            return p_res.get("code") == 0
-                    except Exception:
-                        return False
-
-                await place_tp_order(session, symbol, tp1, q1)
-                await place_tp_order(session, symbol, tp2, q2)
-                await place_tp_order(session, symbol, tp3, q3)
-
+                # 3. Зберігаємо моніторинг активної угоди
                 active_trade_monitors[symbol] = {
                     "entry_price": entry_price,
                     "tp1": tp1,
                     "sl_moved": False
                 }
 
-                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️️ Помилка встановлення на біржі"
+                # 4. Формуємо сповіщення для Telegram
+                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
                 msg = (
                     f"🟢 Успішно відкрито {side} по {symbol}!\n"
-                    f"💲 Ціна входу (TBX): {entry_price:.5f}\n"
+                    f"💰 Ціна входу (ТВХ): {entry_price:.5f}\n"
                     f"📦 Об'єм: {quantity_str}\n"
                     f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
                     f"🎯 TP1 (40% | 1:1): {tp1:.5f}\n"
@@ -474,9 +453,42 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
                 await send_telegram(session, msg)
             else:
                 err_msg = res.get("msg", "Unknown error")
-                await send_telegram(session, f"❌ Помилка відкриття {symbol}: {err_msg}")
+                msg = f"❌ Помилка відкриття {symbol}: {err_msg}"
+                await send_telegram(session, msg)
+
     except Exception as e:
-        print(f"⚠️ Виняток при проводці ордера для {symbol}: {e}", flush=True)
+        print(f"❌ Виняток при проводці ордера для {symbol}: {e}", flush=True)
+
+
+# --- Глобальна функція створення тейк-профіту (розміщується на рівні файлу поза execute_trade) ---
+
+async def place_tp_order(session, sym, price_val, qty_val, side, tp_side):
+    """Створення лімітного тейк-профіту на Бінгхекс"""
+    try:
+        p_path = "/openApi/swap/v2/trade/order"
+        p_ts = str(int(time.time() * 1000) + server_time_offset)
+        p_params = {
+            "positionSide": side,
+            "quantity": str(qty_val),
+            "side": tp_side,
+            "symbol": sym,
+            "timestamp": p_ts,
+            "type": "LIMIT",
+            "price": f"{price_val:.5f}"
+        }
+        p_query = urllib.parse.urlencode(sorted(p_params.items()))
+        p_sig = get_sign(API_SECRET, p_query)
+        p_url = f"{BINGX_BASE_URL}{p_path}?{p_query}&signature={p_sig}"
+        p_headers = {
+            "X-BX-APIKEY": API_KEY,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        async with session.post(p_url, headers=p_headers) as p_resp:
+            p_res = await p_resp.json()
+            return p_res.get("code") == 0
+    except Exception as e:
+        print(f"❌ Помилка створення TP для {sym}: {e}", flush=True)
+        return False
 
 def calculate_ema(closes, period=50):
     if not closes:
