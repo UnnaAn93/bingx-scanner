@@ -443,7 +443,7 @@ def calculate_atr(klines, period=14):
     return sum(recent_tr) / len(recent_tr)
 
 async def scan_market(session):
-    print(f"🔍 Початок нового циклу сканування ринку...", flush=True)
+    print("🔄 Початок нового циклу сканування ринку...", flush=True)
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
@@ -452,12 +452,12 @@ async def scan_market(session):
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym not in active_trade_monitors or not active_trade_monitors[sym]['sl_moved']:
+            if sym not in active_trade_monitors or not active_trade_monitors[sym]["sl_moved"]:
                 risk_positions_count += 1
 
-        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на блоці: {MAX_RISK_POSITIONS}", flush=True)
+        print(f"📌 Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржі: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
-            print(f"🛑 Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
+            print("🛑 Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
@@ -476,9 +476,7 @@ async def scan_market(session):
             return
 
         scanned_count = 0
-        matched_count = 0
         passed_ema_count = 0
-        passed_slope_count = 0
         trade_opened_in_this_cycle = False
 
         for ticker in tickers:
@@ -488,7 +486,6 @@ async def scan_market(session):
                 continue
 
             symbol = ticker.get("symbol", "")
-
             if any(p.get("symbol") == symbol for p in open_pos):
                 continue
 
@@ -501,107 +498,75 @@ async def scan_market(session):
             scanned_count += 1
 
             try:
-                change_24h = float(ticker.get("priceChangePercent", 0))
                 current_price = float(ticker.get("lastPrice", 0))
                 volume_24h = float(ticker.get("volume", 0)) * current_price
             except (ValueError, TypeError):
                 continue
 
-            if volume_24h < 300_000 or volume_24h > 20_000_000:
+            if volume_24h < 300_000 or volume_24h > 30_000_000:
                 continue
 
-            if 5.0 <= change_24h <= 35.0:
-                matched_count += 1
+            # =========================
+            # ПЕРЕВІРКА НА ЛОНГ (15m + 1m) - Фільтр 5-35% прибрано
+            # =========================
+            klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+            if not klines_15m or len(klines_15m) < 55:
+                continue
 
-                klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
-                if not klines_15m or len(klines_15m) < 15:
-                    continue
-
-                try:
-                    atr_value = calculate_atr(klines_15m, period=14)
-                    last_c = klines_15m[-1]
-                    last_candle_range = float(last_c['high']) - float(last_c['low'])
-
-                    if atr_value > 0 and last_candle_range > atr_value * 1.8:
-                        continue
-
-                    closes_15m = []
-                    for k in klines_15m:
-                        if isinstance(k, dict) and 'close' in k:
-                            closes_15m.append(float(k['close']))
-
-                    if len(closes_15m) < 55:
-                        continue
-
-                    ema_current = calculate_ema(closes_15m, period=50)
-                    ema_past = calculate_ema(closes_15m_5, period=50)
-
-                    if current_price == 0:
-                        current_price = closes_15m[-1]
-
-                    if current_price >= ema_current + (atr_value * 2):
-                        continue
-
-                    # Перевірка напрямку EMA та того, що тіло 15м свічки вище EMA (а під нею лише тінь)
-                    last_c_15m = klines_15m[-1]
-                    c15_open = float(last_c_15m.get('open', 0) if isinstance(last_c_15m, dict) else last_c_15m[1])
-                    c15_close = float(last_c_15m.get('close', 0) if isinstance(last_c_15m, dict) else last_c_15m[4])
-                     # 1. Перевірка положення тіла свічки вище EMA
-                    if min(c15_open, c15_close) <= ema_current:
-                        continue
-                    passed_ema_count += 1
-
-                    # 2. Перевірка нахилу EMA (чи зростає)
-                    if ema_current <= ema_past:
-                        print(f"❌ Монета {symbol}: EMA не росте на 15м TF", flush=True)
-                        continue
-                    passed_slope_count += 1
+            try:
+                clones_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
+                if len(clones_15m) >= 50:
+                    ema_current_15 = calculate_ema(clones_15m, period=50)
+                    ema_past_15 = calculate_ema(clones_15m[:-1], period=50)
                     
-                    # --- ФИЛЬТР ОБЪЕМА И АБСОРБЦИИ НА 15М ---
-                    volumes_15m = [float(k.get('volume', 0) if isinstance(k, dict) else k[5]) for k in klines_15m[-20:]]
-                    avg_vol_15m = sum(volumes_15m) / len(volumes_15m) if volumes_15m else 1
-                    curr_vol_15m = volumes_15m[-1] if volumes_15m else 0
+                    # Умова лонга: тренд вгору
+                    if ema_current_15 > ema_past_15 and current_price > ema_current_15:
+                        klines_1m = await get_klines(session, symbol, interval="1m", limit=20)
+                        if klines_1m and len(klines_1m) >= 15:
+                            closes_1m = [float(k['close']) for k in klines_1m if isinstance(k, dict) and 'close' in k]
+                            ema_1m = calculate_ema(closes_1m, period=50)
+                            if current_price > ema_1m:
+                                passed_ema_count += 1
+                                print(f"🔥 УСПІХ! Лонг по {symbol} (Ціна: {current_price})", flush=True)
+                                await execute_trade(session, symbol, current_price, side="LONG")
+                                trade_opened_in_this_cycle = True
+                                await asyncio.sleep(5)
+                                break
+            except Exception:
+                pass
 
-                    is_volume_spike_15m = curr_vol_15m > (avg_vol_15m * 2.5)
-                    is_flat_15m = abs(ema_current - ema_past) < (ema_current * 0.0005)
+            if trade_opened_in_this_cycle:
+                break
 
-                    if is_flat_15m and is_volume_spike_15m and c15_close < c15_open:
-                        print(f"❌ Монета {symbol}: Флет (рівна EMA) та аномальний об'єм на падінні на 15м TF, скасовуємо вхід", flush=True)
-                        continue
-                        
-                    closes_1m = []
-                    for k in klines_1m:
-                        if isinstance(k, dict) and 'close' in k:
-                            closes_1m.append(float(k['close']))
-                            
-                    if len(closes_1m) < 15:
-                        continue
-                        
-                    ema_1m_current = calculate_ema(closes_1m, period=50)
-                    ema_1m_past = calculate_ema(closes_1m_5, period=50)
+            # =========================
+            # ПЕРЕВІРКА НА ШОРТ (1h + 15m)
+            # =========================
+            klines_1h = await get_klines(session, symbol, interval="1h", limit=60)
+            if klines_1h and len(klines_1h) >= 50:
+                try:
+                    closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
+                    if len(closes_1h) >= 50:
+                        ema_1h_curr = calculate_ema(closes_1h, period=50)
+                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
 
-                    last_c_1m = klines_1m[-1]
-                    c1m_open = float(last_c_1m.get('open', 0) if isinstance(last_c_1m, dict) else last_c_1m[1])
-                    c1m_close = float(last_c_1m.get('close', 0) if isinstance(last_c_1m, dict) else last_c_1m[4])
+                        # Умова шорта: годинна EMA падає і ціна нижче неї
+                        if ema_1h_curr < ema_1h_past and current_price < ema_1h_curr:
+                            # Підтвердження на 15m (ціна нижче 15m EMA)
+                            if current_price < ema_current_15:
+                                passed_ema_count += 1
+                                print(f"🔥 УСПІХ! Шорт по {symbol} на 1h (Ціна: {current_price})", flush=True)
+                                await execute_trade(session, symbol, current_price, side="SHORT")
+                                trade_opened_in_this_cycle = True
+                                await asyncio.sleep(5)
+                                break
+                except Exception:
+                    pass
 
-                    if ema_1m_current <= ema_1m_past or min(c1m_open, c1m_close) < ema_1m_current:
-                        print(f"❌ Монета {symbol} відсічена на 1м TF (EMA не росте або тіло нижче EMA)", flush=True)
-                        continue
-
-                    print(f"🔥 УСПІХ! Монета {symbol} пройшла фільтри EMA (15м + 1хв)! (Ціна: {current_price})", flush=True)
-                    await execute_trade(session, symbol, current_price)
-                    trade_opened_in_this_cycle = True
-                    await asyncio.sleep(5)
-                    break
-
-                except Exception as e:
-                    continue
-
-        print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA: {passed_ema_count}, пройшли нахил: {passed_slope_count}")
-        
+        print(f"📊 Підсумок: перевірено {scanned_count}, пройшли перевірку EMA: {passed_ema_count}", flush=True)
     except Exception as e:
-        print(f"❌ Помилка у scan_market: {e}", flush=True)
+        print(f"⚠️ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
+        
         
 async def main():
     keep_alive()
