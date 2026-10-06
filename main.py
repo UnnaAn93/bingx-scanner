@@ -532,9 +532,10 @@ async def scan_market(session):
                     curr_vol_15m = volumes_15m[-1] if volumes_15m else 0
 
                     is_volume_spike_15m = curr_vol_15m > (avg_vol_15m * 2.5)
+                    is_flat_15m = abs(ema_current - ema_past) < (ema_current * 0.0005)
 
-                    if is_volume_spike_15m and c15_close < c15_open:
-                        print(f"❌ Монета {symbol}: Аномальный объем на падении на 15м TF (абсорбция/продажи), отменяем вход", flush=True)
+                    if is_flat_15m and is_volume_spike_15m and c15_close < c15_open:
+                        print(f"❌ Монета {symbol}: Флет (рівна EMA) та аномальний об'єм на падінні на 15м TF, скасовуємо вхід", flush=True)
                         continue
                         
                     closes_1m = []
