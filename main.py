@@ -453,7 +453,8 @@ async def scan_market(session):
 
         scanned_count = 0
         matched_count = 0
-        passed_ema = 0
+        passed_ema_count = 0
+        passed_slope_count = 0
         trade_opened_in_this_cycle = False
 
         for ticker in tickers:
