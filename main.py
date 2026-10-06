@@ -521,11 +521,17 @@ async def scan_market(session):
                     last_c_15m = klines_15m[-1]
                     c15_open = float(last_c_15m.get('open', 0) if isinstance(last_c_15m, dict) else last_c_15m[1])
                     c15_close = float(last_c_15m.get('close', 0) if isinstance(last_c_15m, dict) else last_c_15m[4])
-
-                    if ema_current <= ema_past or min(c15_open, c15_close) < ema_current:
+                     # 1. Перевірка положення тіла свічки вище EMA
+                    if min(c15_open, c15_close) <= ema_current:
                         continue
-                    passed_ema += 1
+                    passed_ema_count += 1
 
+                    # 2. Перевірка нахилу EMA (чи зростає)
+                    if ema_current <= ema_past:
+                        print(f"❌ Монета {symbol}: EMA не росте на 15м TF", flush=True)
+                        continue
+                    passed_slope_count += 1
+                    
                     # --- ФИЛЬТР ОБЪЕМА И АБСОРБЦИИ НА 15М ---
                     volumes_15m = [float(k.get('volume', 0) if isinstance(k, dict) else k[5]) for k in klines_15m[-20:]]
                     avg_vol_15m = sum(volumes_15m) / len(volumes_15m) if volumes_15m else 1
@@ -566,8 +572,8 @@ async def scan_market(session):
                 except Exception as e:
                     continue
 
-        print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA та нахил {passed_ema}", flush=True)
-
+        print(f"📊 Підсумок: перевірено {scanned_count}, ріст 5-35% {matched_count}, пройшли EMA: {passed_ema_count}, пройшли нахил: {passed_slope_count}")
+        
     except Exception as e:
         print(f"❌ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
