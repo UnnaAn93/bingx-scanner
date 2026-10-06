@@ -422,7 +422,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
             print(f"📡 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
                 await asyncio.sleep(1.5)
-                sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price)
+                sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
 
                 # Встановлення лімітних тейк-профітів
                 async def place_tp_order(s, sym, price_val, qty_val):
