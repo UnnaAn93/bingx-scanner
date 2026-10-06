@@ -225,13 +225,13 @@ async def monitor_open_trades(session):
                     p_amt = float(p.get("positionAmt", 0))
                     pos_side = p.get("positionSide", "LONG" if p_amt > 0 else "SHORT")
                     tp1 = entry_price + risk if pos_side == "LONG" else entry_price - risk
-                    
+
                     active_trade_monitors[symbol] = {
                         'entry_price': entry_price,
                         'tp1': tp1,
                         'side': pos_side,
                         'sl_moved': False
-                    }
+                }
 
                 info = active_trade_monitors[symbol]
                 tp1 = info['tp1']
