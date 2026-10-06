@@ -324,10 +324,10 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     print(f"🚀 Спроба реального відкриття позиції ({side}) по {symbol} (Ціна: {entry_price})", flush=True)
     await set_leverage(session, symbol)
 
-    klines = await get_klines(session, symbol, interval="15m", limit=5)
+    klines = await get_klines(session, symbol, interval="15m", limit=40)
     
     if side == "LONG":
-        if klines and len(klines) >= 5:
+        if klines and len(klines) >= 40:
             lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
             stop_loss_price = min(lows) * 0.997 if lows else entry_price * 0.98
         else:
@@ -344,15 +344,14 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         order_side = "BUY"
         tp_side = "SELL"
     else: # SHORT
-        if klines and len(klines) >= 5:
+        if klines and len(klines) >= 40:
             highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
-            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.02
+            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.01
         else:
-            stop_loss_price = entry_price * 1.02
+            stop_loss_price = entry_price * 1.01
 
-        if stop_loss_price >= entry_price:
-            stop_loss_price = entry_price * 1.02
-
+        if stop_loss_price <= entry_price:
+            stop_loss_price = entry_price * 1.01
         risk = stop_loss_price - entry_price
         tp1_raw = entry_price - (risk * 1.0)
         tp1 = math.floor(tp1_raw * 100000) / 100000
