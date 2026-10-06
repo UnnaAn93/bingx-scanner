@@ -216,11 +216,16 @@ async def monitor_open_trades(session):
 
                 if symbol not in active_trade_monitors:
                     risk = entry_price * 0.02
-                    tp1 = entry_price + risk
+                    tp1 = entry_price * risk
+                    # Визначаємо side з самої позиції p (на біржах позиція зазвичай має бік або визначається через позитивну/негативну кількість)
+                    p_amt = float(p.get("positionAmt", 0))
+                    pos_side = p.get("positionSide", "LONG" if p_amt > 0 else "SHORT")
+            
                     active_trade_monitors[symbol] = {
-                        "entry_price": entry_price,
-                        "tp1": tp1,
-                        "sl_moved": False
+                        'entry_price': entry_price,
+                        'tp1': tp1,
+                        'side': pos_side,
+                        'sl_moved': False
                     }
 
                 info = active_trade_monitors[symbol]
