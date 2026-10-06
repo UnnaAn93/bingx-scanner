@@ -494,8 +494,11 @@ async def scan_market(session):
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym not in active_trade_monitors or not active_trade_monitors[sym]["sl_moved"]:
-                risk_positions_count += 1
+            # Якщо позиція є в моніторингу і стоп вже перенесено (sl_moved == True), вона НЕ ризикова
+            if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False):
+                continue
+            # Всі інші вважаються ризиковими
+            risk_positions_count += 1
 
         print(f"📌 Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржі: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
