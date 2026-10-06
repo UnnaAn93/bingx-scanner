@@ -227,7 +227,7 @@ async def monitor_open_trades(session):
                 tp1 = info['tp1']
                 sl_moved = info['sl_moved']
 
-                if not sl_moved and current_price >= tp1:
+                if not sl_moved and current_price <= tp1:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
                     
                     # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лосса
