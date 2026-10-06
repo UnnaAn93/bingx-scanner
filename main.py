@@ -222,44 +222,51 @@ async def monitor_open_trades(session):
 
                 if symbol not in active_trade_monitors:
                     risk = entry_price * 0.02
-                    tp1 = entry_price + risk if p.get("positionSide") == "LONG" else entry_price - risk
                     p_amt = float(p.get("positionAmt", 0))
                     pos_side = p.get("positionSide", "LONG" if p_amt > 0 else "SHORT")
-            
+                    tp1 = entry_price + risk if pos_side == "LONG" else entry_price - risk
+                    
                     active_trade_monitors[symbol] = {
                         'entry_price': entry_price,
                         'tp1': tp1,
                         'side': pos_side,
-                        'sl_moved': True  # Ставимо True на першу секунду, щоб бот не кидався переносити стоп одразу
-                        }
+                        'sl_moved': False
+                    }
+
                 info = active_trade_monitors[symbol]
                 tp1 = info['tp1']
                 sl_moved = info['sl_moved']
                 trade_side = info.get('side', 'LONG')
 
-                # Для лонга ціна вища/рівна TP1, для шорта — нижча/рівна TP1
-                tp_reached = (current_price >= tp1) if trade_side == 'LONG' else (current_price <= tp1)
+                # Перевіряємо досягнення TP1 лише тоді, коли ціна реально відійшла від входу
+                if trade_side == 'LONG':
+                    tp_reached = (current_price > entry_price) and (current_price >= tp1)
+                else:
+                    tp_reached = (current_price < entry_price) and (current_price <= tp1)
 
                 if not sl_moved and tp_reached:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-                    
-                    # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лосса
+
+                    # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лоса
                     orders_path = "/openApi/swap/v2/trade/openOrders"
                     ts = str(int(time.time() * 1000) + server_time_offset)
                     params = {"symbol": symbol, "timestamp": ts}
                     query_str = urllib.parse.urlencode(sorted(params.items()))
                     sig = get_sign(API_SECRET, query_str)
                     orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
-                    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
-                    
+                    headers = {
+                        "X-BX-APIKEY": API_KEY,
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    }
+
                     async with session.get(orders_url, headers=headers) as o_resp:
                         o_data = await o_resp.json()
                         if o_data.get("code") == 0:
                             orders_list = o_data.get("data", {}).get("orders", [])
                             for ord_item in orders_list:
-                                # Шукаємо стоп-ордер (наприклад, тип STOP або STOP_MARKET)
                                 if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
                                     old_order_id = ord_item.get("orderId")
+                                    
                                     # Скасовуємо старий стоп
                                     del_path = "/openApi/swap/v2/trade/order"
                                     del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": str(int(time.time() * 1000) + server_time_offset)}
@@ -268,19 +275,17 @@ async def monitor_open_trades(session):
                                     del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
                                     async with session.delete(del_url, headers=headers) as d_resp:
                                         d_res = await d_resp.json()
-                                        print(f"🗑️ Скасовано старий стоп для {symbol}: {d_res}", flush=True)
+                                        print(f"🗑 Скасовано старий стоп для {symbol}: {d_res}", flush=True)
 
-                    # 2. Виставляємо новий стоп-лосс на ціну входу (безубиток)
+                    # 2. Виставляємо новий стоп-лос на ціну входу (безубиток)
                     quantity_str = str(p.get('positionAmt', '0'))
-                    # Беремо збережений у моніторингу бік позиції (LONG або SHORT)
                     pos_side = info.get('side', 'LONG')
 
-                    # Передаємо pos_side у функцію створення стоп-лосу
                     success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
                     
                     if success:
                         active_trade_monitors[symbol]['sl_moved'] = True
-                        asyncio.create_task(send_telegram(session, f"🛡️ TP1 досягнуто по {symbol}! Стоп перенесено в Безубиток на ТБХ."))
+                        asyncio.create_task(send_telegram(session, f"🛡 TP1 досягнуто по {symbol}! Стоп перенесено в безубиток."))
                     else:
                         print(f"⚠️ Помилка встановлення стопу в безубиток для {symbol}", flush=True)
 
@@ -293,6 +298,7 @@ async def monitor_open_trades(session):
 
     except Exception as e:
         print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
+        
 
 async def send_periodic_report(session):
     while True:
