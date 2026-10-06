@@ -140,18 +140,36 @@ async def get_klines(session, symbol, interval="15m", limit=60):
         return []
 
 async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
+    # Даємо секундну паузу перед виставленням стопу, щоб біржа побачила позицію
+    await asyncio.sleep(1.5)
+    
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     params = {
-        "positionSide": "LONG",
+        "positionSide": "SHORT",
         "quantity": quantity_str,
-        "side": "SELL",
+        "side": "BUY",
         "symbol": symbol,
         "timestamp": ts,
-        "type": "STOP_MARKET", # або залишається вартість STOP_MARKET як у вас
+        "type": "STOP_MARKET",
         "stopPrice": f"{stop_price:.5f}",
         "workingType": "MARK_PRICE"
     }
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+    headers = {
+        "X-BX-APIKEY": API_KEY,
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    try:
+        async with session.post(url, headers=headers) as resp:
+            res = await resp.json()
+            print(f"🛡 Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
+            return res.get("code") == 0
+    except Exception as e:
+        print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
+        return False
 
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
