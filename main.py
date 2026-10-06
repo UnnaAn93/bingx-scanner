@@ -102,26 +102,27 @@ async def get_open_positions(session):
 
 async def set_leverage(session, symbol):
     path = "/openApi/swap/v2/trade/leverage"
-    ts = str(int(time.time() * 1000) + server_time_offset)
-    params = {
-        "leverage": str(LEVERAGE),
-        "side": "LONG",
-        "symbol": symbol,
-        "timestamp": ts
-    }
-    query_str = urllib.parse.urlencode(sorted(params.items()))
-    sig = get_sign(API_SECRET, query_str)
-    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
-    headers = {
-        "X-BX-APIKEY": API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    try:
-        async with session.post(url, headers=headers) as resp:
-            res = await resp.json()
-            print(f"⚙️ Встановлення плеча для {symbol}: {res}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
+    for pos_side in ["LONG", "SHORT"]:
+        ts = str(int(time.time() * 1000) + server_time_offset)
+        params = {
+            "leverage": str(LEVERAGE),
+            "positionSide": pos_side,
+            "symbol": symbol,
+            "timestamp": ts
+        }
+        query_str = urllib.parse.urlencode(sorted(params.items()))
+        sig = get_sign(API_SECRET, query_str)
+        url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+        headers = {
+            "X-BX-APIKEY": API_KEY,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        try:
+            async with session.post(url, headers=headers) as resp:
+                res = await resp.json()
+                print(f"⚙️ Встановлення плеча {LEVERAGE}x ({pos_side}) для {symbol}: {res}", flush=True)
+        except Exception as e:
+            print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
 
 async def get_klines(session, symbol, interval="15m", limit=60):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
