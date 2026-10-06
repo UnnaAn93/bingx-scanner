@@ -329,7 +329,17 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     if side == "LONG":
         if klines and len(klines) >= 40:
             lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
+            highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
             stop_loss_price = min(lows) * 0.997 if lows else entry_price * 0.98
+            
+            # Фільтр ATR для Лонга біля опору
+            atr_val = calculate_atr(klines, period=14) if klines else 0
+            buffer = atr_val * 0.5 if atr_val else entry_price * 0.005
+            resistance_level = max(highs) if highs else entry_price * 1.02
+            
+            if (resistance_level - entry_price) < buffer:
+                print(f"⚠️ Лонг по {symbol} відхилено: занадто близько до опору (менше ніж 0.5 ATR)", flush=True)
+                return
         else:
             stop_loss_price = entry_price * 0.98
 
@@ -346,7 +356,17 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     else: # SHORT
         if klines and len(klines) >= 40:
             highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
+            lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
             stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.01
+            
+            # Фільтр ATR для Шорта біля підтримки
+            atr_val = calculate_atr(klines, period=14) if klines else 0
+            buffer = atr_val * 0.5 if atr_val else entry_price * 0.005
+            support_level = min(lows) if lows else entry_price * 0.98
+            
+            if (entry_price - support_level) < buffer:
+                print(f"⚠️ Шорт по {symbol} відхилено: занадто близько до підтримки (менше ніж 0.5 ATR)", flush=True)
+                return
         else:
             stop_loss_price = entry_price * 1.01
 
