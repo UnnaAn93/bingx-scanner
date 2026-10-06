@@ -278,27 +278,46 @@ async def send_periodic_report(session):
         except Exception as e:
             print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
 
-async def execute_trade(session, symbol, entry_price):
-    print(f"🚀 Спроба реального відкриття позиції по {symbol} (Ціна: {entry_price})", flush=True)
+async def execute_trade(session, symbol, entry_price, side="LONG"):
+    print(f"🚀 Спроба реального відкриття позиції ({side}) по {symbol} (Ціна: {entry_price})", flush=True)
     await set_leverage(session, symbol)
 
-    klines = await get_klines(session, symbol, interval="15m", limit=40)
-    if klines and len(klines) >= 5:
-        lows = [float(k["low"]) for k in klines if isinstance(k, dict) and "low" in k]
-        stop_loss_price = (min(lows) * 0.997) if lows else entry_price * 0.98
-    else:
-        stop_loss_price = entry_price * 0.98
+    klines = await get_klines(session, symbol, interval="15m", limit=5)
+    
+    if side == "LONG":
+        if klines and len(klines) >= 5:
+            lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
+            stop_loss_price = min(lows) * 0.997 if lows else entry_price * 0.98
+        else:
+            stop_loss_price = entry_price * 0.98
 
-    if stop_loss_price >= entry_price:
-        stop_loss_price = entry_price * 0.98
+        if stop_loss_price >= entry_price:
+            stop_loss_price = entry_price * 0.98
 
-    risk = entry_price - stop_loss_price
+        risk = entry_price - stop_loss_price
+        tp1_raw = entry_price + (risk * 1.0)
+        tp1 = math.ceil(tp1_raw * 100000) / 100000
+        tp2 = entry_price + (risk * 2.0)
+        tp3 = entry_price + (risk * 3.0)
+        order_side = "BUY"
+        tp_side = "SELL"
+    else: # SHORT
+        if klines and len(klines) >= 5:
+            highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
+            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.02
+        else:
+            stop_loss_price = entry_price * 1.02
 
-    tp1_raw = entry_price + (risk * 1.0)
-    tp1 = math.ceil(tp1_raw * 100000) / 100000
+        if stop_loss_price <= entry_price:
+            stop_loss_price = entry_price * 1.02
 
-    tp2 = entry_price + (risk * 2.0)
-    tp3 = entry_price + (risk * 3.0)
+        risk = stop_loss_price - entry_price
+        tp1_raw = entry_price - (risk * 1.0)
+        tp1 = math.floor(tp1_raw * 100000) / 100000
+        tp2 = entry_price - (risk * 2.0)
+        tp3 = entry_price - (risk * 3.0)
+        order_side = "SELL"
+        tp_side = "BUY"
 
     try:
         target_usd = MARGIN_USD * LEVERAGE
@@ -320,13 +339,14 @@ async def execute_trade(session, symbol, entry_price):
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     params = {
-        "positionSide": "LONG",
+        "positionSide": side,
         "quantity": quantity_str,
-        "side": "BUY",
+        "side": order_side,
         "symbol": symbol,
         "timestamp": ts,
         "type": "MARKET"
     }
+
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
@@ -334,21 +354,22 @@ async def execute_trade(session, symbol, entry_price):
         "X-BX-APIKEY": API_KEY,
         "Content-Type": "application/x-www-form-urlencoded"
     }
+
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            print(f"📬 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
+            print(f"📡 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
             if res.get("code") == 0:
                 sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price)
-                
-                # Виставлення лімітних тейк-профітів
+
+                # Встановлення лімітних тейк-профітів
                 async def place_tp_order(s, sym, price_val, qty_val):
                     p_path = "/openApi/swap/v2/trade/order"
                     p_ts = str(int(time.time() * 1000) + server_time_offset)
                     p_params = {
-                        "positionSide": "LONG",
+                        "positionSide": side,
                         "quantity": str(qty_val),
-                        "side": "SELL",
+                        "side": tp_side,
                         "symbol": sym,
                         "timestamp": p_ts,
                         "type": "LIMIT",
@@ -357,7 +378,10 @@ async def execute_trade(session, symbol, entry_price):
                     p_query = urllib.parse.urlencode(sorted(p_params.items()))
                     p_sig = get_sign(API_SECRET, p_query)
                     p_url = f"{BINGX_BASE_URL}{p_path}?{p_query}&signature={p_sig}"
-                    p_headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+                    p_headers = {
+                        "X-BX-APIKEY": API_KEY,
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    }
                     try:
                         async with session.post(p_url, headers=p_headers) as p_resp:
                             p_res = await p_resp.json()
@@ -375,11 +399,11 @@ async def execute_trade(session, symbol, entry_price):
                     "sl_moved": False
                 }
 
-                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
+                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️️ Помилка встановлення на біржі"
                 msg = (
-                    f"🟢 Успішно відкрито LONG по {symbol}!\n"
-                    f"📌 Ціна входу (TBX): {entry_price:.5f}\n"
-                    f"💰 Об'єм: {quantity_str}\n"
+                    f"🟢 Успішно відкрито {side} по {symbol}!\n"
+                    f"💲 Ціна входу (TBX): {entry_price:.5f}\n"
+                    f"📦 Об'єм: {quantity_str}\n"
                     f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
                     f"🎯 TP1 (40% | 1:1): {tp1:.5f}\n"
                     f"🎯 TP2 (30% | 1:2): {tp2:.5f}\n"
