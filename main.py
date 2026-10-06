@@ -362,14 +362,17 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
             lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
             stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.01
             
-            # Фільтр ATR для Шорта біля підтримки
+            # Фильтр ATR для Шорта: вход только если цена близко к EMA (в пределах 1 * ATR)
             atr_val = calculate_atr(klines, period=14) if klines else 0
-            buffer = atr_val * 0.5 if atr_val else entry_price * 0.005
-            support_level = min(lows) if lows else entry_price * 0.98
-            
-            if (entry_price - support_level) < buffer:
-                print(f"⚠️ Шорт по {symbol} відхилено: занадто близько до підтримки (менше ніж 0.5 ATR)", flush=True)
-                return
+            closes = [float(k['close']) for k in klines if isinstance(k, dict) and 'close' in k] if klines else []
+            ema_val = calculate_ema(closes, period=50) if closes else 0
+        
+            if ema_val and atr_val:
+                distance_to_ema = abs(entry_price - ema_val)
+                max_allowed = atr_val * 1.0
+                if distance_to_ema > max_allowed:
+                    print(f"⚠️ Шорт по {symbol} отменен: цена слишком далеко от EMA (расстояние {distance_to_ema:.4f} > {max_allowed:.4f})", flush=True)
+                    return
         else:
             stop_loss_price = entry_price * 1.01
 
