@@ -226,8 +226,12 @@ async def monitor_open_trades(session):
                 info = active_trade_monitors[symbol]
                 tp1 = info['tp1']
                 sl_moved = info['sl_moved']
+                trade_side = info.get('side', 'LONG')
 
-                if not sl_moved and current_price <= tp1:
+                # Для лонга ціна вища/рівна TP1, для шорта — нижча/рівна TP1
+                tp_reached = (current_price >= tp1) if trade_side == 'LONG' else (current_price <= tp1)
+
+                if not sl_moved and tp_reached:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
                     
                     # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лосса
