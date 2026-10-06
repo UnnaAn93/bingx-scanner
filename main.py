@@ -139,22 +139,28 @@ async def get_klines(session, symbol, interval="15m", limit=60):
         print(f"⚠️ Виняток у get_klines для {symbol}: {e}", flush=True)
         return []
 
-async def place_stop_loss_order(session, symbol, quantity_str, stop_price):
-    # Даємо секундну паузу перед виставленням стопу, щоб біржа побачила позицію
+async def place_stop_loss_order(session, symbol, quantity_str, stop_price, position_side="LONG"):
     await asyncio.sleep(1.5)
-    
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
+    
+    # Кількість обов'язково додатна (для шортів positionAmt буває з мінусом)
+    clean_qty = str(abs(float(quantity_str)))
+    
+    # Протилежний бік для закриття позиції ринковим стопом
+    side_to_close = "SELL" if position_side == "LONG" else "BUY"
+
     params = {
-        "positionSide": "SHORT",
-        "quantity": quantity_str,
-        "side": "BUY",
+        "positionSide": position_side,
+        "quantity": clean_qty,
+        "side": side_to_close,
         "symbol": symbol,
         "timestamp": ts,
         "type": "STOP_MARKET",
-        "stopPrice": f"{stop_price:.5f}",
+        "stopPrice": str(stop_price),
         "workingType": "MARK_PRICE"
     }
+    
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
