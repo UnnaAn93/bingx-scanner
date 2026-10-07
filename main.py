@@ -26,6 +26,7 @@ MAX_RISK_POSITIONS = 2
 server_time_offset = 0
 
 active_trade_monitors = {}
+coin_cooldowns = {}  # Словник для паузи монет після помилок {symbol: timestamp}
 
 # --- KEEP-ALIVE SERVER (для Render) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -135,9 +136,12 @@ async def set_leverage(session, symbol):
     headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
     try:
         async with session.post(url, headers=headers) as resp:
-            await resp.json()
+            res = await resp.json()
+            if res.get("code") != 0:
+                return False, res.get("msg", "Unknown error")
+            return True, ""
     except Exception as e:
-        print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
+        return False, str(e)
 
 async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_side):
     path = "/openApi/swap/v2/trade/order"
@@ -160,10 +164,11 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_s
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            return res.get("code") == 0
+            if res.get("code") != 0:
+                return False, res.get("msg", "Unknown error")
+            return True, ""
     except Exception as e:
-        print(f"⚠️ Помилка створення стопу: {e}", flush=True)
-        return False
+        return False, str(e)
 
 async def place_tp_order(session, sym, price_val, qty_val, side):
     path = "/openApi/swap/v2/trade/order"
@@ -184,10 +189,11 @@ async def place_tp_order(session, sym, price_val, qty_val, side):
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            return res.get("code") == 0
+            if res.get("code") != 0:
+                return False, res.get("msg", "Unknown error")
+            return True, ""
     except Exception as e:
-        print(f"⚠️ Помилка створення TP: {e}", flush=True)
-        return False
+        return False, str(e)
 
 async def get_open_positions(session):
     path = "/openApi/swap/v2/user/positions"
@@ -209,30 +215,39 @@ async def get_open_positions(session):
 # --- ВИКОНАННЯ УГОДИ ---
 async def execute_trade(session, symbol, entry_price, side="LONG"):
     print(f"🔄 Спроба відкриття позиції ({side}) по {symbol} за ціною {entry_price}", flush=True)
-    await set_leverage(session, symbol)
+    
+    # 1. Встановлення плеча
+    lev_success, lev_err = await set_leverage(session, symbol)
+    if not lev_success:
+        err_msg = f"❌ Помилка встановлення плеча по {symbol}: {lev_err}"
+        print(err_msg, flush=True)
+        asyncio.create_task(send_telegram(session, err_msg))
+        return False
 
     klines = await get_klines(session, symbol, interval="15m", limit=40)
     
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
-        stop_loss_price = (min(lows) * 0.997) if lows else (entry_price * 0.98)
+        min_low = min(lows) if lows else entry_price * 0.98
+        stop_loss_price = min_low * 0.997  # Мінімум за 40 свічок + 0.3% (вниз для лонга)
         risk = entry_price - stop_loss_price
         if risk <= 0:
             risk = entry_price * 0.02
             stop_loss_price = entry_price - risk
-        tp1 = math.ceil((entry_price + risk * 1.0) * 100000) / 100000
+        tp1 = math.ceil((entry_price + risk * 1.0) * 100000) / 100000  # Заокруглення в більшу сторону
         tp2 = entry_price + risk * 2.0
         tp3 = entry_price + risk * 3.0
         order_side = "BUY"
         tp_side = "LONG"
     else:
         highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
-        stop_loss_price = (max(highs) * 1.003) if highs else (entry_price * 1.02)
+        max_high = max(highs) if highs else entry_price * 1.02
+        stop_loss_price = max_high * 1.003  # Максимум за 40 свічок + 0.3%
         risk = stop_loss_price - entry_price
         if risk <= 0:
             risk = entry_price * 0.02
             stop_loss_price = entry_price + risk
-        tp1 = math.ceil((entry_price - risk * 1.0) * 100000) / 100000
+        tp1 = math.ceil((entry_price - risk * 1.0) * 100000) / 100000  # Заокруглення в більшу сторону
         tp2 = entry_price - risk * 2.0
         tp3 = entry_price - risk * 3.0
         order_side = "SELL"
@@ -243,9 +258,11 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         total_quantity = target_usd / entry_price
         quantity_str = f"{total_quantity:.4f}"
         if float(quantity_str) == 0:
-            return False
+            raise ValueError("Розрахований об'єм позиції дорівнює 0")
     except Exception as e:
-        print(f"⚠️ Помилка обчислення об'єму: {e}", flush=True)
+        err_msg = f"❌ Помилка об'єму по {symbol}: {e}"
+        print(err_msg, flush=True)
+        asyncio.create_task(send_telegram(session, err_msg))
         return False
 
     total_amt = float(quantity_str)
@@ -271,25 +288,38 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            if res.get("code") == 0:
-                await asyncio.sleep(1.5)
-                await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
-                await place_tp_order(session, symbol, tp1, q1, tp_side)
-                await place_tp_order(session, symbol, tp2, q2, tp_side)
-                await place_tp_order(session, symbol, tp3, q3, tp_side)
+            if res.get("code") != 0:
+                err_msg = f"❌ Помилка маркет-ордера по {symbol}: {res.get('msg', 'Unknown')}"
+                print(err_msg, flush=True)
+                asyncio.create_task(send_telegram(session, err_msg))
+                return False
 
-                active_trade_monitors[symbol] = {
-                    'entry_price': entry_price,
-                    'tp1': tp1,
-                    'side': side,
-                    'sl_moved': False,
-                    'quantity_str': quantity_str
-                }
-                asyncio.create_task(send_telegram(session, f"🟢 Успішно відкрито {side} по {symbol}\nЦіна: {entry_price:.5f}"))
-                return True
+            await asyncio.sleep(1.5)
+            sl_ok, sl_err = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
+            if not sl_ok:
+                err_msg = f"⚠️ Позицію відкрито, але не вдалося поставити Стоп-Лосс по {symbol}: {sl_err}"
+                print(err_msg, flush=True)
+                asyncio.create_task(send_telegram(session, err_msg))
+
+            await place_tp_order(session, symbol, tp1, q1, tp_side)
+            await place_tp_order(session, symbol, tp2, q2, tp_side)
+            await place_tp_order(session, symbol, tp3, q3, tp_side)
+
+            active_trade_monitors[symbol] = {
+                'entry_price': entry_price,
+                'tp1': tp1,
+                'side': side,
+                'sl_moved': False,
+                'quantity_str': quantity_str
+            }
+            success_msg = f"🟢 Успішно відкрито {side} по {symbol}\nЦіна: {entry_price:.5f}\nСтоп: {stop_loss_price:.5f}\nТП1: {tp1}"
+            asyncio.create_task(send_telegram(session, success_msg))
+            return True
     except Exception as e:
-        print(f"⚠️ Помилка відправки ринкового ордера: {e}", flush=True)
-    return False
+        err_msg = f"❌ Критична помилка виконання угоди по {symbol}: {e}"
+        print(err_msg, flush=True)
+        asyncio.create_task(send_telegram(session, err_msg))
+        return False
 
 # --- WEBSOCKET ПРОСЛУХОВУВАННЯ ВІДПОВІДЕЙ БІРЖІ ---
 async def bingx_websocket_listener(session):
@@ -318,17 +348,13 @@ async def bingx_websocket_listener(session):
                 print("🔌 WebSocket підключено до BingX для відстеження ордерів", flush=True)
                 while True:
                     message = await websocket.recv()
-                    # Обробка подій ордерів через WS
                     if "ORDER_TRADE_UPDATE" in message or "order" in message:
                         try:
-                            msg_data = json.loads(message)
-                            # Перевіряємо закриття ордерів / спрацювання тейків
                             open_pos = await get_open_positions(session)
                             open_symbols = [p.get("symbol") for p in open_pos]
 
                             for symbol, info in list(active_trade_monitors.items()):
                                 if not info.get('sl_moved', False):
-                                    # Перевіряємо через REST чи залишився ТП1 активним
                                     orders_path = "/openApi/swap/v2/trade/openOrders"
                                     ts_ord = str(int(time.time() * 1000) + server_time_offset)
                                     o_params = {"symbol": symbol, "timestamp": ts_ord}
@@ -343,7 +369,6 @@ async def bingx_websocket_listener(session):
                                             tp_still_active = any(abs(float(o.get("price", 0)) - tp1_target) < 0.00001 for o in orders_list)
 
                                             if not tp_still_active:
-                                                # ТП1 спрацював! Переносимо стоп в БУ
                                                 old_stop_id = None
                                                 for ord_item in orders_list:
                                                     if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
@@ -358,10 +383,12 @@ async def bingx_websocket_listener(session):
                                                     async with session.delete(del_uri, headers={"X-BX-APIKEY": API_KEY}) as d_resp:
                                                         await d_resp.json()
 
-                                                success = await place_stop_loss_order(session, symbol, info.get('quantity_str'), info.get('entry_price'), info.get('side'))
+                                                success, sl_err = await place_stop_loss_order(session, symbol, info.get('quantity_str'), info.get('entry_price'), info.get('side'))
                                                 if success:
                                                     active_trade_monitors[symbol]['sl_moved'] = True
-                                                    asyncio.create_task(send_telegram(session, f"🟢 ТР1 досягнуто по {symbol}! Стоп перенесено в безубиток."))
+                                                    asyncio.create_task(send_telegram(session, f"🛡️ ТР1 досягнуто по {symbol} (підтверджено через WebSocket)! Стоп перенесено в безубиток."))
+                                                else:
+                                                    asyncio.create_task(send_telegram(session, f"⚠️ ТР1 досягнуто по {symbol}, але помилка перенесення в БУ: {sl_err}"))
 
                                 if symbol not in open_symbols:
                                     del active_trade_monitors[symbol]
@@ -422,6 +449,7 @@ async def scan_market(session):
             tickers = data.get("data", [])
 
         trade_opened_in_this_cycle = False
+        current_time_ts = time.time()
 
         for ticker in tickers:
             if trade_opened_in_this_cycle:
@@ -435,8 +463,15 @@ async def scan_market(session):
             if not symbol.endswith("USDT"):
                 continue
             
+            # Перевірка чи монета на паузі після помилки (5 хвилин)
+            if symbol in coin_cooldowns:
+                if current_time_ts < coin_cooldowns[symbol]:
+                    continue
+                else:
+                    del coin_cooldowns[symbol]
+
             # Виключення згідно з пунктом 4
-            excluded_substrings = ["BTC", "LTC", "NCF", "NCS", "BNB", "ETH", "SOL", "XRP"]
+            excluded_substrings = ["BTC", "LTC", "NCF", "NCS", "USD-USDT", "BNB", "ETH", "SOL", "XRP"]
             if any(sub in symbol for sub in excluded_substrings):
                 continue
 
@@ -490,8 +525,10 @@ async def scan_market(session):
                 success = await execute_trade(session, symbol, current_price, side="LONG")
                 if success:
                     trade_opened_in_this_cycle = True
-                    await asyncio.sleep(3)
                     break
+                else:
+                    # Ставимо монету на паузу на 5 хвилин у разі помилки
+                    coin_cooldowns[symbol] = time.time() + 300
 
             # --- ПЕРЕВІРКА УМОВ ДЛЯ SHORT ---
             if (ema_th_curr < ema_th_past and max(o_th, c_th) < ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
@@ -500,8 +537,10 @@ async def scan_market(session):
                 success = await execute_trade(session, symbol, current_price, side="SHORT")
                 if success:
                     trade_opened_in_this_cycle = True
-                    await asyncio.sleep(3)
                     break
+                else:
+                    # Ставимо монету на паузу на 5 хвилин у разі помилки
+                    coin_cooldowns[symbol] = time.time() + 300
 
     except Exception as e:
         print(f"⚠️ Помилка у scan_market: {e}", flush=True)
@@ -521,7 +560,7 @@ async def main():
         asyncio.create_task(bingx_websocket_listener(session))
         asyncio.create_task(send_periodic_report(session))
         
-        print("🚀 Бот запущено за оновленою логікою з WebSocket-відстеженням!", flush=True)
+        print("🚀 Бот запущено за оновленою логікою!", flush=True)
         await market_scanner_loop(session)
 
 if __name__ == "__main__":
