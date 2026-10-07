@@ -642,7 +642,7 @@ async def scan_market(session):
                         ema_1h_past = calculate_ema(closes_1h[:-2], period=50)
 
                         # Умова шорта: годинна EMA падає і закриття свічки нижче неї
-                        if ema_1h_curr < ema_1h_past and closes_1h[-2] < ema_1h_curr:
+                        if ema_1h_curr < ema_1h_past and closes_1h[-2] <= ema_1h_curr:
                             # Підтвердження на 15m (ціна нижче 15m EMA)
                             klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
                             if klines_15m and len(klines_15m) <= 55:
