@@ -277,7 +277,7 @@ async def monitor_open_trades(session):
                                 del_query = urllib.parse.urlencode(sorted(del_params.items()))
                                 del_sig = get_sign(API_SECRET, del_query)
                                 del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
-                                async with session.delete(del_url) as d_resp:
+                                async with session.delete(del_url, headers=headers) as d_resp:
                                     d_res = await d_resp.json()
                                     print(f"🛡 Скасовано старий стоп для {symbol}: {d_res}", flush=True)
                             else:
@@ -287,7 +287,7 @@ async def monitor_open_trades(session):
                     quantity_str = str(p.get('positionAmt', '0'))
                     pos_side = info.get('side', 'LONG')
 
-                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
+                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side, headers=headers)
                     
                     if success:
                         active_trade_monitors[symbol]['sl_moved'] = True
