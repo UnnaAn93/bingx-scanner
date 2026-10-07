@@ -652,12 +652,13 @@ async def scan_market(session):
                             if current_price < ema_current_15:
                                 passed_ema_count += 1
                                 print(f"🔥 УСПІХ! Шорт по {symbol} на 1h (Ціна: {current_price})", flush=True)
-                                await execute_trade(session, symbol, current_price, side="SHORT")
-                                trade_opened_in_this_cycle = True
-                                await asyncio.sleep(5)
-                                break
-                            else:
-                                continue
+                                success = await execute_trade(session, symbol, current_price, side="SHORT")
+                                if success:
+                                    trade_opened_in_this_cycle = True
+                                    await asyncio.sleep(5)
+                                    break
+                                else:
+                                    continue
                 except Exception:
                     pass
 
