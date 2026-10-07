@@ -329,7 +329,7 @@ async def send_periodic_report(session):
             print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
 
 async def execute_trade(session, symbol, entry_price, side="LONG"):
-    print(f"🚀 Спроба реального відкриття позиції ({side}) по {symbol} (Ціна: {entry_price})", flush=True)
+    print(f"🔄 Спроба реального відкриття позиції ({side}) по {symbol} (Ціна: {entry_price})", flush=True)
     await set_leverage(session, symbol)
 
     klines = await get_klines(session, symbol, interval="15m", limit=40)
@@ -337,60 +337,39 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     if side == "LONG":
         if klines and len(klines) >= 40:
             lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
-            highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
             stop_loss_price = min(lows) * 0.997 if lows else entry_price * 0.98
-            
-            # Фильтр ATR для Лонга: вход только если цена близко к EMA (в пределах 1 * ATR)
-            atr_val = calculate_atr(klines, period=14) if klines else 0
-            closes = [float(k['close']) for k in klines if isinstance(k, dict) and 'close' in k] if klines else []
-            ema_val = calculate_ema(closes, period=50) if closes else 0
-        
-            if ema_val and atr_val:
-                distance_to_ema = abs(entry_price - ema_val)
-                max_allowed = atr_val * 1.0
-                if distance_to_ema > max_allowed:
-                    print(f"⚠️ Лонг по {symbol} отменен: цена слишком далеко от EMA (расстояние {distance_to_ema:.4f} > {max_allowed:.4f})", flush=True)
-                    return False
         else:
             stop_loss_price = entry_price * 0.98
 
-        if stop_loss_price >= entry_price:
-            stop_loss_price = entry_price * 0.98
-
         risk = entry_price - stop_loss_price
+        if risk <= 0:
+            risk = entry_price * 0.02
+            stop_loss_price = entry_price - risk
+
         tp1_raw = entry_price + (risk * 1.0)
         tp1 = math.ceil(tp1_raw * 100000) / 100000
         tp2 = entry_price + (risk * 2.0)
         tp3 = entry_price + (risk * 3.0)
+        
         order_side = "BUY"
         tp_side = "SELL"
-    else: # SHORT
+    else:  # SHORT
         if klines and len(klines) >= 40:
             highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
-            lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
-            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.01
-            
-            # Фильтр ATR для Шорта: вход только если цена близко к EMA (в пределах 1 * ATR)
-            atr_val = calculate_atr(klines, period=14) if klines else 0
-            closes = [float(k['close']) for k in klines if isinstance(k, dict) and 'close' in k] if klines else []
-            ema_val = calculate_ema(closes, period=50) if closes else 0
-        
-            if ema_val and atr_val:
-                distance_to_ema = abs(entry_price - ema_val)
-                max_allowed = atr_val * 1.0
-                if distance_to_ema > max_allowed:
-                    print(f"⚠️ Шорт по {symbol} отменен: цена слишком далеко от EMA (расстояние {distance_to_ema:.4f} > {max_allowed:.4f})", flush=True)
-                    return False
+            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.02
         else:
-            stop_loss_price = entry_price * 1.01
+            stop_loss_price = entry_price * 1.02
 
-        if stop_loss_price <= entry_price:
-            stop_loss_price = entry_price * 1.01
         risk = stop_loss_price - entry_price
+        if risk <= 0:
+            risk = entry_price * 0.02
+            stop_loss_price = entry_price + risk
+
         tp1_raw = entry_price - (risk * 1.0)
         tp1 = math.floor(tp1_raw * 100000) / 100000
         tp2 = entry_price - (risk * 2.0)
         tp3 = entry_price - (risk * 3.0)
+        
         order_side = "SELL"
         tp_side = "BUY"
 
@@ -400,12 +379,12 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         quantity_str = f"{total_quantity:.4f}"
         if float(quantity_str) == 0:
             print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
-            return
+            return False
     except Exception as e:
         print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
-        return
+        return False
 
-    # Розподіл об'єму на частини (40% / 30% / 30%)
+    # Розподіл об'єму на частини (40% : 30% : 30%)
     total_amt = float(quantity_str)
     q1 = round(total_amt * 0.4, 4)
     q2 = round(total_amt * 0.3, 4)
@@ -433,45 +412,49 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            print(f"📡 Відповідь біржі на відкриття ордера {symbol}: {res}", flush=True)
-            
+            print(f"📥 Відповідь біржа на відкриття ордера {symbol}: {res}", flush=True)
+
             if res.get("code") == 0:
                 await asyncio.sleep(1.5)
-                
-                # 1. Встановлюємо початковий стоп-лос (передаємо side!)
+
+                # 1. Встановлюємо початковий стоп-лос
                 sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
-                
+
                 # 2. Встановлюємо лімітні тейк-профіти
-                await place_tp_order(session, symbol, tp1, q1, side, tp_side)
-                await place_tp_order(session, symbol, tp2, q2, side, tp_side)
-                await place_tp_order(session, symbol, tp3, q3, side, tp_side)
+                await place_tp_order(session, symbol, tp1, q1, tp_side, tp1)
+                await place_tp_order(session, symbol, tp2, q2, tp_side, tp2)
+                await place_tp_order(session, symbol, tp3, q3, tp_side, tp3)
 
                 # 3. Зберігаємо моніторинг активної угоди
                 active_trade_monitors[symbol] = {
-                    "entry_price": entry_price,
-                    "tp1": tp1,
-                    "sl_moved": False
+                    'entry_price': entry_price,
+                    'tp1': tp1,
+                    'side': side,
+                    'sl_moved': False
                 }
 
                 # 4. Формуємо сповіщення для Telegram
                 sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
                 msg = (
-                    f"🟢 Успішно відкрито {side} по {symbol}!\n"
-                    f"💰 Ціна входу (ТВХ): {entry_price:.5f}\n"
-                    f"📦 Об'єм: {quantity_str}\n"
+                    f"🟢 Успішно відкрито {side} по {symbol}\n"
+                    f"💵 Ціна входу (TBX): {entry_price:.5f}\n"
+                    f"📊 Об'єм: {quantity_str}\n"
                     f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
-                    f"🎯 TP1 (40% | 1:1): {tp1:.5f}\n"
-                    f"🎯 TP2 (30% | 1:2): {tp2:.5f}\n"
-                    f"🎯 TP3 (30% | 1:3): {tp3:.5f}"
+                    f"🎯 ТР1 (40% | T:1): {tp1:.5f}\n"
+                    f"🎯 ТР2 (30% | T:2): {tp2:.5f}\n"
+                    f"🎯 ТР3 (30% | T:3): {tp3:.5f}"
                 )
-                await send_telegram(session, msg)
+                asyncio.create_task(send_telegram(session, msg))
+                return True
             else:
                 err_msg = res.get("msg", "Unknown error")
                 msg = f"❌ Помилка відкриття {symbol}: {err_msg}"
-                await send_telegram(session, msg)
-
+                asyncio.create_task(send_telegram(session, msg))
+                return False
     except Exception as e:
-        print(f"❌ Виняток при проводці ордера для {symbol}: {e}", flush=True)
+                    print(f"⚠️ Виняток при проводці ордера для {symbol}: {e}", flush=True)
+                    return False
+        
 
 
 # --- Глобальна функція створення тейк-профіту (розміщується на рівні файлу поза execute_trade) ---
