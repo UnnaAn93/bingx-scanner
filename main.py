@@ -267,11 +267,22 @@ async def monitor_open_trades(session):
                         o_data = await o_resp.json()
                         if o_data.get("code") == 0:
                             orders_list = o_data.get("data", {}).get("orders", [])
-                        
+            
+                            # Перевіряємо, чи є серед відкритих ордерів наш лімітний ордер TP1
+                            # (Біржа видаляє його з відкритих, коли він виконується)
+                            tp_order_exists = any(o.get("type") == "LIMIT" for o in orders_list)
+            
+                            # TP вважається виконаним, якщо ордер зник із відкритих (його більше немає на біржі)
+                            tp_reached = not tp_order_exists
+
                             old_order_id = None
                             for ord_item in orders_list:
                                 if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
                                     old_order_id = ord_item.get("orderId")
+                                            old_order_id = None
+                                            for ord_item in orders_list:
+                                                if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
+                                                    old_order_id = ord_item.get("orderId")
                         
                             # Скасовуємо старий стоп тільки якщо він реально існує
                             if old_order_id:
