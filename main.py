@@ -238,7 +238,11 @@ async def monitor_open_trades(session):
                 trade_side = info.get('side', 'LONG')
     
                 # Перевіряємо виконання TP1 через реальний статус ордерів на біржі
-                # Запитуємо відкриті ордери по символу
+                info = active_trade_monitors[symbol]
+                sl_moved = info['sl_moved']
+                tp1 = info['tp1']  # Беремо збережений TP1
+    
+                # 1. Отримуємо відкриті ордери з біржі
                 orders_path = "/openApi/swap/v2/trade/openOrders"
                 ts = str(int(time.time() * 1000) * server_time_offset)
                 params = {"symbol": symbol, "timestamp": ts}
@@ -247,43 +251,25 @@ async def monitor_open_trades(session):
                 orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
                 headers = {
                     "X-BX-APIKEY": API_KEY,
-                }
-                if not sl_moved and tp_reached:
-                    print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
-
-                    # 1. Отримуємо відкриті ордери, щоб знайти ID старого стоп-лоса
-                    orders_path = "/openApi/swap/v2/trade/openOrders"
-                    ts = str(int(time.time() * 1000) + server_time_offset)
-                    params = {"symbol": symbol, "timestamp": ts}
-                    query_str = urllib.parse.urlencode(sorted(params.items()))
-                    sig = get_sign(API_SECRET, query_str)
-                    orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
-                    headers = {
-                        "X-BX-APIKEY": API_KEY,
-                        "Content-Type": "application/x-www-form-urlencoded"
-                    }
-
-                    async with session.get(orders_url, headers=headers) as o_resp:
-                        o_data = await o_resp.json()
-                        if o_data.get("code") == 0:
-                            orders_list = o_data.get("data", {}).get("orders", [])
+               }
+    
+                async with session.get(orders_url, headers=headers) as o_resp:
+                    o_data = await o_resp.json()
+                    if o_data.get("code") == 0:
+                        orders_list = o_data.get("data", {}).get("orders", [])
             
-                            # Перевіряємо, чи є серед відкритих ордерів наш лімітний ордер TP1
-                            # (Біржа видаляє його з відкритих, коли він виконується)
-                            tp_order_exists = any(o.get("type") == "LIMIT" for o in orders_list)
+                        # Перевіряємо, чи є наш лімітний ордер TP1 серед відкритих на біржі
+                        # (Порівнюємо ціну ордера з нашим tp1)
+                        tp_still_active = any(float(o.get("price", 0)) == tp1 for o in orders_list)
             
-                            # TP вважається виконаним, якщо ордер зник із відкритих (його більше немає на біржі)
-                            tp_reached = not tp_order_exists
+                        # Якщо ордер TP1 зник із відкритих — значить, він виконався!
+                        tp_reached = not tp_still_active
 
-                            old_order_id = None
-                            for ord_item in orders_list:
-                                if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
-                                    old_order_id = ord_item.get("orderId")
-                                            old_order_id = None
-                                            for ord_item in orders_list:
-                                                if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
-                                                    old_order_id = ord_item.get("orderId")
-                        
+                        old_order_id = None
+                        for ord_item in orders_list:
+                            if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
+                                old_order_id = ord_item.get("orderId")
+                    
                             # Скасовуємо старий стоп тільки якщо він реально існує
                             if old_order_id:
                                 del_path = "/openApi/swap/v2/trade/order"
