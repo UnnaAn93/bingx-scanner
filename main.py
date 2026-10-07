@@ -530,7 +530,7 @@ def calculate_atr(klines, period=14):
     return sum(recent_tr) / len(recent_tr)
 
 async def scan_market(session):
-    print("🔄 Початок нового циклу сканування ринку...", flush=True)
+    print(f"🔄 Початок нового циклу сканування ринку...", flush=True)
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
@@ -539,21 +539,19 @@ async def scan_market(session):
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            # Якщо позиція є в моніторингу і стоп вже перенесено (sl_moved == True), вона НЕ ризикова
-            if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False):
+            if sym in active_trade_monitors and active_trade_monitors(sym).get('sl_moved', False):
                 continue
-            # Всі інші вважаються ризиковими
             risk_positions_count += 1
 
-        print(f"📌 Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржі: {MAX_RISK_POSITIONS}", flush=True)
+        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржах: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
-            print("🛑 Сканування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
+            print(f"🛑 Скасування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"❌ Помилка запиту тікерів: статус {resp.status}", flush=True)
+                print(f"⚠️ Помилка запиту тікерів: статус {resp.status}", flush=True)
                 return
             data = await resp.json()
             if not isinstance(data, dict) or data.get("code") != 0:
@@ -584,8 +582,6 @@ async def scan_market(session):
 
             if any(coin in symbol for coin in ["BNB", "BTC", "ETH", "SOL", "XRP", "LTC", "XAG", "XAU", "USD-USDT", "PLN", "DKK"]):
                 continue
-                
-                continue
 
             scanned_count += 1
 
@@ -598,75 +594,114 @@ async def scan_market(session):
             if volume_24h < 300_000 or volume_24h > 30_000_000:
                 continue
 
-            # =========================
+            # ==========================================
             # ПЕРЕВІРКА НА ЛОНГ (1h - 15m)
+            # ==========================================
             klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
             if klines_1h and len(klines_1h) >= 50:
                 try:
                     closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
                     if len(closes_1h) >= 50:
                         ema_1h_curr = calculate_ema(closes_1h, period=50)
-                        ema_1h_past = calculate_ema(closes_1h[:-2], period=50)
+                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
+                        atr_1h = calculate_atr(klines_1h, period=14)
 
-                        # Годинна EMA росте і закриття свічки вище неї
-                        if ema_1h_curr > ema_1h_past and closes_1h[-2] >= ema_1h_curr:
+                        # Беремо попередню закриту свічку (індекс -2) та її open/close для перевірки тілом
+                        candle_1h = klines_1h[-2]
+                        o_1h = float(candle_1h['open'])
+                        c_1h = float(candle_1h['close'])
+
+                        # Умови лонгу: EMA росте, все тіло свічки вище EMA, і відстань до EMA не більша за ATR * 1.0
+                        if (ema_1h_curr > ema_1h_past and 
+                            min(o_1h, c_1h) > ema_1h_curr and 
+                            abs(c_1h - ema_1h_curr) <= atr_1h * 1.0):
+                            
                             # Підтвердження на 15m
                             klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
-                            if klines_15m and len(klines_15m) >= 55:
+                            if klines_15m and len(klines_15m) >= 50:
                                 closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
                                 if len(closes_15m) >= 50:
                                     ema_current_15 = calculate_ema(closes_15m, period=50)
+                                    ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
+                                    atr_15m = calculate_atr(klines_15m, period=14)
 
-                                    if closes_15m[-2] >= ema_current_15:
-                                        passed_ema_count = 1
-                                        print(f"🔥 УСПІХ: Лонг по {symbol} на 1h (ціна закриття: {closes_15m[-2]})", flush=True)
-                                        success = await execute_trade(session, symbol, closes_15m[-2], side="LONG")
+                                    candle_15m = klines_15m[-2]
+                                    o_15m = float(candle_15m['open'])
+                                    c_15m = float(candle_15m['close'])
+
+                                    if (ema_current_15 > ema_past_15 and 
+                                        min(o_15m, c_15m) > ema_current_15 and 
+                                        abs(c_15m - ema_current_15) <= atr_15m * 1.0):
+                                        
+                                        passed_ema_count += 1
+                                        print(f"🔥 УСПІХ: Лонг по {symbol} (ціна закриття: {c_15m})", flush=True)
+                                        success = await execute_trade(session, symbol, c_15m, side="LONG")
                                         if success:
                                             trade_opened_in_this_cycle = True
                                             await asyncio.sleep(5)
                                             break
-                                        else:
-                                            continue
+                                    else:
+                                        continue
                 except Exception:
                     pass
-                    if trade_opened_in_this_cycle:
-                        break
+                if trade_opened_in_this_cycle:
+                    break
 
+            # ==========================================
             # ПЕРЕВІРКА НА ШОРТ (1h - 15m)
+            # ==========================================
             klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
-            if klines_1h and len(klines_1h) <= 50:
+            if klines_1h and len(klines_1h) >= 50:
                 try:
                     closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
-                    if len(closes_1h) <= 50:
+                    if len(closes_1h) >= 50:
                         ema_1h_curr = calculate_ema(closes_1h, period=50)
-                        ema_1h_past = calculate_ema(closes_1h[:-2], period=50)
+                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
+                        atr_1h = calculate_atr(klines_1h, period=14)
 
-                        # Умова шорта: годинна EMA падає і закриття свічки нижче неї
-                        if ema_1h_curr < ema_1h_past and closes_1h[-2] <= ema_1h_curr:
-                            # Підтвердження на 15m (ціна нижче 15m EMA)
+                        candle_1h = klines_1h[-2]
+                        o_1h = float(candle_1h['open'])
+                        c_1h = float(candle_1h['close'])
+
+                        # Умови шорту: EMA падає, все тіло свічки нижче EMA, і відстань до EMA не більша за ATR * 1.0
+                        if (ema_1h_curr < ema_1h_past and 
+                            max(o_1h, c_1h) < ema_1h_curr and 
+                            abs(c_1h - ema_1h_curr) <= atr_1h * 1.0):
+                            
+                            # Підтвердження на 15m
                             klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
-                            if klines_15m and len(klines_15m) <= 55:
+                            if klines_15m and len(klines_15m) >= 50:
                                 closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
-                                if len(closes_15m) <= 50:
+                                if len(closes_15m) >= 50:
                                     ema_current_15 = calculate_ema(closes_15m, period=50)
+                                    ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
+                                    atr_15m = calculate_atr(klines_15m, period=14)
 
-                                    if closes_15m[-2] < ema_current_15:
-                                        passed_ema_count = 1
-                                        print(f"🔥 УСПІХ: Шорт по {symbol} на 1h (ціна закриття: {closes_15m[-2]})", flush=True)
-                                        success = await execute_trade(session, symbol, closes_15m[-2], side="SHORT")
+                                    candle_15m = klines_15m[-2]
+                                    o_15m = float(candle_15m['open'])
+                                    c_15m = float(candle_15m['close'])
+
+                                    if (ema_current_15 < ema_past_15 and 
+                                        max(o_15m, c_15m) < ema_current_15 and 
+                                        abs(c_15m - ema_current_15) <= atr_15m * 1.0):
+                                        
+                                        passed_ema_count += 1
+                                        print(f"🔥 УСПІХ: Шорт по {symbol} (ціна закриття: {c_15m})", flush=True)
+                                        success = await execute_trade(session, symbol, c_15m, side="SHORT")
                                         if success:
                                             trade_opened_in_this_cycle = True
                                             await asyncio.sleep(5)
                                             break
-                                        else:
-                                            continue
+                                    else:
+                                        continue
                 except Exception:
                     pass
 
-        print(f"📊 Підсумок: перевірено {scanned_count}, пройшли перевірку EMA: {passed_ema_count}", flush=True)
+        print(f"📊 Підсумки перевірки: (scanned_count), пройшли перевірку EMA: (passed_ema_count)", flush=True)
     except Exception as e:
-        print(f"⚠️ Помилка у scan_market: {e}", flush=True)
+        print(f"❌ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
+
         
         
 async def main():
