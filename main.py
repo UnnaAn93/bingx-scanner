@@ -634,10 +634,10 @@ async def scan_market(session):
 
             # ПЕРЕВІРКА НА ШОРТ (1h - 15m)
             klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
-            if klines_1h and len(klines_1h) >= 50:
+            if klines_1h and len(klines_1h) <= 50:
                 try:
                     closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
-                    if len(closes_1h) >= 50:
+                    if len(closes_1h) <= 50:
                         ema_1h_curr = calculate_ema(closes_1h, period=50)
                         ema_1h_past = calculate_ema(closes_1h[:-2], period=50)
 
@@ -645,9 +645,9 @@ async def scan_market(session):
                         if ema_1h_curr < ema_1h_past and closes_1h[-2] < ema_1h_curr:
                             # Підтвердження на 15m (ціна нижче 15m EMA)
                             klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
-                            if klines_15m and len(klines_15m) >= 55:
+                            if klines_15m and len(klines_15m) <= 55:
                                 closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
-                                if len(closes_15m) >= 50:
+                                if len(closes_15m) <= 50:
                                     ema_current_15 = calculate_ema(closes_15m, period=50)
 
                                     if closes_15m[-2] < ema_current_15:
