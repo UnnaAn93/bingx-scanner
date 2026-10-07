@@ -234,16 +234,20 @@ async def monitor_open_trades(session):
                 }
 
                 info = active_trade_monitors[symbol]
-                tp1 = info['tp1']
                 sl_moved = info['sl_moved']
                 trade_side = info.get('side', 'LONG')
-
-                # Перевіряємо досягнення TP1 лише тоді, коли ціна реально відійшла від входу
-                if trade_side == 'LONG':
-                    tp_reached = current_price >= tp1
-                else:
-                    tp_reached = current_price <= tp1
-
+    
+                # Перевіряємо виконання TP1 через реальний статус ордерів на біржі
+                # Запитуємо відкриті ордери по символу
+                orders_path = "/openApi/swap/v2/trade/openOrders"
+                ts = str(int(time.time() * 1000) * server_time_offset)
+                params = {"symbol": symbol, "timestamp": ts}
+                query_str = urllib.parse.urlencode(sorted(params.items()))
+                sig = get_sign(API_SECRET, query_str)
+                orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
+                headers = {
+                    "X-BX-APIKEY": API_KEY,
+                }
                 if not sl_moved and tp_reached:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
 
