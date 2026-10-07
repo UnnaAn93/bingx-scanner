@@ -287,7 +287,7 @@ async def monitor_open_trades(session):
                     quantity_str = str(p.get('positionAmt', '0'))
                     pos_side = info.get('side', 'LONG')
 
-                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side, headers=headers)
+                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
                     
                     if success:
                         active_trade_monitors[symbol]['sl_moved'] = True
