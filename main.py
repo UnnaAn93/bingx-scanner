@@ -349,7 +349,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
                 max_allowed = atr_val * 1.0
                 if distance_to_ema > max_allowed:
                     print(f"⚠️ Лонг по {symbol} отменен: цена слишком далеко от EMA (расстояние {distance_to_ema:.4f} > {max_allowed:.4f})", flush=True)
-                    return
+                    return False
         else:
             stop_loss_price = entry_price * 0.98
 
@@ -379,7 +379,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
                 max_allowed = atr_val * 1.0
                 if distance_to_ema > max_allowed:
                     print(f"⚠️ Шорт по {symbol} отменен: цена слишком далеко от EMA (расстояние {distance_to_ema:.4f} > {max_allowed:.4f})", flush=True)
-                    return
+                    return False
         else:
             stop_loss_price = entry_price * 1.01
 
