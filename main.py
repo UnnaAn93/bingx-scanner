@@ -626,7 +626,7 @@ async def scan_market(session):
                                         if success:
                                             trade_opened_in_this_cycle = True
                                             await asyncio.sleep(5)
-                                            break
+                                            return
                                         else:
                                             continue
                 except Exception:
@@ -656,7 +656,7 @@ async def scan_market(session):
                                 if success:
                                     trade_opened_in_this_cycle = True
                                     await asyncio.sleep(5)
-                                    break
+                                    return
                                 else:
                                     continue
                 except Exception:
