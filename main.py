@@ -428,15 +428,25 @@ async def scan_market(session):
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
+        if open_pos is None:
             open_pos = []
 
+        # Жорсткий підрахунок кількості позицій з ризиком
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym in active_trade_monitors and not active_trade_monitors[sym].get('sl_moved', False):
+            pos_side = p.get("positionSide")
+            
+            # Шукаємо в моніторингу; якщо позиція є, але sl_moved ще False — це ризик
+            if sym in active_trade_monitors and active_trade_monitors[sym].get('side') == pos_side:
+                if not active_trade_monitors[sym].get('sl_moved', False):
+                    risk_positions_count += 1
+            else:
+                # Якщо позиція є на біржі, але її немає в активному моніторингу (абощо), рахуємо її як ризикову за замовчуванням
                 risk_positions_count += 1
 
         if risk_positions_count >= MAX_RISK_POSITIONS:
+            print(f"🛑 Зупинка сканування: вже є {risk_positions_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
@@ -458,6 +468,8 @@ async def scan_market(session):
                 continue
 
             symbol = ticker.get("symbol", "")
+            
+            # Перевіряємо чи вже є відкрита позиція по цій мо конкретної сторони
             if any(p.get("symbol") == symbol for p in open_pos):
                 continue
             if not symbol.endswith("USDT"):
@@ -470,7 +482,7 @@ async def scan_market(session):
                 else:
                     del coin_cooldowns[symbol]
 
-            # Виключення: бтс, лтс, NCF, NCS, USD-USDT, великі капітали
+            # Виключення
             excluded_substrings = ["BTC", "LTC", "NCF", "NCS", "USD-USDT", "BNB", "ETH", "SOL", "XRP"]
             if any(sub in symbol for sub in excluded_substrings):
                 continue
@@ -518,7 +530,7 @@ async def scan_market(session):
             c_15m = float(candle_15m['close'])
             current_price = float(ticker.get("lastPrice", c_15m))
 
-            # --- 1. ПЕРЕВІРКА УМОВ ДЛЯ LONG ---
+            # --- ПЕРЕВІРКА LONG ---
             if (ema_th_curr > ema_th_past and min(o_th, c_th) > ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
                 ema_current_15 > ema_past_15 and min(o_15m, c_15m) > ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
                 
@@ -529,7 +541,7 @@ async def scan_market(session):
                 else:
                     coin_cooldowns[symbol] = time.time() + 300
 
-            # --- 2. ПЕРЕВІРКА УМОВ ДЛЯ SHORT ---
+            # --- ПЕРЕВІРКА SHORT ---
             if (ema_th_curr < ema_th_past and max(o_th, c_th) < ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
                 ema_current_15 < ema_past_15 and max(o_15m, c_15m) < ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
                 
