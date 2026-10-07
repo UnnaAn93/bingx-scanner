@@ -17,7 +17,7 @@ API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-RENDER_URL = os.environ.get("RENDER_URL", "https://bingx-scanner-djbf.onrender.com")
+RENDER_URL = os.environ.get("RENDER_URL", "")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
 LEVERAGE = 10
@@ -26,7 +26,7 @@ MAX_RISK_POSITIONS = 2
 server_time_offset = 0
 
 active_trade_monitors = {}
-coin_cooldowns = {}  # Словник для паузи монет після помилок {symbol: timestamp}
+coin_cooldowns = {}  # {symbol: timestamp паузи після помилки}
 
 # --- KEEP-ALIVE SERVER (для Render) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -125,11 +125,11 @@ def calculate_atr(klines, period=14):
     recent_tr = tr_list[-period:]
     return sum(recent_tr) / len(recent_tr)
 
-# --- РОБОТА З БІРЖЕЮ ---
-async def set_leverage(session, symbol):
+# --- РОБОТА З БІРЖЕЮ (ПЛЕЧЕ ТА ОРДЕРИ) ---
+async def set_leverage(session, symbol, side):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    params = {"symbol": symbol, "leverage": LEVERAGE, "side": "BOTH", "timestamp": ts}
+    params = {"symbol": symbol, "leverage": LEVERAGE, "side": side, "timestamp": ts}
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
@@ -216,10 +216,10 @@ async def get_open_positions(session):
 async def execute_trade(session, symbol, entry_price, side="LONG"):
     print(f"🔄 Спроба відкриття позиції ({side}) по {symbol} за ціною {entry_price}", flush=True)
     
-    # 1. Встановлення плеча
-    lev_success, lev_err = await set_leverage(session, symbol)
+    # Встановлюємо плече 10 з урахуванням Hedge mode (side)
+    lev_success, lev_err = await set_leverage(session, symbol, side)
     if not lev_success:
-        err_msg = f"❌ Помилка встановлення плеча по {symbol}: {lev_err}"
+        err_msg = f"❌ Помилка встановлення плеча по {symbol} ({side}): {lev_err}"
         print(err_msg, flush=True)
         asyncio.create_task(send_telegram(session, err_msg))
         return False
@@ -229,7 +229,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
         min_low = min(lows) if lows else entry_price * 0.98
-        stop_loss_price = min_low * 0.997  # Мінімум за 40 свічок + 0.3% (вниз для лонга)
+        stop_loss_price = min_low * 0.997  # Мінімум за 40 свічок + 0.3%
         risk = entry_price - stop_loss_price
         if risk <= 0:
             risk = entry_price * 0.02
@@ -345,7 +345,7 @@ async def bingx_websocket_listener(session):
 
             ws_url = f"wss://open-api-swap.bingx.com/swap-market?listenKey={listen_key}"
             async with websockets.connect(ws_url) as websocket:
-                print("🔌 WebSocket підключено до BingX для відстеження ордерів", flush=True)
+                print("🔌 WebSocket підключено до BingX для відстеження тейків", flush=True)
                 while True:
                     message = await websocket.recv()
                     if "ORDER_TRADE_UPDATE" in message or "order" in message:
@@ -386,13 +386,13 @@ async def bingx_websocket_listener(session):
                                                 success, sl_err = await place_stop_loss_order(session, symbol, info.get('quantity_str'), info.get('entry_price'), info.get('side'))
                                                 if success:
                                                     active_trade_monitors[symbol]['sl_moved'] = True
-                                                    asyncio.create_task(send_telegram(session, f"🛡️ ТР1 досягнуто по {symbol} (підтверджено через WebSocket)! Стоп перенесено в безубиток."))
+                                                    asyncio.create_task(send_telegram(session, f"🛡️ ТР1 досягнуто по {symbol} (підтверджено через WebSocket)! Стоп перенесено в безубиток (ТВХ)."))
                                                 else:
                                                     asyncio.create_task(send_telegram(session, f"⚠️ ТР1 досягнуто по {symbol}, але помилка перенесення в БУ: {sl_err}"))
 
                                 if symbol not in open_symbols:
                                     del active_trade_monitors[symbol]
-                                    asyncio.create_task(send_telegram(session, f"❌ Позиція {symbol} закрита повністю, видалено зі звіту."))
+                                    asyncio.create_task(send_telegram(session, f"❌ Позиція {symbol} повністю закрита, видалено зі звіту."))
 
                         except Exception as inner_e:
                             print(f"⚠️ Помилка обробки WebSocket повідомлення: {inner_e}", flush=True)
@@ -463,14 +463,14 @@ async def scan_market(session):
             if not symbol.endswith("USDT"):
                 continue
             
-            # Перевірка чи монета на паузі після помилки (5 хвилин)
+            # Перевірка пауз після помилок (5 хвилин)
             if symbol in coin_cooldowns:
                 if current_time_ts < coin_cooldowns[symbol]:
                     continue
                 else:
                     del coin_cooldowns[symbol]
 
-            # Виключення згідно з пунктом 4
+            # Виключення: бтс, лтс, NCF, NCS, USD-USDT, великі капітали
             excluded_substrings = ["BTC", "LTC", "NCF", "NCS", "USD-USDT", "BNB", "ETH", "SOL", "XRP"]
             if any(sub in symbol for sub in excluded_substrings):
                 continue
@@ -518,7 +518,7 @@ async def scan_market(session):
             c_15m = float(candle_15m['close'])
             current_price = float(ticker.get("lastPrice", c_15m))
 
-            # --- ПЕРЕВІРКА УМОВ ДЛЯ LONG ---
+            # --- 1. ПЕРЕВІРКА УМОВ ДЛЯ LONG ---
             if (ema_th_curr > ema_th_past and min(o_th, c_th) > ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
                 ema_current_15 > ema_past_15 and min(o_15m, c_15m) > ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
                 
@@ -527,10 +527,9 @@ async def scan_market(session):
                     trade_opened_in_this_cycle = True
                     break
                 else:
-                    # Ставимо монету на паузу на 5 хвилин у разі помилки
                     coin_cooldowns[symbol] = time.time() + 300
 
-            # --- ПЕРЕВІРКА УМОВ ДЛЯ SHORT ---
+            # --- 2. ПЕРЕВІРКА УМОВ ДЛЯ SHORT ---
             if (ema_th_curr < ema_th_past and max(o_th, c_th) < ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
                 ema_current_15 < ema_past_15 and max(o_15m, c_15m) < ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
                 
@@ -539,7 +538,6 @@ async def scan_market(session):
                     trade_opened_in_this_cycle = True
                     break
                 else:
-                    # Ставимо монету на паузу на 5 хвилин у разі помилки
                     coin_cooldowns[symbol] = time.time() + 300
 
     except Exception as e:
@@ -560,7 +558,7 @@ async def main():
         asyncio.create_task(bingx_websocket_listener(session))
         asyncio.create_task(send_periodic_report(session))
         
-        print("🚀 Бот запущено за оновленою логікою!", flush=True)
+        print("🚀 Бот запущено за повною логікою!", flush=True)
         await market_scanner_loop(session)
 
 if __name__ == "__main__":
