@@ -12,6 +12,7 @@ import urllib.parse
 import math
 import websockets
 
+# --- КОНСТАНТИ ТА НАЛАШТУВАННЯ ---
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -26,19 +27,20 @@ server_time_offset = 0
 
 active_trade_monitors = {}
 
+# --- KEEP-ALIVE SERVER (для Render) ---
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Bot is alive and running")
-
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
 def keep_alive():
@@ -56,8 +58,9 @@ async def self_ping(session):
             except Exception as e:
                 print(f"⚠️ Помилка self-ping: {e}", flush=True)
 
+# --- ДОПОМІЖНІ ФУНКЦІЇ ПІДПИСУ ТА TELEGRAM ---
 def get_sign(secret_key: str, payload: str) -> str:
-    return hmac.new(secret_key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
 async def send_telegram(session, message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -66,23 +69,126 @@ async def send_telegram(session, message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         async with session.post(url, json=payload) as resp:
-            res_text = await resp.text()
-            if resp.status != 200:
-                print(f"⚠️️ Telegram API помилка: {resp.status} - {res_text}", flush=True)
+            await resp.text()
     except Exception as e:
-        print(f"⚠️ Telegram error: {e}", flush=True)
+        print(f"⚠️ Помилка надсилання в Telegram: {e}", flush=True)
 
-async def sync_time(session):
+# --- СИНХРОНІЗАЦІЯ ЧАСУ ---
+async def sync_server_time(session):
     global server_time_offset
     try:
-        async with session.post(f"{BINGX_BASE_URL}/openApi/swap/v1/server/time") as resp:
+        url = f"{BINGX_BASE_URL}/openApi/swap/v2/server/time"
+        async with session.get(url) as resp:
             data = await resp.json()
-            server_time = data.get("serverTime", int(time.time() * 1000))
-            local_time = int(time.time() * 1000)
-            server_time_offset = server_time - local_time
-            print(f"⏱ Час синхронізовано. Offset: {server_time_offset} ms", flush=True)
+            if data.get("code") == 0:
+                server_time = data.get("data", {}).get("serverTime", int(time.time() * 1000))
+                local_time = int(time.time() * 1000)
+                server_time_offset = server_time - local_time
+                print(f"🕒 Час синхронізовано. Зміщення: {server_time_offset} мс", flush=True)
     except Exception as e:
         print(f"⚠️ Помилка синхронізації часу: {e}", flush=True)
+
+# --- ІНДИКАТОРИ ТА КЛІЙНИ ---
+async def get_klines(session, symbol, interval="15m", limit=60):
+    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        async with session.get(url) as resp:
+            data = await resp.json()
+            if data.get("code") == 0:
+                return data.get("data", [])
+    except Exception as e:
+        print(f"⚠️ Помилка отримання свічок для {symbol}: {e}", flush=True)
+    return []
+
+def calculate_ema(closes, period=50):
+    if not closes or len(closes) < period:
+        return None
+    multiplier = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+    for price in closes[period:]:
+        ema = (price - ema) * multiplier + ema
+    return ema
+
+def calculate_atr(klines, period=14):
+    if not klines or len(klines) < period + 1:
+        return 0
+    tr_list = []
+    for i in range(1, len(klines)):
+        high = float(klines[i]['high'])
+        low = float(klines[i]['low'])
+        prev_close = float(klines[i-1]['close'])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr_list.append(tr)
+    if not tr_list:
+        return 0
+    recent_tr = tr_list[-period:]
+    return sum(recent_tr) / len(recent_tr)
+
+# --- РОБОТА З БІРЖЕЮ (КРЕДИТНЕ ПЛЕЧЕ, СТОПИ, ТЕЙКИ) ---
+async def set_leverage(session, symbol):
+    path = "/openApi/swap/v2/trade/leverage"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    params = {"symbol": symbol, "leverage": LEVERAGE, "side": "BOTH", "timestamp": ts}
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        async with session.post(url, headers=headers) as resp:
+            await resp.json()
+    except Exception as e:
+        print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
+
+async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_side):
+    path = "/openApi/swap/v2/trade/order"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    stop_side = "SELL" if pos_side == "LONG" else "BUY"
+    params = {
+        "positionSide": pos_side,
+        "quantity": quantity_str,
+        "side": stop_side,
+        "symbol": symbol,
+        "timestamp": ts,
+        "type": "STOP_MARKET",
+        "stopPrice": f"{stop_price:.5f}",
+        "workingType": "MARK_PRICE"
+    }
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        async with session.post(url, headers=headers) as resp:
+            res = await resp.json()
+            print(f"🛡️ Відповідь біржі на Stop-Loss для {symbol}: {res}", flush=True)
+            return res.get("code") == 0
+    except Exception as e:
+        print(f"⚠️ Помилка створення стопу: {e}", flush=True)
+        return False
+
+async def place_tp_order(session, sym, price_val, qty_val, side, tp_price):
+    path = "/openApi/swap/v2/trade/order"
+    ts = str(int(time.time() * 1000) + server_time_offset)
+    params = {
+        "positionSide": side,
+        "quantity": str(qty_val),
+        "side": "SELL" if side == "LONG" else "BUY",
+        "symbol": sym,
+        "timestamp": ts,
+        "type": "LIMIT",
+        "price": f"{price_val:.5f}"
+    }
+    query_str = urllib.parse.urlencode(sorted(params.items()))
+    sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        async with session.post(url, headers=headers) as resp:
+            res = await resp.json()
+            return res.get("code") == 0
+    except Exception as e:
+        print(f"⚠️ Помилка створення TP: {e}", flush=True)
+        return False
 
 async def get_open_positions(session):
     path = "/openApi/swap/v2/user/positions"
@@ -90,302 +196,59 @@ async def get_open_positions(session):
     params = {"timestamp": ts}
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
+    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {"X-BX-APIKEY": API_KEY}
     try:
-        async with session.get(f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}", headers=headers) as resp:
-            res = await resp.json()
-            if res.get("code") == 0:
-                positions = [p for p in res.get("data", []) if float(p.get("positionAmt", 0)) != 0]
-                return positions
+        async with session.get(url, headers=headers) as resp:
+            data = await resp.json()
+            if data.get("code") == 0:
+                return [p for p in data.get("data", []) if float(p.get("positionAmt", 0)) != 0]
     except Exception as e:
         print(f"⚠️ Помилка отримання позицій: {e}", flush=True)
     return []
 
-async def set_leverage(session, symbol):
-    path = "/openApi/swap/v2/trade/leverage"
-    for pos_side in ["LONG", "SHORT"]:
-        ts = str(int(time.time() * 1000) + server_time_offset)
-        params = {
-            "leverage": str(LEVERAGE),
-            "positionSide": pos_side,
-            "symbol": symbol,
-            "timestamp": ts
-        }
-        query_str = urllib.parse.urlencode(sorted(params.items()))
-        sig = get_sign(API_SECRET, query_str)
-        url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
-        headers = {
-            "X-BX-APIKEY": API_KEY,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        try:
-            async with session.post(url, headers=headers) as resp:
-                res = await resp.json()
-                print(f"⚙️ Встановлення плеча {LEVERAGE}x ({pos_side}) для {symbol}: {res}", flush=True)
-        except Exception as e:
-            print(f"⚠️ Помилка встановлення плеча: {e}", flush=True)
-
-async def get_klines(session, symbol, interval="15m", limit=60):
-    url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        async with session.get(url) as resp:
-            data = await resp.json()
-            if not isinstance(data, dict) or data.get("code") != 0:
-                return []
-            klines = data.get("data", [])
-            if not isinstance(klines, list) or len(klines) == 0:
-                return []
-            return klines
-    except Exception as e:
-        print(f"⚠️ Виняток у get_klines для {symbol}: {e}", flush=True)
-        return []
-
-async def place_stop_loss_order(session, symbol, quantity_str, stop_price, position_side="LONG"):
-    await asyncio.sleep(1.5)
-    path = "/openApi/swap/v2/trade/order"
-    ts = str(int(time.time() * 1000) + server_time_offset)
-    
-    # Кількість обов'язково додатна (для шортів positionAmt буває з мінусом)
-    clean_qty = str(abs(float(quantity_str)))
-    
-    # Протилежний бік для закриття позиції ринковим стопом
-    side_to_close = "SELL" if position_side == "LONG" else "BUY"
-
-    params = {
-        "positionSide": position_side,
-        "quantity": clean_qty,
-        "side": side_to_close,
-        "symbol": symbol,
-        "timestamp": ts,
-        "type": "STOP_MARKET",
-        "stopPrice": str(stop_price),
-        "workingType": "MARK_PRICE"
-    }
-    
-    query_str = urllib.parse.urlencode(sorted(params.items()))
-    sig = get_sign(API_SECRET, query_str)
-    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
-    headers = {
-        "X-BX-APIKEY": API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    try:
-        async with session.post(url, headers=headers) as resp:
-            res = await resp.json()
-            print(f"🛡 Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
-            return res.get("code") == 0
-    except Exception as e:
-        print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
-        return False
-
-    query_str = urllib.parse.urlencode(sorted(params.items()))
-    sig = get_sign(API_SECRET, query_str)
-    url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
-    headers = {
-        "X-BX-APIKEY": API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    try:
-        async with session.post(url, headers=headers) as resp:
-            res = await resp.json()
-            print(f"🛡 Відповідь біржі на встановлення Stop-Loss для {symbol}: {res}", flush=True)
-            return res.get("code") == 0
-    except Exception as e:
-        print(f"⚠️ Помилка створення стоп-лосу для {symbol}: {e}", flush=True)
-        return False
-
-async def monitor_open_trades(session):
-    open_pos = await get_open_positions(session)
-    if not open_pos:
-        active_trade_monitors.clear()
-        return
-
-    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
-    try:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                return
-            data = await resp.json()
-            if not isinstance(data, dict) or data.get("code") != 0:
-                return
-
-            tickers = {t.get("symbol"): float(t.get("lastPrice", 0)) for t in data.get("data", []) if isinstance(t, dict)}
-
-            for p in open_pos:
-                symbol = p.get("symbol")
-                entry_price = float(p.get("avgPrice", 0))
-                if entry_price == 0:
-                    continue
-                if symbol in active_trade_monitors and active_trade_monitors[symbol].get('sl_moved', False):
-                    continue
-                current_price = tickers.get(symbol, 0)
-                if current_price == 0:
-                    continue
-
-                if symbol not in active_trade_monitors:
-                    risk = entry_price * 0.02
-                    p_amt = float(p.get("positionAmt", 0))
-                    pos_side = p.get("positionSide", "LONG" if p_amt > 0 else "SHORT")
-                    tp1 = entry_price + risk if pos_side == "LONG" else entry_price - risk
-
-                    active_trade_monitors[symbol] = {
-                        'entry_price': entry_price,
-                        'tp1': tp1,
-                        'side': pos_side,
-                        'sl_moved': False
-                }
-
-                info = active_trade_monitors[symbol]
-                sl_moved = info['sl_moved']
-                trade_side = info.get('side', 'LONG')
-    
-                # Перевіряємо виконання TP1 через реальний статус ордерів на біржі
-                info = active_trade_monitors[symbol]
-                sl_moved = info['sl_moved']
-                tp1 = info['tp1']  # Беремо збережений TP1
-    
-                # 1. Отримуємо відкриті ордери з біржі
-                orders_path = "/openApi/swap/v2/trade/openOrders"
-                ts = str(int(time.time() * 1000) * server_time_offset)
-                params = {"symbol": symbol, "timestamp": ts}
-                query_str = urllib.parse.urlencode(sorted(params.items()))
-                sig = get_sign(API_SECRET, query_str)
-                orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
-                headers = {
-                    "X-BX-APIKEY": API_KEY,
-               }
-    
-                async with session.get(orders_url, headers=headers) as o_resp:
-                    o_data = await o_resp.json()
-                    if o_data.get("code") == 0:
-                        orders_list = o_data.get("data", {}).get("orders", [])
-            
-                        # Перевіряємо, чи є наш лімітний ордер TP1 серед відкритих на біржі
-                        # (Порівнюємо ціну ордера з нашим tp1)
-                        tp_still_active = any(float(o.get("price", 0)) == tp1 for o in orders_list)
-            
-                        # Якщо ордер TP1 зник із відкритих — значить, він виконався!
-                        tp_reached = not tp_still_active
-
-                        old_order_id = None
-                        for ord_item in orders_list:
-                            if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
-                                old_order_id = ord_item.get("orderId")
-                    
-                            # Скасовуємо старий стоп тільки якщо він реально існує
-                            if old_order_id:
-                                del_path = "/openApi/swap/v2/trade/order"
-                                ts = str(int(time.time() * 1000) - server_time_offset)
-                                del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": ts}
-                                del_query = urllib.parse.urlencode(sorted(del_params.items()))
-                                del_sig = get_sign(API_SECRET, del_query)
-                                del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
-                                async with session.delete(del_url, headers=headers) as d_resp:
-                                    d_res = await d_resp.json()
-                                    print(f"🛡 Скасовано старий стоп для {symbol}: {d_res}", flush=True)
-                            else:
-                                print(f"⚠️ Старий стоп-ордер для {symbol} не знайдено на біржі, пропускаємо скасування", flush=True)
-
-                    # 2. Виставляємо новий стоп-лос на ціну входу (безубиток)
-                    quantity_str = str(p.get('positionAmt', '0'))
-                    pos_side = info.get('side', 'LONG')
-
-                    success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
-                    
-                    if success:
-                        active_trade_monitors[symbol]['sl_moved'] = True
-                        asyncio.create_task(send_telegram(session, f"🛡 TP1 досягнуто по {symbol}! Стоп перенесено в безубиток."))
-                    else:
-                        print(f"⚠️ Помилка встановлення стопу в безубиток для {symbol}", flush=True)
-
-            open_symbols = [p.get("symbol") for p in open_pos]
-            for monitored_sym in list(active_trade_monitors.keys()):
-                if monitored_sym not in open_symbols:
-                    del active_trade_monitors[monitored_sym]
-                    print(f"❌ Позиція {monitored_sym} закрита, видалено з моніторингу.", flush=True)
-                    asyncio.create_task(send_telegram(session, f"❌ Позиція {monitored_sym} закрита (спрацював стоп або тейк)."))
-
-    except Exception as e:
-        print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
-        
-
-async def send_periodic_report(session):
-    while True:
-        await asyncio.sleep(900)
-        try:
-            positions = await get_open_positions(session)
-            if not positions:
-                report = "📊 Періодичний звіт: наразі немає відкритих позицій."
-            else:
-                report = "📊 Періодичний звіт по активних позиціях:\n"
-                for p in positions:
-                    sym = p.get("symbol")
-                    amt = p.get("positionAmt")
-                    entry = p.get("avgPrice")
-                    pnl = p.get("unrealizedProfit", "0")
-                    status = "🛡 Безубиток" if sym in active_trade_monitors and active_trade_monitors[sym]['sl_moved'] else "⏳ В роботі"
-                    report += f"• {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
-            await send_telegram(session, report)
-        except Exception as e:
-            print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
-
+# --- ВИКОНАННЯ УГОДИ ---
 async def execute_trade(session, symbol, entry_price, side="LONG"):
-    print(f"🔄 Спроба реального відкриття позиції ({side}) по {symbol} (Ціна: {entry_price})", flush=True)
+    print(f"🔄 Спроба відкриття позиції ({side}) по {symbol} за ціною {entry_price}", flush=True)
     await set_leverage(session, symbol)
 
     klines = await get_klines(session, symbol, interval="15m", limit=40)
     
     if side == "LONG":
-        if klines and len(klines) >= 40:
-            lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
-            stop_loss_price = min(lows) * 0.997 if lows else entry_price * 0.98
-        else:
-            stop_loss_price = entry_price * 0.98
-
+        lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
+        stop_loss_price = (min(lows) * 0.997) if lows else (entry_price * 0.98)
         risk = entry_price - stop_loss_price
         if risk <= 0:
             risk = entry_price * 0.02
             stop_loss_price = entry_price - risk
-
-        tp1_raw = entry_price + (risk * 1.0)
-        tp1 = math.ceil(tp1_raw * 100000) / 100000
-        tp2 = entry_price + (risk * 2.0)
-        tp3 = entry_price + (risk * 3.0)
-        
+        tp1 = math.ceil((entry_price + risk * 1.0) * 100000) / 100000
+        tp2 = entry_price + risk * 2.0
+        tp3 = entry_price + risk * 3.0
         order_side = "BUY"
-        tp_side = "SELL"
-    else:  # SHORT
-        if klines and len(klines) >= 40:
-            highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
-            stop_loss_price = max(highs) * 1.003 if highs else entry_price * 1.02
-        else:
-            stop_loss_price = entry_price * 1.02
-
+        tp_side = "LONG"
+    else:
+        highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
+        stop_loss_price = (max(highs) * 1.003) if highs else (entry_price * 1.02)
         risk = stop_loss_price - entry_price
         if risk <= 0:
             risk = entry_price * 0.02
             stop_loss_price = entry_price + risk
-
-        tp1_raw = entry_price - (risk * 1.0)
-        tp1 = math.floor(tp1_raw * 100000) / 100000
-        tp2 = entry_price - (risk * 2.0)
-        tp3 = entry_price - (risk * 3.0)
-        
+        tp1 = math.ceil((entry_price - risk * 1.0) * 100000) / 100000
+        tp2 = entry_price - risk * 2.0
+        tp3 = entry_price - risk * 3.0
         order_side = "SELL"
-        tp_side = "BUY"
+        tp_side = "SHORT"
 
     try:
         target_usd = MARGIN_USD * LEVERAGE
         total_quantity = target_usd / entry_price
         quantity_str = f"{total_quantity:.4f}"
         if float(quantity_str) == 0:
-            print(f"⚠️ Занадто мала кількість для ордера {symbol}", flush=True)
             return False
     except Exception as e:
-        print(f"⚠️ Помилка розрахунку кількості: {e}", flush=True)
+        print(f"⚠️ Помилка обчислення об'єму: {e}", flush=True)
         return False
 
-    # Розподіл об'єму на частини (40% : 30% : 30%)
     total_amt = float(quantity_str)
     q1 = round(total_amt * 0.4, 4)
     q2 = round(total_amt * 0.3, 4)
@@ -401,155 +264,150 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         "timestamp": ts,
         "type": "MARKET"
     }
-
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
-    headers = {
-        "X-BX-APIKEY": API_KEY,
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
+    headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
 
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
-            print(f"📥 Відповідь біржа на відкриття ордера {symbol}: {res}", flush=True)
-
             if res.get("code") == 0:
                 await asyncio.sleep(1.5)
-
-                # 1. Встановлюємо початковий стоп-лос
-                sl_success = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
-
-                # 2. Встановлюємо лімітні тейк-профіти
+                await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
                 await place_tp_order(session, symbol, tp1, q1, tp_side, tp1)
                 await place_tp_order(session, symbol, tp2, q2, tp_side, tp2)
                 await place_tp_order(session, symbol, tp3, q3, tp_side, tp3)
 
-                # 3. Зберігаємо моніторинг активної угоди
                 active_trade_monitors[symbol] = {
                     'entry_price': entry_price,
                     'tp1': tp1,
                     'side': side,
                     'sl_moved': False
                 }
-
-                # 4. Формуємо сповіщення для Telegram
-                sl_status_text = "✅ Встановлено на біржі" if sl_success else "⚠️ Помилка встановлення на біржі"
-                msg = (
-                    f"🟢 Успішно відкрито {side} по {symbol}\n"
-                    f"💵 Ціна входу (TBX): {entry_price:.5f}\n"
-                    f"📊 Об'єм: {quantity_str}\n"
-                    f"🛑 Стоп-лос: {stop_loss_price:.5f} ({sl_status_text})\n"
-                    f"🎯 ТР1 (40% | T:1): {tp1:.5f}\n"
-                    f"🎯 ТР2 (30% | T:2): {tp2:.5f}\n"
-                    f"🎯 ТР3 (30% | T:3): {tp3:.5f}"
-                )
-                asyncio.create_task(send_telegram(session, msg))
+                asyncio.create_task(send_telegram(session, f"🟢 Успішно відкрито {side} по {symbol}\nЦіна: {entry_price:.5f}"))
                 return True
+    except Exception as e:
+        print(f"⚠️ Помилка відправки ринкового ордера: {e}", flush=True)
+    return False
+
+# --- МОНІТОРИНГ ВІДКРИТИХ УГОД ТА ТЕЙКІВ ---
+async def monitor_open_trades(session):
+    while True:
+        await asyncio.sleep(10)
+        try:
+            open_pos = await get_open_positions(session)
+            open_symbols = [p.get("symbol") for p in open_pos]
+
+            for p in open_pos:
+                symbol = p.get("symbol")
+                if symbol not in active_trade_monitors:
+                    continue
+                
+                info = active_trade_monitors[symbol]
+                if info.get('sl_moved', False):
+                    continue
+
+                tp1_target = info.get('tp1')
+                pos_side = info.get('side', 'LONG')
+                entry_price = info.get('entry_price')
+
+                # Отримуємо відкриті ордери на біржі
+                orders_path = "/openApi/swap/v2/trade/openOrders"
+                ts = str(int(time.time() * 1000) + server_time_offset)
+                params = {"symbol": symbol, "timestamp": ts}
+                query_str = urllib.parse.urlencode(sorted(params.items()))
+                sig = get_sign(API_SECRET, query_str)
+                orders_url = f"{BINGX_BASE_URL}{orders_path}?{query_str}&signature={sig}"
+                headers = {"X-BX-APIKEY": API_KEY}
+
+                async with session.get(orders_url, headers=headers) as o_resp:
+                    o_data = await o_resp.json()
+                    if o_data.get("code") == 0:
+                        orders_list = o_data.get("data", {}).get("orders", [])
+                        tp_still_active = any(abs(float(o.get("price", 0)) - tp1_target) < 0.00001 for o in orders_list)
+
+                        # Якщо лімітний ТП1 зник — значить він спрацював
+                        if not tp_still_active:
+                            old_order_id = None
+                            for ord_item in orders_list:
+                                if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
+                                    old_order_id = ord_item.get("orderId")
+
+                            # Скасовуємо старий стоп
+                            if old_order_id:
+                                del_path = "/openApi/swap/v2/trade/order"
+                                del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": str(int(time.time() * 1000) + server_time_offset)}
+                                del_query = urllib.parse.urlencode(sorted(del_params.items()))
+                                del_sig = get_sign(API_SECRET, del_query)
+                                del_uri = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
+                                async with session.delete(del_uri, headers=headers) as d_resp:
+                                    await d_resp.json()
+
+                            # Встановлюємо новий стоп-лос на ціну входу (безубиток)
+                            quantity_str = str(p.get("positionAmt"))
+                            success = await place_stop_loss_order(session, symbol, quantity_str, entry_price, pos_side)
+                            if success:
+                                active_trade_monitors[symbol]['sl_moved'] = True
+                                asyncio.create_task(send_telegram(session, f"🟢 ТР1 досягнуто по {symbol}! Стоп перенесено в безубиток."))
+
+            # Очищення моніторингу для закритих позицій
+            for monitored_sym in list(active_trade_monitors.keys()):
+                if monitored_sym not in open_symbols:
+                    del active_trade_monitors[monitored_sym]
+                    asyncio.create_task(send_telegram(session, f"❌ Позиція {monitored_sym} закрита, видалено з моніторингу."))
+
+        except Exception as e:
+            print(f"⚠️ Помилка у monitor_open_trades: {e}", flush=True)
+
+# --- ПЕРІОДИЧНИЙ ЗВІТ КОЖНІ 15 ХВИЛИН ---
+async def send_periodic_report(session):
+    while True:
+        await asyncio.sleep(900)
+        try:
+            positions = await get_open_positions(session)
+            if not positions:
+                report = "📊 Періодичний звіт: наразі немає відкритих позицій."
             else:
-                err_msg = res.get("msg", "Unknown error")
-                msg = f"❌ Помилка відкриття {symbol}: {err_msg}"
-                asyncio.create_task(send_telegram(session, msg))
-                return False
-    except Exception as e:
-                    print(f"⚠️ Виняток при проводці ордера для {symbol}: {e}", flush=True)
-                    return False
-        
+                report = "📊 Періодичний звіт по активних позиціях:\n"
+                for p in positions:
+                    sym = p.get("symbol")
+                    amt = p.get("positionAmt")
+                    entry = p.get("avgPrice")
+                    pnl = p.get("unrealizedProfit", "0")
+                    status = "🛡️ Б/У" if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False) else "⏳ Ризик"
+                    report += f"🔹 {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
+            asyncio.create_task(send_telegram(session, report))
+        except Exception as e:
+            print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
 
-
-# --- Глобальна функція створення тейк-профіту (розміщується на рівні файлу поза execute_trade) ---
-
-async def place_tp_order(session, sym, price_val, qty_val, side, tp_side):
-    """Створення лімітного тейк-профіту на Бінгхекс"""
-    try:
-        p_path = "/openApi/swap/v2/trade/order"
-        p_ts = str(int(time.time() * 1000) + server_time_offset)
-        p_params = {
-            "positionSide": side,
-            "quantity": str(qty_val),
-            "side": tp_side,
-            "symbol": sym,
-            "timestamp": p_ts,
-            "type": "LIMIT",
-            "price": f"{price_val:.5f}"
-        }
-        p_query = urllib.parse.urlencode(sorted(p_params.items()))
-        p_sig = get_sign(API_SECRET, p_query)
-        p_url = f"{BINGX_BASE_URL}{p_path}?{p_query}&signature={p_sig}"
-        p_headers = {
-            "X-BX-APIKEY": API_KEY,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        async with session.post(p_url, headers=p_headers) as p_resp:
-            p_res = await p_resp.json()
-            return p_res.get("code") == 0
-    except Exception as e:
-        print(f"❌ Помилка створення TP для {sym}: {e}", flush=True)
-        return False
-
-def calculate_ema(closes, period=50):
-    if not closes:
-        return 0
-    if len(closes) < period:
-        period = len(closes)
-    multiplier = 2 / (period + 1)
-    ema = sum(closes[:period]) / period
-    for price in closes[period:]:
-        ema = (price - ema) * multiplier + ema
-    return ema
-
-def calculate_atr(klines, period=14):
-    if len(klines) < period + 1:
-        return 0
-    tr_list = []
-    for i in range(1, len(klines)):
-        high = float(klines[i]["high"])
-        low = float(klines[i]["low"])
-        prev_close = float(klines[i - 1]["close"])
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        tr_list.append(tr)
-    if not tr_list:
-        return 0
-    recent_tr = tr_list[-period:]
-    return sum(recent_tr) / len(recent_tr)
-
+# --- СКАНУВАННЯ РИНКУ ---
 async def scan_market(session):
-    print(f"🔄 Початок нового циклу сканування ринку...", flush=True)
+    print("🔍 Початок нового циклу сканування ринку...", flush=True)
     try:
         open_pos = await get_open_positions(session)
         if open_pos is None:
             open_pos = []
 
+        # Підрахунок кількості позицій з активним ризиком (у яких стоп ще НЕ в безубитку)
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False):
-                continue
-            risk_positions_count += 1
+            if sym in active_trade_monitors and not active_trade_monitors[sym].get('sl_moved', False):
+                risk_positions_count += 1
 
-        print(f"🛡️ Ризикових позицій (до TP1): {risk_positions_count} / Максимум на біржах: {MAX_RISK_POSITIONS}", flush=True)
         if risk_positions_count >= MAX_RISK_POSITIONS:
-            print(f"🛑 Скасування зупинено: досягнуто ліміт ризикових позицій.", flush=True)
             return
 
         url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         async with session.get(url) as resp:
             if resp.status != 200:
-                print(f"⚠️ Помилка запиту тікерів: статус {resp.status}", flush=True)
                 return
             data = await resp.json()
-            if not isinstance(data, dict) or data.get("code") != 0:
-                print(f"⚠️ Коректна відповідь тікерів від біржі: {data}", flush=True)
+            if data.get("code") != 0:
                 return
+            tickers = data.get("data", [])
 
-        tickers = data.get("data", [])
-        print(f"📊 Отримано тікерів від біржі: {len(tickers)}", flush=True)
-        if not isinstance(tickers, list):
-            return
-
-        scanned_count = 0
-        passed_ema_count = 0
         trade_opened_in_this_cycle = False
 
         for ticker in tickers:
@@ -561,151 +419,100 @@ async def scan_market(session):
             symbol = ticker.get("symbol", "")
             if any(p.get("symbol") == symbol for p in open_pos):
                 continue
-
             if not symbol.endswith("USDT"):
                 continue
-
-            if any(coin in symbol for coin in ["BNB", "BTC", "ETH", "SOL", "XRP", "LTC", "XAG", "XAU", "USD-USDT", "PLN", "DKK"]):
+            if any(coin in symbol for coin in ["BNB", "BTC", "ETH", "SOL", "XRP", "LTC"]):
                 continue
 
-            scanned_count += 1
-
             try:
-                current_price = float(ticker.get("lastPrice", 0))
-                volume_24h = float(ticker.get("volume", 0)) * current_price
+                volume_24h = float(ticker.get("volume", 0)) * float(ticker.get("lastPrice", 0))
             except (ValueError, TypeError):
                 continue
 
             if volume_24h < 300_000 or volume_24h > 30_000_000:
                 continue
 
-            # ==========================================
-            # ПЕРЕВІРКА НА ЛОНГ (1h - 15m)
-            # ==========================================
-            klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
-            if klines_1h and len(klines_1h) >= 50:
-                try:
-                    closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
-                    if len(closes_1h) >= 50:
-                        ema_1h_curr = calculate_ema(closes_1h, period=50)
-                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
-                        atr_1h = calculate_atr(klines_1h, period=14)
+            # --- 1 ГОДИНА ТАЙМФРЕЙМ ---
+            klines_th = await get_klines(session, symbol, interval="1h", limit=60)
+            if not klines_th or len(klines_th) < 50:
+                continue
+            
+            closes_th = [float(k['close']) for k in klines_th if isinstance(k, dict) and 'close' in k]
+            ema_th_curr = calculate_ema(closes_th, period=50)
+            ema_th_past = calculate_ema(closes_th[:-1], period=50)
+            atr_th = calculate_atr(klines_th, period=14)
 
-                        # Беремо попередню закриту свічку (індекс -2) та її open/close для перевірки тілом
-                        candle_1h = klines_1h[-2]
-                        o_1h = float(candle_1h['open'])
-                        c_1h = float(candle_1h['close'])
+            if not ema_th_curr or not ema_th_past:
+                continue
 
-                        # Умови лонгу: EMA росте, все тіло свічки вище EMA, і відстань до EMA не більша за ATR * 1.0
-                        if (ema_1h_curr > ema_1h_past and 
-                            min(o_1h, c_1h) > ema_1h_curr and 
-                            abs(c_1h - ema_1h_curr) <= atr_1h * 1.0):
-                            
-                            # Підтвердження на 15m
-                            klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
-                            if klines_15m and len(klines_15m) >= 50:
-                                closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
-                                if len(closes_15m) >= 50:
-                                    ema_current_15 = calculate_ema(closes_15m, period=50)
-                                    ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
-                                    atr_15m = calculate_atr(klines_15m, period=14)
+            candle_th = klines_th[-2]
+            o_th = float(candle_th['open'])
+            c_th = float(candle_th['close'])
 
-                                    candle_15m = klines_15m[-2]
-                                    o_15m = float(candle_15m['open'])
-                                    c_15m = float(candle_15m['close'])
+            # --- 15 ХВИЛИН ТАЙМФРЕЙМ ---
+            klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+            if not klines_15m or len(klines_15m) < 50:
+                continue
 
-                                    if (ema_current_15 > ema_past_15 and 
-                                        min(o_15m, c_15m) > ema_current_15 and 
-                                        abs(c_15m - ema_current_15) <= atr_15m * 1.0):
-                                        
-                                        passed_ema_count += 1
-                                        print(f"🔥 УСПІХ: Лонг по {symbol} (ціна закриття: {c_15m})", flush=True)
-                                        success = await execute_trade(session, symbol, c_15m, side="LONG")
-                                        if success:
-                                            trade_opened_in_this_cycle = True
-                                            await asyncio.sleep(5)
-                                            break
-                                    else:
-                                        continue
-                except Exception:
-                    pass
-                if trade_opened_in_this_cycle:
+            closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
+            ema_current_15 = calculate_ema(closes_15m, period=50)
+            ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
+            atr_15m = calculate_atr(klines_15m, period=14)
+
+            if not ema_current_15 or not ema_past_15:
+                continue
+
+            candle_15m = klines_15m[-2]
+            o_15m = float(candle_15m['open'])
+            c_15m = float(candle_15m['close'])
+            current_price = float(ticker.get("lastPrice", c_15m))
+
+            # --- ПЕРЕВІРКА УМОВ ДЛЯ LONG ---
+            # 1. EMA спрямована вгору на обох ТФ
+            # 2. Тіло свічки вище EMA на обох ТФ
+            # 3. Ціна не далі ніж ATR * 1.0 від EMA
+            if (ema_th_curr > ema_th_past and min(o_th, c_th) > ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
+                ema_current_15 > ema_past_15 and min(o_15m, c_15m) > ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
+                
+                success = await execute_trade(session, symbol, current_price, side="LONG")
+                if success:
+                    trade_opened_in_this_cycle = True
+                    await asyncio.sleep(3)
                     break
 
-            # ==========================================
-            # ПЕРЕВІРКА НА ШОРТ (1h - 15m)
-            # ==========================================
-            klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
-            if klines_1h and len(klines_1h) >= 50:
-                try:
-                    closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
-                    if len(closes_1h) >= 50:
-                        ema_1h_curr = calculate_ema(closes_1h, period=50)
-                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
-                        atr_1h = calculate_atr(klines_1h, period=14)
+            # --- ПЕРЕВІРКА УМОВ ДЛЯ SHORT ---
+            # 1. EMA спрямована вниз на обох ТФ
+            # 2. Тіло свічки нижче EMA на обох ТФ
+            # 3. Ціна не далі ніж ATR * 1.0 від EMA
+            if (ema_th_curr < ema_th_past and max(o_th, c_th) < ema_th_curr and abs(current_price - ema_th_curr) <= atr_th * 1.0 and
+                ema_current_15 < ema_past_15 and max(o_15m, c_15m) < ema_current_15 and abs(current_price - ema_current_15) <= atr_15m * 1.0):
+                
+                success = await execute_trade(session, symbol, current_price, side="SHORT")
+                if success:
+                    trade_opened_in_this_cycle = True
+                    await asyncio.sleep(3)
+                    break
 
-                        candle_1h = klines_1h[-2]
-                        o_1h = float(candle_1h['open'])
-                        c_1h = float(candle_1h['close'])
-
-                        # Умови шорту: EMA падає, все тіло свічки нижче EMA, і відстань до EMA не більша за ATR * 1.0
-                        if (ema_1h_curr < ema_1h_past and 
-                            max(o_1h, c_1h) < ema_1h_curr and 
-                            abs(c_1h - ema_1h_curr) <= atr_1h * 1.0):
-                            
-                            # Підтвердження на 15m
-                            klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
-                            if klines_15m and len(klines_15m) >= 50:
-                                closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
-                                if len(closes_15m) >= 50:
-                                    ema_current_15 = calculate_ema(closes_15m, period=50)
-                                    ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
-                                    atr_15m = calculate_atr(klines_15m, period=14)
-
-                                    candle_15m = klines_15m[-2]
-                                    o_15m = float(candle_15m['open'])
-                                    c_15m = float(candle_15m['close'])
-
-                                    if (ema_current_15 < ema_past_15 and 
-                                        max(o_15m, c_15m) < ema_current_15 and 
-                                        abs(c_15m - ema_current_15) <= atr_15m * 1.0):
-                                        
-                                        passed_ema_count += 1
-                                        print(f"🔥 УСПІХ: Шорт по {symbol} (ціна закриття: {c_15m})", flush=True)
-                                        success = await execute_trade(session, symbol, c_15m, side="SHORT")
-                                        if success:
-                                            trade_opened_in_this_cycle = True
-                                            await asyncio.sleep(5)
-                                            break
-                                    else:
-                                        continue
-                except Exception:
-                    pass
-
-        print(f"📊 Підсумки перевірки: (scanned_count), пройшли перевірку EMA: (passed_ema_count)", flush=True)
     except Exception as e:
-        print(f"❌ Помилка у scan_market: {e}", flush=True)
+        print(f"⚠️ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
+        
+async def market_scanner_loop(session):
+    while True:
+        await scan_market(session)
+        await asyncio.sleep(60)
 
-        
-        
+# --- ГОЛОВНА ТОЧКА ВХОДУ ---
 async def main():
     keep_alive()
     async with aiohttp.ClientSession() as session:
-        print("🚀 Запуск головної функції бота...", flush=True)
-        await sync_time(session)
-        print("🤖 Бот успішно запущено, переходимо до безперервного циклу.", flush=True)
+        await sync_server_time(session)
         asyncio.create_task(self_ping(session))
+        asyncio.create_task(monitor_open_trades(session))
         asyncio.create_task(send_periodic_report(session))
-
-        while True:
-            try:
-                await scan_market(session)
-                await monitor_open_trades(session)
-            except Exception as e:
-                print(f"❌ Помилка у загальному циклі: {e}", flush=True)
-            print("⏳ Очікування 60 секунд до наступного циклу...", flush=True)
-            await asyncio.sleep(60)
+        
+        print("🚀 Бот запущено у штатному режимі за новою логікою!", flush=True)
+        await market_scanner_loop(session)
 
 if __name__ == "__main__":
     asyncio.run(main())
