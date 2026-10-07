@@ -599,42 +599,38 @@ async def scan_market(session):
                 continue
 
             # =========================
-            # ПЕРЕВІРКА НА ЛОНГ (15m + 1m) - Фільтр 5-35% прибрано
-            # =========================
-            klines_1h = await get_klines(session, symbol, interval="1h", limit=60)
+            # ПЕРЕВІРКА НА ЛОНГ (1h - 15m)
+            klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
             if klines_1h and len(klines_1h) >= 50:
                 try:
                     closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
                     if len(closes_1h) >= 50:
                         ema_1h_curr = calculate_ema(closes_1h, period=50)
                         ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
-            
-                        # Умова лонга на 1h: висхідний тренд і ціна вище еми
-                        if ema_1h_curr >= ema_1h_past and current_price > ema_1h_curr:
-                
+
+                        # Годинна EMA росте і закриття свічки вище неї
+                        if ema_1h_curr > ema_1h_past and closes_1h[-1] >= ema_1h_curr:
                             # Підтвердження на 15m
-                            klines_15m = await get_klines(session, symbol, interval="15m", limit=60)
+                            klines_15m = await get_klines(session, symbol, interval='15m', limit=60)
                             if klines_15m and len(klines_15m) >= 55:
                                 closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
                                 if len(closes_15m) >= 50:
                                     ema_current_15 = calculate_ema(closes_15m, period=50)
-                        
-                                    if current_price >= ema_current_15:
-                                        passed_ema_count += 1
-                                        print(f"🔥 УСПІХ: лонг по {symbol} на 1h (ціна: {current_price})", flush=True)
-                            
-                                        success = await execute_trade(session, symbol, current_price, side="LONG")
+
+                                    if closes_15m[-1] >= ema_current_15:
+                                        passed_ema_count = 1
+                                        print(f"🔥 УСПІХ: Лонг по {symbol} на 1h (ціна закриття: {closes_15m[-1]})", flush=True)
+                                        success = await execute_trade(session, symbol, closes_15m[-1], side="LONG")
                                         if success:
                                             trade_opened_in_this_cycle = True
                                             await asyncio.sleep(5)
-                                            return
+                                            break
                                         else:
                                             continue
                 except Exception:
                     pass
-
-            if trade_opened_in_this_cycle:
-                break
+                    if trade_opened_in_this_cycle:
+                        break
 
             # ПЕРЕВІРКА НА ШОРТ (1h - 15m)
             klines_1h = await get_klines(session, symbol, interval='1h', limit=60)
