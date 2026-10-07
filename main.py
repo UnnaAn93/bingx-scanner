@@ -582,7 +582,7 @@ async def scan_market(session):
             if not symbol.endswith("USDT"):
                 continue
 
-            if any(coin in symbol for coin in ["BNB", "BTC", "ETH", "SOL", "XRP", "LTC", "XAG", "XAU", "USD-USDT"]):
+            if any(coin in symbol for coin in ["BNB", "BTC", "ETH", "SOL", "XRP", "LTC", "XAG", "XAU", "USD-USDT", "PLN", "DKK"]):
                 continue
                 
                 continue
