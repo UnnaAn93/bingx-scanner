@@ -540,7 +540,7 @@ async def scan_market(session):
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
-            if sym in active_trade_monitors and active_trade_monitors(sym).get('sl_moved', False):
+            if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False):
                 continue
             risk_positions_count += 1
 
