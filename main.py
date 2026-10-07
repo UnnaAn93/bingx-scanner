@@ -263,19 +263,25 @@ async def monitor_open_trades(session):
                         o_data = await o_resp.json()
                         if o_data.get("code") == 0:
                             orders_list = o_data.get("data", {}).get("orders", [])
+                        
+                            old_order_id = None
                             for ord_item in orders_list:
                                 if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
                                     old_order_id = ord_item.get("orderId")
-                                    
-                                    # Скасовуємо старий стоп
-                                    del_path = "/openApi/swap/v2/trade/order"
-                                    del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": str(int(time.time() * 1000) + server_time_offset)}
-                                    del_query = urllib.parse.urlencode(sorted(del_params.items()))
-                                    del_sig = get_sign(API_SECRET, del_query)
-                                    del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
-                                    async with session.delete(del_url, headers=headers) as d_resp:
-                                        d_res = await d_resp.json()
-                                        print(f"🗑 Скасовано старий стоп для {symbol}: {d_res}", flush=True)
+                        
+                            # Скасовуємо старий стоп тільки якщо він реально існує
+                            if old_order_id:
+                                del_path = "/openApi/swap/v2/trade/order"
+                                ts = str(int(time.time() * 1000) - server_time_offset)
+                                del_params = {"symbol": symbol, "orderId": str(old_order_id), "timestamp": ts}
+                                del_query = urllib.parse.urlencode(sorted(del_params.items()))
+                                del_sig = get_sign(API_SECRET, del_query)
+                                del_url = f"{BINGX_BASE_URL}{del_path}?{del_query}&signature={del_sig}"
+                                async with session.delete(del_url) as d_resp:
+                                    d_res = await d_resp.json()
+                                    print(f"🛡 Скасовано старий стоп для {symbol}: {d_res}", flush=True)
+                            else:
+                                print(f"⚠️ Старий стоп-ордер для {symbol} не знайдено на біржі, пропускаємо скасування", flush=True)
 
                     # 2. Виставляємо новий стоп-лос на ціну входу (безубиток)
                     quantity_str = str(p.get('positionAmt', '0'))
