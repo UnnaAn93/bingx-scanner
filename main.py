@@ -639,7 +639,7 @@ async def scan_market(session):
                     closes_1h = [float(k['close']) for k in klines_1h if isinstance(k, dict) and 'close' in k]
                     if len(closes_1h) >= 50:
                         ema_1h_curr = calculate_ema(closes_1h, period=50)
-                        ema_1h_past = calculate_ema(closes_1h[:-1], period=50)
+                        ema_1h_past = calculate_ema(closes_1h[:-2], period=50)
 
                         # Умова шорта: годинна EMA падає і закриття свічки нижче неї
                         if ema_1h_curr < ema_1h_past and closes_1h[-2] < ema_1h_curr:
