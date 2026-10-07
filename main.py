@@ -10,6 +10,7 @@ import threading
 import traceback
 import urllib.parse
 import math
+import websockets
 
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
