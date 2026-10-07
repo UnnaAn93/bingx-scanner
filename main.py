@@ -436,8 +436,8 @@ async def scan_market(session):
                 continue
             
             # Виключення згідно з пунктом 4
-            excluded_coins = ["BTCUSDT", "LTCUSDT", "NCF-USDT", "NCS-USDT"]
-            if symbol in excluded_coins or any(big in symbol for big in ["BNB", "BTC", "ETH", "SOL", "XRP"]):
+             excluded_substrings = ["BTC", "LTC", "NCF", "NCS", "BNB", "ETH", "SOL", "XRP"]
+            if any(sub in symbol for sub in excluded_substrings):
                 continue
 
             try:
