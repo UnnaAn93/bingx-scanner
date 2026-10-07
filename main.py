@@ -240,9 +240,9 @@ async def monitor_open_trades(session):
 
                 # Перевіряємо досягнення TP1 лише тоді, коли ціна реально відійшла від входу
                 if trade_side == 'LONG':
-                    tp_reached = current_price >= tp1
-                else:
                     tp_reached = current_price <= tp1
+                else:
+                    tp_reached = current_price >= tp1
 
                 if not sl_moved and tp_reached:
                     print(f"🎯 TP1 досягнуто по {symbol}! Переносимо стоп в безубиток.", flush=True)
