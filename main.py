@@ -655,7 +655,9 @@ async def scan_market(session):
                                 await execute_trade(session, symbol, current_price, side="SHORT")
                                 trade_opened_in_this_cycle = True
                                 await asyncio.sleep(5)
-                                continue 
+                                break
+                            else:
+                                continue
                 except Exception:
                     pass
 
