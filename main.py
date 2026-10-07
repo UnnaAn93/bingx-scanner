@@ -215,7 +215,8 @@ async def monitor_open_trades(session):
                 entry_price = float(p.get("avgPrice", 0))
                 if entry_price == 0:
                     continue
-
+                if symbol in active_trade_monitors and active_trade_monitors[symbol].get('sl_moved', False):
+            continue
                 current_price = tickers.get(symbol, 0)
                 if current_price == 0:
                     continue
