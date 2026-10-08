@@ -157,7 +157,7 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_s
         "type": "STOP_MARKET",
         "stopPrice": f"{stop_price:.5f}",
         "workingType": "MARK_PRICE",
-        "reduceOnly": "true"  # Гарантує закриття позиції в межах її реального розміру
+        #"reduceOnly": "true"  # Гарантує закриття позиції в межах її реального розміру
     }
     
     query_str = urllib.parse.urlencode(sorted(params.items()))
