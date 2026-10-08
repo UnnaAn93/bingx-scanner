@@ -233,11 +233,9 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
         min_low = min(lows) if lows else entry_price * 0.98
-        stop_loss_price = min_low - 0.003  # Мінімум за 40 свічок - 0.3%
+        stop_loss_price = min_low * 0.997  # Найнижча свічка мінус 0.3%
         risk = entry_price - stop_loss_price
-        if risk <= 0:
-            risk = entry_price * 0.02
-            stop_loss_price = entry_price - risk
+        
         tp1 = math.ceil((entry_price + risk * 1.0) * 100000) / 100000  # Заокруглення в більшу сторону
         tp2 = entry_price + risk * 2.0
         tp3 = entry_price + risk * 3.0
@@ -246,11 +244,9 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     else:
         highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
         max_high = max(highs) if highs else entry_price * 1.02
-        stop_loss_price = max_high + 1.003  # Максимум за 40 свічок + 0.3%
+        stop_loss_price = max_high * 1.003  # Найвища свічка плюс 0.3%
         risk = stop_loss_price - entry_price
-        if risk <= 0:
-            risk = entry_price * 0.02
-            stop_loss_price = entry_price + risk
+        
         tp1 = math.ceil((entry_price - risk * 1.0) * 100000) / 100000  # Заокруглення в більшу сторону
         tp2 = entry_price - risk * 2.0
         tp3 = entry_price - risk * 3.0
