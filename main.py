@@ -218,22 +218,22 @@ async def get_open_positions(session):
 
 # --- ВИКОНАННЯ УГОДИ ---
 async def execute_trade(session, symbol, entry_price, side="LONG"):
-    print(f"🔄 Спроба відкриття позиції ({side}) по {symbol} за ціною {entry_price}", flush=True)
-    
-    # Встановлюємо плече 10 з урахуванням Hedge mode (side)
-    lev_success, lev_err = await set_leverage(session, symbol, side)
+    print(f"🚀 Спроба відкрити позицію ({side}) по {symbol} за ціною {entry_price}", flush=True)
+
+    # Встановлюємо плече із урахуванням Hedge mode (side)
+    lev_success, lev_err = await set_leverage(session, symbol, LEVERAGE, side=side)
     if not lev_success:
         err_msg = f"❌ Помилка встановлення плеча по {symbol} ({side}): {lev_err}"
         print(err_msg, flush=True)
         asyncio.create_task(send_telegram(session, err_msg))
         return False
 
-    klines = await get_klines(session, symbol, interval="15m", limit=40)
-    
+    klines = await get_lines(session, symbol, interval="15m", limit=40)
+
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
         min_low = min(lows) if lows else entry_price * 0.98
-        stop_loss_price = min_low * 0.997  # Мінімум за 40 свічок + 0.3%
+        stop_loss_price = min_low - 0.003  # Мінімум за 40 свічок - 0.3%
         risk = entry_price - stop_loss_price
         if risk <= 0:
             risk = entry_price * 0.02
@@ -246,7 +246,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     else:
         highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
         max_high = max(highs) if highs else entry_price * 1.02
-        stop_loss_price = max_high * 1.003  # Максимум за 40 свічок + 0.3%
+        stop_loss_price = max_high + 1.003  # Максимум за 40 свічок + 0.3%
         risk = stop_loss_price - entry_price
         if risk <= 0:
             risk = entry_price * 0.02
@@ -284,6 +284,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         "timestamp": ts,
         "type": "MARKET"
     }
+
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
@@ -298,27 +299,56 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
                 asyncio.create_task(send_telegram(session, err_msg))
                 return False
 
-            await asyncio.sleep(1.5)
-            sl_ok, sl_err = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
-            if not sl_ok:
-                err_msg = f"⚠️ Позицію відкрито, але не вдалося поставити Стоп-Лосс по {symbol}: {sl_err}"
-                print(err_msg, flush=True)
-                asyncio.create_task(send_telegram(session, err_msg))
+        # Чекаємо трохи і запитуємо реальну ціну входу (avgPrice) з біржі, щоб уникнути прослизання
+        await asyncio.sleep(1.5)
+        open_positions = await get_open_positions(session)
+        real_entry_price = entry_price
+        
+        for p in open_positions:
+            if p.get("symbol") == symbol and p.get("positionSide") == side:
+                real_entry_price = float(p.get("avgPrice", entry_price))
+                break
 
-            await place_tp_order(session, symbol, tp1, q1, tp_side)
-            await place_tp_order(session, symbol, tp2, q2, tp_side)
-            await place_tp_order(session, symbol, tp3, q3, tp_side)
+        # Перераховуємо стоп і тейки від РЕАЛЬНОЇ ціни входу
+        if side == "LONG":
+            stop_loss_price = min_low - 0.003
+            if risk <= 0:
+                stop_loss_price = real_entry_price * 0.98
+            tp1 = math.ceil((real_entry_price + risk * 1.0) * 100000) / 100000
+            tp2 = real_entry_price + risk * 2.0
+            tp3 = real_entry_price + risk * 3.0
+        else:
+            stop_loss_price = max_high + 1.003
+            if risk <= 0:
+                stop_loss_price = real_entry_price * 1.02
+            tp1 = math.ceil((real_entry_price - risk * 1.0) * 100000) / 100000
+            tp2 = real_entry_price - risk * 2.0
+            tp3 = real_entry_price - risk * 3.0
 
-            active_trade_monitors[symbol] = {
-                'entry_price': entry_price,
-                'tp1': tp1,
-                'side': side,
-                'sl_moved': False,
-                'quantity_str': quantity_str
-            }
-            success_msg = f"🟢 Успішно відкрито {side} по {symbol}\nЦіна: {entry_price:.5f}\nСтоп: {stop_loss_price:.5f}\nТП1: {tp1}"
-            asyncio.create_task(send_telegram(session, success_msg))
-            return True
+        await asyncio.sleep(0.5)
+        ok_sl, sl_err = await place_stop_loss_order(session, symbol, quantity_str, stop_loss_price, side)
+        if not ok_sl:
+            err_msg = f"⚠️ Позицію відкрито (за ціною {real_entry_price}), але не вдалося поставити Стоп-Лосс по {symbol}: {sl_err}"
+            print(err_msg, flush=True)
+            asyncio.create_task(send_telegram(session, err_msg))
+
+        await place_tp_order(session, symbol, tp1, q1, tp_side)
+        await place_tp_order(session, symbol, tp2, q2, tp_side)
+        await place_tp_order(session, symbol, tp3, q3, tp_side)
+
+        active_trade_monitors[symbol] = {
+            'entry_price': real_entry_price,
+            'tp': [tp1, tp2, tp3],
+            'side': side,
+            'sl_moved': False,
+            'quantity_str': quantity_str
+        }
+
+        success_msg = f"🟢 Успішно відкрито {side} по {symbol}\nЦіна входу: {real_entry_price:.5f}\nСтоп: {stop_loss_price:.5f}\nТП1: {tp1:.5f}"
+        print(success_msg, flush=True)
+        asyncio.create_task(send_telegram(session, success_msg))
+        return True
+
     except Exception as e:
         err_msg = f"❌ Критична помилка виконання угоди по {symbol}: {e}"
         print(err_msg, flush=True)
