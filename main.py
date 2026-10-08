@@ -395,14 +395,21 @@ async def bingx_websocket_listener(session):
                                     o_query = urllib.parse.urlencode(sorted(o_params.items()))
                                     o_sig = get_sign(API_SECRET, o_query)
                                     o_url = f"{BINGX_BASE_URL}{orders_path}?{o_query}&signature={o_sig}"
+                                    
                                     async with session.get(o_url, headers={"X-BX-APIKEY": API_KEY}) as o_resp:
                                         o_data = await o_resp.json()
                                         if o_data.get("code") == 0:
-                                            orders_list = o_data.get("data", {}).get("orders", [])
-                                            tp1_target = info.get('tp1')
-                                            tp_still_active = any(abs(float(o.get("price", 0)) - tp1_target) < 0.00001 for o in orders_list)
+                                            raw_orders = o_data.get("data", [])
+                                            orders_list = raw_orders.get("orders", []) if isinstance(raw_orders, dict) else raw_orders
+                                            
+                                            tp_list = info.get('tp', [])
+                                            tp1_target = tp_list[0] if tp_list else None
+                                            
+                                            tp_still_active = False
+                                            if tp1_target is not None:
+                                                tp_still_active = any(abs(float(o.get("price", 0)) - tp1_target) < 0.00001 for o in orders_list)
 
-                                            if not tp_still_active:
+                                            if tp1_target is not None and not tp_still_active:
                                                 old_stop_id = None
                                                 for ord_item in orders_list:
                                                     if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
@@ -432,8 +439,8 @@ async def bingx_websocket_listener(session):
                             print(f"⚠️ Помилка обробки WebSocket повідомлення: {inner_e}", flush=True)
 
         except Exception as e:
-            print(f"⚠️ Помилка у WebSocket з'єднанні: {e}, перепідключення через 5 секунд...", flush=True)
-            await asyncio.sleep(5)
+                            print(f"⚠️ Помилка у WebSocket з'єднанні: {e}, перепідключення через 5 секунд...", flush=True)
+                            await asyncio.sleep(5)
 
 # --- ПЕРІОДИЧНИЙ ЗВІТ КОЖНІ 15 ХВИЛИН ---
 async def send_periodic_report(session):
