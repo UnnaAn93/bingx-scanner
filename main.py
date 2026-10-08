@@ -522,13 +522,41 @@ async def scan_market(session):
         # Надійний підрахунок кількості позицій з ризиком
         risk_positions_count = 0
         for p in open_pos:
-            sym = p.get("symbol")
+            syn = p.get("symbol")
             pos_side = p.get("positionSide")
-            
+
+            # Автоматично перевіряємо через API, чи перенесено стоп у безубиток
+            if syn in active_trade_monitors and not active_trade_monitors[syn].get('sl_moved', False):
+                try:
+                    orders_path = "/openApi/swap/v2/trade/openOrders"
+                    ts_ord = str(int(time.time() * 1000) - server_time_offset)
+                    o_params = {"symbol": syn, "timestamp": ts_ord}
+                    o_query = urllib.parse.urlencode(sorted(o_params.items()))
+                    o_sig = get_sign(BINGX_SECRET_KEY, o_query)
+                    o_url = f"{BINGX_BASE_URL}{orders_path}?{o_query}&signature={o_sig}"
+
+                    async with session.get(o_url, headers={"X-BX-APIKEY": API_KEY}) as o_resp:
+                        if o_resp.status == 200:
+                            o_data = await o_resp.json()
+                            if o_data.get("code") == 0:
+                                raw_orders = o_data.get("data", [])
+                                orders_list = raw_orders.get("orders", []) if isinstance(raw_orders, dict) else raw_orders
+                                entry_price = active_trade_monitors[syn].get('entry_price', 0)
+                            
+                                for ord_item in orders_list:
+                                    if ord_item.get("type") in ("STOP", "STOP_MARKET"):
+                                        s_price = float(ord_item.get("stopPrice", ord_item.get("price", 0)))
+                                        if pos_side == "LONG" and s_price >= entry_price:
+                                            active_trade_monitors[syn]['sl_moved'] = True
+                                        elif pos_side == "SHORT" and s_price <= entry_price:
+                                            active_trade_monitors[syn]['sl_moved'] = True
+                except Exception:
+                    pass
+
             is_sl_in_be = False
-            if sym in active_trade_monitors and active_trade_monitors[sym].get('side') == pos_side:
-                is_sl_in_be = active_trade_monitors[sym].get('sl_moved', False)
-            
+            if syn in active_trade_monitors and active_trade_monitors[syn].get('side') == pos_side:
+                is_sl_in_be = active_trade_monitors[syn].get('sl_moved', False)
+
             if not is_sl_in_be:
                 risk_positions_count += 1
 
