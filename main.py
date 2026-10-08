@@ -126,7 +126,7 @@ def calculate_atr(klines, period=14):
     return sum(recent_tr) / len(recent_tr)
 
 # --- РОБОТА З БІРЖЕЮ (ПЛЕЧЕ ТА ОРДЕРИ) ---
-async def set_leverage(session, symbol, side):
+async def set_leverage(session, symbol, leverage, side):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
     params = {"symbol": symbol, "leverage": LEVERAGE, "side": side, "timestamp": ts}
