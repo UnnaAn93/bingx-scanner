@@ -355,6 +355,52 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         asyncio.create_task(send_telegram(session, err_msg))
         return False
 
+async def restore_active_monitors_from_exchange(session):
+    global active_trade_monitors
+    print("🔄 Відновлення стану активних позицій з біржі...", flush=True)
+    try:
+        open_pos = await get_open_positions(session)
+        if not open_pos:
+            return
+
+        for p in open_pos:
+            symbol = p.get("symbol")
+            side = p.get("positionSide")
+            avg_price = float(p.get("avgPrice", 0))
+            
+            orders_path = "/openApi/swap/v2/trade/openOrders"
+            ts_ord = str(int(time.time() * 1000) + server_time_offset)
+            o_params = {"symbol": symbol, "timestamp": ts_ord}
+            o_query = urllib.parse.urlencode(sorted(o_params.items()))
+            o_sig = get_sign(API_SECRET, o_query)
+            o_url = f"{BINGX_BASE_URL}{orders_path}?{o_query}&signature={o_sig}"
+            
+            async with session.get(o_url, headers={"X-BX-APIKEY": API_KEY}) as o_resp:
+                o_data = await o_resp.json()
+                if o_data.get("code") == 0:
+                    raw_orders = o_data.get("data", [])
+                    orders_list = raw_orders.get("orders", []) if isinstance(raw_orders, dict) else raw_orders
+                    
+                    tp_prices = [float(o.get("price")) for o in orders_list if o.get("type") == "TAKE_PROFIT" or "TP" in o.get("type", "")]
+                    
+                    sl_moved = False
+                    for ord_item in orders_list:
+                        if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
+                            stop_price = float(ord_item.get("stopPrice", ord_item.get("price", 0)))
+                            if abs(stop_price - avg_price) / avg_price < 0.001:
+                                sl_moved = True
+
+                    active_trade_monitors[symbol] = {
+                        'entry_price': avg_price,
+                        'tp': sorted(tp_prices) if tp_prices else [avg_price * 1.02, avg_price * 1.04, avg_price * 1.06],
+                        'side': side,
+                        'sl_moved': sl_moved,
+                        'quantity_str': str(p.get("positionAmt", "0"))
+                    }
+                    print(f"✅ Відновлено моніторинг для {symbol} ({side}), SL в БУ: {sl_moved}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Помилка відновлення позицій з біржі: {e}", flush=True)
+
 # --- WEBSOCKET ПРОСЛУХОВУВАННЯ ВІДПОВІДЕЙ БІРЖІ ---
 async def bingx_websocket_listener(session):
     listen_key_path = "/openApi/swap/v2/user/listenKey"
@@ -608,6 +654,8 @@ async def main():
         asyncio.create_task(self_ping(session))
         asyncio.create_task(bingx_websocket_listener(session))
         asyncio.create_task(send_periodic_report(session))
+
+        await restore_active_monitors_from_exchange(session)
         
         print("🚀 Бот запущено за повною логікою!", flush=True)
         await market_scanner_loop(session)
