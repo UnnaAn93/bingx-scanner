@@ -552,7 +552,15 @@ async def scan_market(session):
 
 async def market_scanner_loop(session):
     while True:
-        await scan_market(session)
+        try:
+            # Даємо на весь цикл сканування максимум 50 секунд. 
+            # Якщо якесь зависання — воно обірветься і цикл піде далі.
+            await asyncio.wait_for(scan_market(session), timeout=50.0)
+        except asyncio.TimeoutError:
+            print("⚠️ Увага: Час виконання циклу сканування перевищив 50 секунд (можливо, зависання мережі). Продовжуємо...", flush=True)
+        except Exception as e:
+            print(f"⚠️ Помилка в циклі сканування: {e}", flush=True)
+            
         await asyncio.sleep(60)
 
 # --- ГОЛОВНА ТОЧКА ВХОДУ ---
