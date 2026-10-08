@@ -496,7 +496,6 @@ async def bingx_websocket_listener(session):
 # --- ПЕРІОДИЧНИЙ ЗВІТ КОЖНІ 15 ХВИЛИН ---
 async def send_periodic_report(session):
     while True:
-        await asyncio.sleep(900)
         try:
             positions = await get_open_positions(session)
             if not positions:
@@ -505,14 +504,17 @@ async def send_periodic_report(session):
                 report = "📊 Періодичний звіт по активних позиціях:\n"
                 for p in positions:
                     sym = p.get("symbol")
-                    amt = p.get("positionAmt")
+                    amt = p.get("positionNet")
                     entry = p.get("avgPrice")
                     pnl = p.get("unrealizedProfit", "0")
-                    status = "🛡️ Б/У" if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved', False) else "⏳ Ризик"
-                    report += f"🔹 {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
+                    status = "🛡 Б/У" if sym in active_trade_monitors and active_trade_monitors[sym].get('sl_moved') else "⏳ Ризик"
+                    report += f"🔷 {sym} ({status}) | Об'єм: {amt} | ТВХ: {entry} | PnL: {pnl} USDT\n"
             asyncio.create_task(send_telegram(session, report))
         except Exception as e:
-            print(f"⚠️ Помилка відправки періодичного звіту: {e}", flush=True)
+            print(f"⚠️ Помилка відправки періодичного звіту: {e}")
+        
+        await asyncio.sleep(900)
+
 
 # --- СКАНУВАННЯ РИНКУ ---
 async def scan_market(session):
