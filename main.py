@@ -147,6 +147,7 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_s
     path = "/openApi/swap/v2/trade/order"
     ts = str(int(time.time() * 1000) + server_time_offset)
     stop_side = "SELL" if pos_side == "LONG" else "BUY"
+    
     params = {
         "positionSide": pos_side,
         "quantity": quantity_str,
@@ -155,12 +156,15 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_s
         "timestamp": ts,
         "type": "STOP_MARKET",
         "stopPrice": f"{stop_price:.5f}",
-        "workingType": "MARK_PRICE"
+        "workingType": "MARK_PRICE",
+        "reduceOnly": "true"  # Гарантує закриття позиції в межах її реального розміру
     }
+    
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
     headers = {"X-BX-APIKEY": API_KEY, "Content-Type": "application/x-www-form-urlencoded"}
+    
     try:
         async with session.post(url, headers=headers) as resp:
             res = await resp.json()
