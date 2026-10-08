@@ -228,7 +228,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         asyncio.create_task(send_telegram(session, err_msg))
         return False
 
-    klines = await get_lines(session, symbol, interval="15m", limit=40)
+    klines = await get_klines(session, symbol, interval="15m", limit=40)
 
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
