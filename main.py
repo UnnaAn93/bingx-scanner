@@ -519,16 +519,17 @@ async def scan_market(session):
         if open_pos is None:
             open_pos = []
 
-        # Жорсткий підрахунок кількості позицій з ризиком
+        # Надійний підрахунок кількості позицій з ризиком
         risk_positions_count = 0
         for p in open_pos:
             sym = p.get("symbol")
             pos_side = p.get("positionSide")
             
+            is_sl_in_be = False
             if sym in active_trade_monitors and active_trade_monitors[sym].get('side') == pos_side:
-                if not active_trade_monitors[sym].get('sl_moved', False):
-                    risk_positions_count -= 1
-            else:
+                is_sl_in_be = active_trade_monitors[sym].get('sl_moved', False)
+            
+            if not is_sl_in_be:
                 risk_positions_count += 1
 
         if risk_positions_count >= MAX_RISK_POSITIONS:
@@ -566,7 +567,7 @@ async def scan_market(session):
                 else:
                     del coin_cooldowns[symbol]
 
-            excluded_substrings = ["BTC", "LTC", "XCP", "NCS", "USD-USDT", "BNB", "ETH", "SOL", "XRP"]
+            excluded_substrings = ["BTC", "LTC", "XCP", "NCS", "USD-USDT", "BNB", "ETH", "SOL", "XRP", "NCFX"]
             if any(sub in symbol for sub in excluded_substrings):
                 continue
 
@@ -583,9 +584,9 @@ async def scan_market(session):
             if not klines_th or len(klines_th) < 50:
                 continue
 
-            closes_th = [float(k['close']) for k in klines_th if isinstance(k, dict) and 'close' in k]
-            ema_th_curr = calculate_ema(closes_th[:-1], period=50)
-            ema_th_past = calculate_ema(closes_th[:-2], period=50)
+            closes_th = [float(k['close']) for k in klines_th if isinstance(k, dict)]
+            ema_th_curr = calculate_ema(closes_th[-1], period=50)
+            ema_th_past = calculate_ema(closes_th[-2], period=50)
             atr_th = calculate_atr(klines_th, period=14)
 
             if not ema_th_curr or not ema_th_past:
@@ -600,9 +601,9 @@ async def scan_market(session):
             if not klines_15m or len(klines_15m) < 50:
                 continue
 
-            closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict) and 'close' in k]
-            ema_current_15 = calculate_ema(closes_15m[:-1], period=50)
-            ema_past_15 = calculate_ema(closes_15m[:-2], period=50)
+            closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict)]
+            ema_current_15 = calculate_ema(closes_15m[-1], period=50)
+            ema_past_15 = calculate_ema(closes_15m[-2], period=50)
             atr_15m = calculate_atr(klines_15m, period=14)
 
             if not ema_current_15 or not ema_past_15 or not atr_15m:
@@ -616,7 +617,7 @@ async def scan_market(session):
             # Динамічна зона біля EMA через ATR (0.5 від ATR)
             ema_zone = atr_15m * 0.5
 
-            # Перевірка об'ємної агресії
+            # Перевірка об'ємної аномалії
             recent_candle = klines_15m[-2]
             vol_list = [float(k['volume']) for k in klines_15m[-15:-2]]
             avg_vol = sum(vol_list) / len(vol_list) if vol_list else 1.0
@@ -630,34 +631,32 @@ async def scan_market(session):
 
             # Умови поглинання / відбиття від рівня біля EMA на 15m
             long_absorption = (
-                is_volume_spike and 
+                is_volume_spike and
                 abs(c_close - ema_current_15) <= ema_zone and
                 (min(c_open, c_close) - c_low) > (c_high - max(c_open, c_close))
             )
 
             short_absorption = (
-                is_volume_spike and 
+                is_volume_spike and
                 abs(c_close - ema_current_15) <= ema_zone and
                 (c_high - max(c_open, c_close)) > (min(c_open, c_close) - c_low)
             )
 
-            # ГОЛОВНІ УМОВИ ВХОДУ З ПОВНИМ КОНТРОЛЕМ ТРЕНДУ НА 1h ТА 15m
-            # LONG: (Тренд 1h + Тренд 15m + Відскок від EMA) АБО (Тренд 1h + Об'ємне поглинання біля EMA 15m)
+            # Головні умови входу
             long_condition = (
-                (ema_th_curr > ema_th_past and ema_current_15 > ema_past_15 and min(o_15m, c_15m) > ema_current_15 and abs(current_price - ema_current_15) <= atr_15m)
-                or 
+                (ema_th_curr > ema_th_past and ema_current_15 > ema_past_15 and min(c_15m, o_15m) > ema_current_15)
+                or
                 (ema_th_curr > ema_th_past and long_absorption)
             )
 
-            # SHORT: (Тренд вниз 1h + Тренд вниз 15m + Відскок) АБО (Тренд вниз 1h + Об'ємне поглинання)
             short_condition = (
-                (ema_th_curr < ema_th_past and ema_current_15 < ema_past_15 and max(o_15m, c_15m) < ema_current_15 and abs(current_price - ema_current_15) <= atr_15m)
-                or 
+                (ema_th_curr < ema_th_past and ema_current_15 < ema_past_15 and max(c_15m, o_15m) < ema_current_15)
+                or
                 (ema_th_curr < ema_th_past and short_absorption)
             )
 
             if long_condition:
-                success = await execute_trade(session, symbol, current_price, side="LONG")
+                success = await execute_trade(session, symbol, current_price, side="BUY")
                 if success:
                     trade_opened_this_cycle = True
                     break
@@ -665,7 +664,7 @@ async def scan_market(session):
                     coin_cooldowns[symbol] = time.time() + 300
 
             elif short_condition:
-                success = await execute_trade(session, symbol, current_price, side="SHORT")
+                success = await execute_trade(session, symbol, current_price, side="SELL")
                 if success:
                     trade_opened_this_cycle = True
                     break
@@ -675,6 +674,7 @@ async def scan_market(session):
     except Exception as e:
         print(f"⚠️ Помилка у scan_market: {e}", flush=True)
         traceback.print_exc()
+        
         
 
 async def market_scanner_loop(session):
