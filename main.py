@@ -232,7 +232,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
 
     if side == "LONG":
         lows = [float(k['low']) for k in klines if isinstance(k, dict) and 'low' in k]
-        min_low = min(lows) if lows else entry_price * 0.98
+        min_low = min(lows) if lows else entry_price * 0.997
         stop_loss_price = min_low * 0.997  # Найнижча свічка мінус 0.3%
         risk = entry_price - stop_loss_price
         
@@ -243,8 +243,8 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         tp_side = "LONG"
     else:
         highs = [float(k['high']) for k in klines if isinstance(k, dict) and 'high' in k]
-        max_high = max(highs) if highs else entry_price * 1.02
-        stop_loss_price = max_high * 1.003  # Найвища свічка плюс 0.3%
+        max_high = max(highs) if highs else entry_price * 1.003
+        stop_loss_price = max_high * 1.003 # Найвища свічка плюс 0.3%
         risk = stop_loss_price - entry_price
         
         tp1 = math.ceil((entry_price - risk * 1.0) * 100000) / 100000  # Заокруглення в більшу сторону
@@ -307,16 +307,16 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
 
         # Перераховуємо стоп і тейки від РЕАЛЬНОЇ ціни входу
         if side == "LONG":
-            stop_loss_price = min_low - 0.003
-            if risk <= 0:
-                stop_loss_price = real_entry_price * 0.98
+            stop_loss_price = min_low * 0.997
+            risk = real_entry_price - stop_loss_price
+        
             tp1 = math.ceil((real_entry_price + risk * 1.0) * 100000) / 100000
             tp2 = real_entry_price + risk * 2.0
             tp3 = real_entry_price + risk * 3.0
         else:
-            stop_loss_price = max_high + 1.003
-            if risk <= 0:
-                stop_loss_price = real_entry_price * 1.02
+            stop_loss_price = max_high * 1.003
+            risk = stop_loss_price - real_entry_price
+        
             tp1 = math.ceil((real_entry_price - risk * 1.0) * 100000) / 100000
             tp2 = real_entry_price - risk * 2.0
             tp3 = real_entry_price - risk * 3.0
