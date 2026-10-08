@@ -356,6 +356,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
         return False
 
 async def restore_active_monitors_from_exchange(session):
+    """Відновлює active_trade_monitors з біржі після перезапуску бота (наприклад, після рестарту Render)"""
     global active_trade_monitors
     print("🔄 Відновлення стану активних позицій з біржі...", flush=True)
     try:
@@ -387,7 +388,11 @@ async def restore_active_monitors_from_exchange(session):
                     for ord_item in orders_list:
                         if ord_item.get("type") in ["STOP", "STOP_MARKET"]:
                             stop_price = float(ord_item.get("stopPrice", ord_item.get("price", 0)))
-                            if abs(stop_price - avg_price) / avg_price < 0.001:
+                            # Якщо це LONG і стоп вище або дорівнює входу
+                            if side == "LONG" and stop_price >= avg_price:
+                                sl_moved = True
+                            # Якщо це SHORT і стоп нижче або дорівнює входу
+                            elif side == "SHORT" and stop_price <= avg_price:
                                 sl_moved = True
 
                     active_trade_monitors[symbol] = {
