@@ -221,7 +221,7 @@ async def execute_trade(session, symbol, entry_price, side="LONG"):
     print(f"🚀 Спроба відкрити позицію ({side}) по {symbol} за ціною {entry_price}", flush=True)
 
     # Встановлюємо плече із урахуванням Hedge mode (side)
-    lev_success, lev_err = await set_leverage(session, symbol, LEVERAGE, side=side)
+    lev_success, lev_err = await set_leverage(session, symbol, LEVERAGE, side)
     if not lev_success:
         err_msg = f"❌ Помилка встановлення плеча по {symbol} ({side}): {lev_err}"
         print(err_msg, flush=True)
