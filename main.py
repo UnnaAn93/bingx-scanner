@@ -408,8 +408,14 @@ async def monitor_trades_loop():
                 if current_price == 0:
                     continue
 
-                # Надійне отримання ціни входу та розрахунок тейку без зайвих запитів
+                # Надійне отримання справжньої ТВХ (з пам'яті -> з біржі -> поточна як крайній випадок)
                 entry_price = float(data.get('entry', 0))
+                if entry_price == 0 and current_pos_data:
+                    entry_price = float(
+                        current_pos_data.get('entryPrice', 0) or 
+                        current_pos_data.get('averagePrice', 0) or 
+                        current_pos_data.get('price', 0) or 0
+                    )
                 if entry_price == 0:
                     entry_price = current_price
 
@@ -428,7 +434,7 @@ async def monitor_trades_loop():
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or \
                               (side_val == "SHORT" and current_price <= tp1_price)
-                    print(f"[MONITOR DEBUG] {symbol} | Поточна ціна: {current_price} | TP1: {tp1_price} | Сторона: {side_val} | TP1 досягнуто: {hit_tp1}", flush=True)
+                    print(f"[MONITOR DEBUG] {symbol} | Поточна ціна: {current_price} | ТВХ: {entry_price} | TP1: {tp1_price} | Сторона: {side_val} | TP1 досягнуто: {hit_tp1}", flush=True)
 
                     if hit_tp1 and entry_price > 0:
                         data['tp1_hit'] = True
