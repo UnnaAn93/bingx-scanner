@@ -224,7 +224,15 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
-        
+
+async def get_exchange_positions():
+    res = await bingx_request('GET', '/openApi/swap/v2/user/positions')
+    if isinstance(res, dict) and res.get("code") == 0:
+        return res.get("data", [])
+    elif isinstance(res, list):
+        return res
+    return []
+    
 async def count_risk_positions():
     try:
         positions = await get_exchange_positions()
