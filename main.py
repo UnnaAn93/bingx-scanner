@@ -150,7 +150,7 @@ async def place_stop_loss_order(session, symbol, quantity_str, stop_price, pos_s
     stop_side = "SELL" if pos_side == "LONG" else "BUY"
     
     params = {
-        "positionSide": pos_side,
+        "positionSide": str(side).upper(),
         "quantity": quantity_str,
         "side": stop_side,
         "symbol": symbol,
