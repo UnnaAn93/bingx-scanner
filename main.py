@@ -334,32 +334,74 @@ async def monitor_trades_loop():
     while True:
         try:
             positions = await get_exchange_positions()
-            active_symbols = {p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0}
-            
+            active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
+
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
-                    await send_telegram(f"🏁 Позиція по `{symbol}` закрита на біржі.")
+                    await send_telegram(f"❌ Позиція по {symbol} закрита на біржі.")
                     print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
                     del active_trade_monitors[symbol]
                     continue
-                
+
                 if 'tp1' not in data:
                     continue
 
-                current_price_data = await get_klines(symbol, "1m", 1)
+                # --- Перевірка зустрічного об'єму для дострокової фіксації плюсу ---
+                try:
+                    current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
+                    if current_pos_data:
+                        unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0))
+                        pos_side = current_pos_data.get('positionSide', data.get('side'))
+                        
+                        klines_check = await get_klines(symbol, "15m", 25)
+                        if len(klines_check) >= 20:
+                            last_c = klines_check[-1]
+                            avg_vol = sum([x['volume'] for x in klines_check[-20:]]) / 20
+                            is_opp_spike = last_c['volume'] > avg_vol * 1.8
+                            
+                            if unreal_pnl > 0 and is_opp_spike:
+                                if pos_side == "SHORT" and last_c['close'] > last_c['open']:
+                                    close_payload = {
+                                        "symbol": symbol,
+                                        "side": "BUY",
+                                        "positionSide": "SHORT",
+                                        "type": "MARKET",
+                                        "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
+                                    }
+                                    await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
+                                    await send_telegram(f"🛡 Рівень захищено! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl:.2f}) через зустрічний об'єм.")
+                                    del active_trade_monitors[symbol]
+                                    continue
+                                elif pos_side == "LONG" and last_c['close'] < last_c['open']:
+                                    close_payload = {
+                                        "symbol": symbol,
+                                        "side": "SELL",
+                                        "positionSide": "LONG",
+                                        "type": "MARKET",
+                                        "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
+                                    }
+                                    await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
+                                    await send_telegram(f"🛡 Рівень захищено! Закрито LONG по {symbol} в плюс (PnL: {unreal_pnl:.2f}) через зустрічний об'єм.")
+                                    del active_trade_monitors[symbol]
+                                    continue
+                except Exception as ex:
+                    print(f"Помилка захисту рівня у моніторингу: {ex}")
+                # -------------------------------------------------------------
+
+                current_price_data = await get_klines(symbol, "1h", 1)
                 if not current_price_data:
                     continue
                 current_price = float(current_price_data[0]['close'])
-                
+
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (data['side'] == "LONG" and current_price >= data['tp1']) or \
                               (data['side'] == "SHORT" and current_price <= data['tp1'])
                     if hit_tp1:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        await send_telegram(f"✅ TP1 досягнуто для `{symbol}`!")
+                        await send_telegram(f"✅ TP1 досягнуто для {symbol}!")
                         print(f"[SUCCESS] TP1 досягнуто для {symbol}.", flush=True)
-                        
+
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
         await asyncio.sleep(10)
