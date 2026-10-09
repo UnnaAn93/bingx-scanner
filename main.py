@@ -474,4 +474,5 @@ async def main_scanner():
 if __name__ == "__main__":
     try:
         asyncio.run(main_scanner())
-    except Keyboa
+    except KeyboardInterrupt:
+        print("[INFO] Бот зупинений користувачем.", flush=True)
