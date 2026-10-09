@@ -159,6 +159,12 @@ async def analyze_market(symbol):
         stop_loss = 0
         tp1 = tp2 = tp3 = 0
 
+        # Фільтр флету: якщо за останні 25 свічок ціна майже не рухалася
+        recent_klines = klines_15m[-25:]
+        recent_range = max([x['high'] for x in recent_klines]) - min([x['low'] for x in recent_klines])
+    
+        if recent_range < atr_15m * 2.5:
+            return None, is_volume_spike, "Ціна стоїть у флеті (вузький діапазон)"
         # 1. LONG: Заборона купувати тільки при різкому панічному вильоті (перегріві)
         is_overextended_long = (current_price - min_40_low) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) > (atr_15m * 1.8)
         if not is_overextended_long and is_volume_spike:
