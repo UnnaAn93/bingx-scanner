@@ -407,18 +407,24 @@ async def monitor_trades_loop():
                 if current_price == 0:
                     continue
 
-                # Шукаємо поточні дані позиції прямо з перевіреного джерела
-                current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
+                # Робимо прямий запит на біржу для отримання інформації по конкретній позиції цього символу
+                pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
                 exchange_entry = 0.0
-                if current_pos_data:
-                    # Перебираємо всі можливі варіанти назви ключа ціни входу в API BingX
-                    exchange_entry = float(
-                        current_pos_data.get('averagePrice', 0) or 
-                        current_pos_data.get('entryPrice', 0) or 
-                        current_pos_data.get('price', 0) or 
-                        current_pos_data.get('openPrice', 0)
-                    )
-
+                if pos_res and isinstance(pos_res, dict) and pos_res.get('code') == 0:
+                    pos_list = pos_res.get('data', [])
+                    # Якщо прийшов словник, а не список
+                    if isinstance(pos_list, dict):
+                        pos_list = pos_list.get('positions', [])
+    
+                    for p in pos_list:
+                        if p.get('symbol') == symbol or p.get('symbol') == symbol.replace('-', ''):
+                            exchange_entry = float(
+                                p.get('averagePrice', 0) or 
+                                p.get('entryPrice', 0) or 
+                                p.get('price', 0) or 
+                                p.get('openPrice', 0)
+                            )
+                            break
                 entry_price = data.get('entry') or exchange_entry
                 atr_val = data.get('atr', current_price * 0.01)
                 side_val = data.get('side', "LONG" if current_pos_data.get('positionSide') == "LONG" else "SHORT")
