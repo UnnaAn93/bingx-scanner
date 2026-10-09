@@ -126,10 +126,10 @@ def calculate_atr(klines, period=14):
     return sum(recent_tr) / len(recent_tr)
 
 # --- РОБОТА З БІРЖЕЮ (ПЛЕЧЕ ТА ОРДЕРИ) ---
-async def set_leverage(session, symbol, leverage, side):
+async def set_leverage(session, symbol, leverage, side=None):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    params = {"symbol": symbol, "leverage": LEVERAGE, "side": str(side).upper(), "timestamp": ts}
+    params = {"symbol": symbol, "leverage": LEVERAGE, "timestamp": ts}
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
