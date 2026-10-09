@@ -10,7 +10,6 @@ import threading
 import traceback
 import urllib.parse
 import math
-import websockets
 
 # --- КОНСТАНТИ ТА НАЛАШТУВАННЯ ---
 API_KEY = os.environ.get("BINGX_API_KEY", "")
@@ -25,16 +24,16 @@ MARGIN_USD = 0.5
 MAX_RISK_POSITIONS = 2
 server_time_offset = 0
 active_trade_monitors = {}
-coin_cooldowns = {} # {symbol: timestamp паузи після помилки}
+coin_cooldowns = {} 
 
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS")):
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "-" in symbol:
         return True
     return False
 
-# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ ( Render Keep-Alive ) ---
+# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -80,7 +79,6 @@ async def bingx_request(method, endpoint, params=None):
     signature = get_sign(API_SECRET, query_string)
     url = f"{BINGX_BASE_URL}{endpoint}?{query_string}&signature={signature}"
     
-    # Використовуємо правильний заголовок для авторизації в BingX API
     headers = {"X-BX-APIKEY": API_KEY}
     async with aiohttp.ClientSession() as session:
         try:
@@ -107,7 +105,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ ТА РІВНІВ (RESONANCE + ATR) ---
+# --- АНАЛІЗ РИНКУ ТА РІВНІВ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -190,7 +188,7 @@ async def analyze_market(symbol):
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None
 
-# --- ПЕРЕВІРКА ПОЗИЦІЙ ТА РИЗИКУ НА БІРЖІ ---
+# --- ПЕРЕВІРКА ПОЗИЦІЙ ТА РИЗИКУ ---
 async def get_exchange_positions():
     res = await bingx_request("GET", "/openApi/swap/v2/user/positions")
     if isinstance(res, dict) and res.get("code") == 0:
@@ -208,7 +206,11 @@ async def count_risk_positions():
             if float(p.get('positionAmt', 0)) != 0:
                 total_open += 1
                 symbol = p.get('symbol')
-                if symbol in active_trade_monitors and not active_trade_monitors[symbol].get('in_breakeven', False):
+                # Якщо позиція є на біржі, але ще не занесена в монітор — додаємо її автоматично як ризикову
+                if symbol not in active_trade_monitors:
+                    active_trade_monitors[symbol] = {"in_breakeven": False}
+                
+                if not active_trade_monitors[symbol].get('in_breakeven', False):
                     risk_count += 1
         
         print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | Ризикових: {risk_count}", flush=True)
@@ -217,7 +219,7 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
-# --- ВІДКРИТТЯ ПОЗИЦІЇ ТА УПРАВЛІННЯ ---
+# --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
@@ -254,7 +256,7 @@ async def open_position(setup):
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
 
-# --- ФОНОВИЙ МОНІТОРИНГ ТЕЙКІВ ТА СИНХРОНІЗАЦІЯ ---
+# --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
         try:
@@ -268,12 +270,15 @@ async def monitor_trades_loop():
                     del active_trade_monitors[symbol]
                     continue
                 
+                if 'tp1' not in data:
+                    continue
+
                 current_price_data = await get_klines(symbol, "1m", 1)
                 if not current_price_data:
                     continue
                 current_price = float(current_price_data[0]['close'])
                 
-                if not data['tp1_hit']:
+                if not data.get('tp1_hit', False):
                     hit_tp1 = (data['side'] == "LONG" and current_price >= data['tp1']) or \
                               (data['side'] == "SHORT" and current_price <= data['tp1'])
                     if hit_tp1:
@@ -307,7 +312,7 @@ async def report_loop():
         except Exception as e:
             await log_and_alert("Помилка генерації звіту", str(e))
 
-# --- САМОПІНГ КОЖНІ 7 ХВИЛИН ---
+# --- САМОПІНГ ---
 async def self_ping_loop():
     while True:
         await asyncio.sleep(420)
@@ -331,7 +336,6 @@ async def main_scanner():
         try:
             print("🔍 Початок нового циклу сканування ринку...", flush=True)
             
-            # Перевіряємо ліміт позицій один раз на початку циклу
             risk_pos_count = await count_risk_positions()
             if risk_pos_count >= MAX_RISK_POSITIONS:
                 print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
@@ -357,7 +361,8 @@ async def main_scanner():
                 elif isinstance(data_field, dict):
                     contracts_data = data_field.get("contracts", [])
 
-            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and (item['symbol'].endswith('-USDT') or item['symbol'].endswith('USDT'))]
+            # Жорсткий фільтр: беремо тільки чисті ф'ючерси USDT без дефісів та зайвої екзотики
+            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT') and '-' not in item['symbol']]
             
             for symbol in symbols:
                 if is_blacklisted(symbol):
@@ -385,4 +390,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-    
+        
