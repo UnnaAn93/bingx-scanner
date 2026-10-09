@@ -420,8 +420,6 @@ async def monitor_trades_loop():
                     )
 
                 entry_price = data.get('entry') or exchange_entry
-
-                entry_price = data.get('entry') or exchange_entry
                 atr_val = data.get('atr', current_price * 0.01)
                 side_val = data.get('side', "LONG" if current_pos_data.get('positionSide') == "LONG" else "SHORT")
                 
