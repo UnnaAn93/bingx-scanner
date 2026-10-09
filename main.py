@@ -32,7 +32,10 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCC")) or "USD" not in symbol or "." in symbol:
+    if (symbol in BLACKLIST or 
+        symbol.startswith(("NCF", "NCS", "NCC")) or 
+        "USD" not in symbol or 
+        "." in symbol):
         return True
     return False
 
@@ -112,7 +115,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ З ЗАХИСТОМ ВІД ХАЇВ/ЛОЇВ ---
+# --- АНАЛІЗ РИНКУ З ЗАХИСТОМ ВІД ХАЇВ/ЛОЇВ ТА ПРОЛИВІВ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -158,20 +161,20 @@ async def analyze_market(symbol):
         stop_loss = 0
         tp1 = 0
 
-        # 1. LONG: Тільки якщо ми НЕ на хаях (price_position < 0.7) і немає різкого падіння
+        # 1. LONG: Заборона купувати на хаях або під час обвалу
         if price_position < 0.7 and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
-            is_sharp_dump = body_last < -atr_15m * 0.8  # Заборона купувати під час обвалу
+            is_sharp_dump = body_last < -atr_15m * 0.8
 
             if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
                 signal = "LONG"
                 stop_loss = current_price - (atr_15m * 1.5)
                 tp1 = current_price + (atr_15m * 2.0)
 
-        # 2. SHORT: Тільки якщо ми НЕ на лоях (price_position > 0.3) і НЕ після різкого проливу вниз
+        # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях або після різкого проливу вниз
         if not signal and price_position > 0.3 and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
-            is_sharp_dump = body_last < -atr_15m * 0.8  # ЖОРСТКА ЗАБОРОНА ШОРТИТИ ПІСЛЯ ПРОЛИВУ ВНИЗ!
+            is_sharp_dump = body_last < -atr_15m * 0.8
 
             if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
@@ -181,7 +184,6 @@ async def analyze_market(symbol):
         if not signal:
             return None, is_volume_spike
 
-        # Фінальна перевірка безпеки цін
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
         if risk <= 0 or tp1 <= 0 or (signal == "LONG" and tp1 <= current_price) or (signal == "SHORT" and tp1 >= current_price):
             return None, is_volume_spike
@@ -224,12 +226,14 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
-# --- ВІДКРИТТЯ ПОЗИЦІЇ ---
+# --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ SL/TP НА БІРЖІ ---
 async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
         qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
+        
+        # 1. Ринковий ордер на вхід
         order_payload = {
             "symbol": symbol,
             "side": "BUY" if side == "LONG" else "SELL",
@@ -243,14 +247,39 @@ async def open_position(setup):
             err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
             raise Exception(f"Помилка ордеру маркет: {err_msg}")
             
+        # 2. Виставлення Стоп-Лосу (STOP_MARKET) на біржі
+        sl_side = "SELL" if side == "LONG" else "BUY"
+        sl_payload = {
+            "symbol": symbol,
+            "side": sl_side,
+            "positionSide": "LONG" if side == "LONG" else "SHORT",
+            "type": "STOP_MARKET",
+            "stopPrice": round(setup['stop_loss'], 4),
+            "workingType": "MARK_PRICE",
+            "reduceOnly": "true"
+        }
+        await bingx_request("POST", "/openApi/swap/v2/trade/order", sl_payload)
+
+        # 3. Виставлення Тейк-Профіту (TAKE_PROFIT_MARKET) на біржі
+        tp_payload = {
+            "symbol": symbol,
+            "side": sl_side,
+            "positionSide": "LONG" if side == "LONG" else "SHORT",
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": round(setup['tp1'], 4),
+            "workingType": "MARK_PRICE",
+            "reduceOnly": "true"
+        }
+        await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
+
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
             "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
         }
         
-        msg = f"🚀 *Відкрито позицію ({side})*\nМонета: `{symbol}`\nВхід: `{setup['entry']}`\nСтоп: `{setup['stop_loss']}`\nTP1: `{setup['tp1']}`"
+        msg = f"🚀 *Відкрито позицію ({side}) з SL/TP*\nМонета: `{symbol}`\nВхід: `{setup['entry']}`\nСтоп: `{setup['stop_loss']}`\nTP1: `{setup['tp1']}`"
         await send_telegram(msg)
-        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} за ціною {setup['entry']}", flush=True)
+        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та виставлено стоп/тейк на біржі.", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
@@ -410,4 +439,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-    
+        
