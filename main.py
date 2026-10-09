@@ -161,14 +161,13 @@ async def analyze_market(symbol):
         stop_loss = 0
         tp1 = tp2 = tp3 = 0
         
-        # 1. LONG: Заборона купувати на хаях або під час обвалу
-        if price_position < 0.7 and is_volume_spike:
+        # 1. LONG: Заборона купувати тільки при різкому панічному вильоті (перегріві)
+        is_overextended_long = (current_price - min_40_low) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) > (atr_15m * 1.8)
+        if not is_overextended_long and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
-
-            if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
-                signal = "LONG"
-                stop_loss = min_40_low - atr_15m
+        
+            if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] < prev_candle['open'])):
                 
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
                 nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 4)
@@ -180,15 +179,14 @@ async def analyze_market(symbol):
                 if not (stop_loss < current_price < tp1 < tp2 < tp3):
                     return None, is_volume_spike, "Не валідна структура SL/TP для LONG"
 
-        # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях, на зелених свічках або під час різкого проливу вниз
-        if not signal and price_position > 0.3 and is_volume_spike:
-            body_last = last_candle['close'] - last_candle['open']
-            is_sharp_dump = body_last < -atr_15m * 0.8
-            is_red_candle = last_candle['close'] < last_candle['open']
+          # 2. SHORT: Заборона шортити тільки при різкому панічному обвалі
+          is_overextended_short = (max_40_high - current_price) > (atr_15m * 8.0) and (last_candle['open'] - last_candle['close']) > (atr_15m * 1.8)
+          if not signal and not is_overextended_short and is_volume_spike:
+              body_last = last_candle['close'] - last_candle['open']
+              is_sharp_dump = body_last < -atr_15m * 0.8
+              is_red_candle = last_candle['close'] < last_candle['open']
 
-            if not is_sharp_dump and is_red_candle and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
-                signal = "SHORT"
-                stop_loss = max_40_high + atr_15m
+              if not is_sharp_dump and is_red_candle and (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])):
                 
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
                 nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 4)
