@@ -115,7 +115,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ З УРАХУВАННЯМ РІВНІВ ТА КОЕФІЦІЄНТА 1.3 ---
+# --- АНАЛІЗ РИНКУ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -168,14 +168,18 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
                 signal = "LONG"
+                # Стоп нижче найнижчої свічки за 40 свічок мінус 0.3%
                 stop_loss = min_40_low * (1 - 0.003)
                 
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
                 resistances_1h = sorted([x['high'] for x in klines_1h if x['high'] > current_price])
                 
-                tp1 = resistances_15m[0] + atr_15m + 1 if resistances_15m else current_price + (atr_15m * 2) + 1
-                tp2 = resistances_1h[1] if len(resistances_1h) > 1 else (resistances_1h[0] + atr_15m + 1 if resistances_1h else tp1 + atr_15m)
+                tp1 = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 1.5)
+                tp2 = resistances_1h[1] if len(resistances_1h) > 1 else (resistances_1h[0] if resistances_1h else tp1 + atr_15m)
                 tp3 = resistances_1h[2] if len(resistances_1h) > 2 else tp2 + atr_15m
+                
+                if not (stop_loss < current_price < tp1 < tp2 < tp3):
+                    return None, is_volume_spike
 
         # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях або після різкого проливу вниз
         if not signal and price_position > 0.3 and is_volume_spike:
@@ -184,14 +188,18 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
+                # Стоп вище найвищої свічки за 40 свічок плюс 0.3%
                 stop_loss = max_40_high * (1 + 0.003)
                 
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
                 supports_1h = sorted([x['low'] for x in klines_1h if x['low'] < current_price], reverse=True)
                 
-                tp1 = supports_15m[0] - (atr_15m + 1) if supports_15m else current_price - (atr_15m * 2) - 1
-                tp2 = supports_1h[1] if len(supports_1h) > 1 else (supports_1h[0] - (atr_15m + 1) if supports_1h else tp1 - atr_15m)
+                tp1 = supports_15m[0] if supports_15m else current_price - (atr_15m * 1.5)
+                tp2 = supports_1h[1] if len(supports_1h) > 1 else (supports_1h[0] if supports_1h else tp1 - atr_15m)
                 tp3 = supports_1h[2] if len(supports_1h) > 2 else tp2 - atr_15m
+                
+                if not (stop_loss > current_price > tp1 > tp2 > tp3):
+                    return None, is_volume_spike
 
         if not signal:
             return None, is_volume_spike
@@ -466,6 +474,4 @@ async def main_scanner():
 if __name__ == "__main__":
     try:
         asyncio.run(main_scanner())
-    except KeyboardInterrupt:
-        print("[INFO] Бот зупинений користувачем.", flush=True)
-        
+    except Keyboa
