@@ -134,7 +134,7 @@ async def analyze_market(symbol):
         raw_1h = await get_klines(symbol, "1h", 30)
         
         if len(raw_15m) < 35 or len(raw_1h) < 20:
-            return None, False
+            return None, False, "Недостатньо історичних даних"
             
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
                        'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
@@ -148,7 +148,7 @@ async def analyze_market(symbol):
         price_range = max_40_high - min_40_low
         
         if price_range <= 0 or atr_15m <= 0:
-            return None, False
+            return None, False, "Нульовий діапазон або ATR"
             
         price_position = (current_price - min_40_low) / price_range
         
@@ -178,7 +178,7 @@ async def analyze_market(symbol):
                 tp3 = tp2 + (atr_15m * 1.5)
                 
                 if not (stop_loss < current_price < tp1 < tp2 < tp3):
-                    return None, is_volume_spike
+                    return None, is_volume_spike, "Не валідна структура SL/TP для LONG"
 
         # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях, на зелених свічках або під час різкого проливу вниз
         if not signal and price_position > 0.3 and is_volume_spike:
@@ -198,35 +198,33 @@ async def analyze_market(symbol):
                 tp3 = tp2 - (atr_15m * 1.5)
                 
                 if not (stop_loss > current_price > tp1 > tp2 > tp3):
-                    return None, is_volume_spike
+                    return None, is_volume_spike, "Не валідна структура SL/TP для SHORT"
 
         if not signal:
-            return None, is_volume_spike
+            if not is_volume_spike:
+                reason = "Немає сплеску об'єму (< 1.5x)"
+            elif price_position >= 0.7:
+                reason = "Ціна занадто висока для LONG ( >= 0.7 )"
+            elif price_position <= 0.3:
+                reason = "Ціна занадто низька для SHORT ( <= 0.3 )"
+            else:
+                reason = "Не пройшла фільтри структури свічок (зелена свічка на шорт / різкий пролив)"
+            return None, is_volume_spike, reason
 
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
         reward_tp1 = (tp1 - current_price) if signal == "LONG" else (current_price - tp1)
 
         if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
-            return None, is_volume_spike
+            return None, is_volume_spike, "Мале співвідношення Risk/Reward (< 1.3)"
 
         return {
             "symbol": symbol, "signal": signal, "entry": current_price,
             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-        }, is_volume_spike
+        }, is_volume_spike, "OK"
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
-        return None, False
+        return None, False, f"Помилка: {str(e)}"
         
-
-# --- ПЕРЕВІРКА ПОЗИЦІЙ ---
-async def get_exchange_positions():
-    res = await bingx_request("GET", "/openApi/swap/v2/user/positions")
-    if isinstance(res, dict) and res.get("code") == 0:
-        return res.get("data", [])
-    elif isinstance(res, list):
-        return res
-    return []
-
 async def count_risk_positions():
     try:
         positions = await get_exchange_positions()
