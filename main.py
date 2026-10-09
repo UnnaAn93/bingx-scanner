@@ -345,7 +345,7 @@ async def open_position(setup):
 async def monitor_trades_loop():
     while True:
         try:
-            positions = await get_exchange_pssions()
+            positions = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
             
             for symbol, data in list(active_trade_monitors.items()):
