@@ -173,7 +173,6 @@ async def analyze_market(symbol):
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
                 nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 4)
                 
-                # TP1 нижче опору, але не ближче ніж 2 * ATR
                 tp1 = min(nearest_res - (atr_15m * 0.5), current_price + (atr_15m * 2.0))
                 tp2 = tp1 + (atr_15m * 1.5)
                 tp3 = tp2 + (atr_15m * 1.5)
@@ -181,19 +180,19 @@ async def analyze_market(symbol):
                 if not (stop_loss < current_price < tp1 < tp2 < tp3):
                     return None, is_volume_spike
 
-        # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях або після різкого проливу вниз
+        # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях, на зелених свічках або під час різкого проливу вниз
         if not signal and price_position > 0.3 and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
+            is_red_candle = last_candle['close'] < last_candle['open']
 
-            if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
+            if not is_sharp_dump and is_red_candle and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
                 stop_loss = max_40_high + atr_15m
                 
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
                 nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 4)
                 
-                # TP1 вище підтримки, але не ближче ніж 2 * ATR
                 tp1 = max(nearest_sup + (atr_15m * 0.5), current_price - (atr_15m * 2.0))
                 tp2 = tp1 - (atr_15m * 1.5)
                 tp3 = tp2 - (atr_15m * 1.5)
@@ -207,7 +206,6 @@ async def analyze_market(symbol):
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
         reward_tp1 = (tp1 - current_price) if signal == "LONG" else (current_price - tp1)
 
-        # Перевірка співвідношення ризику до прибутку для TP1 (>= 1.3)
         if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
             return None, is_volume_spike
 
