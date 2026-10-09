@@ -352,17 +352,19 @@ async def monitor_trades_loop():
                 try:
                     current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
                     if current_pos_data:
-                        unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0))
+                        unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0) or 0)
                         pos_side = current_pos_data.get('positionSide', data.get('side'))
 
                         klines_check = await get_klines(symbol, "15m", 25)
                         if len(klines_check) >= 20:
                             last_c = klines_check[-1]
-                            avg_vol = sum([x['volume'] for x in klines_check[-20:]]) / 20
-                            is_opp_spike = last_c['volume'] > avg_vol * 1.8
+                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-20:]]) / 20
+                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 1.8
 
                             if unreal_pnl > 0 and is_opp_spike:
-                                if pos_side == "SHORT" and last_c['close'] > last_c['open']:
+                                last_close = float(last_c.get('close', 0))
+                                last_open = float(last_c.get('open', 0))
+                                if pos_side == "SHORT" and last_close > last_open:
                                     close_payload = {
                                         "symbol": symbol,
                                         "side": "BUY",
@@ -374,7 +376,7 @@ async def monitor_trades_loop():
                                     await send_telegram(f"🛡 Рівень захисту! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl})")
                                     del active_trade_monitors[symbol]
                                     continue
-                                elif pos_side == "LONG" and last_c['close'] < last_c['open']:
+                                elif pos_side == "LONG" and last_close < last_open:
                                     close_payload = {
                                         "symbol": symbol,
                                         "side": "SELL",
@@ -454,7 +456,7 @@ async def monitor_trades_loop():
             await log_and_alert("Помилка в моніторингу угод", str(e))
         
         await asyncio.sleep(10)
-
+        
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
     while True:
