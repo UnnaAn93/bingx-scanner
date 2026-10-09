@@ -32,7 +32,7 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol:
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol or "-" in symbol:
         return True
     return False
 
@@ -112,7 +112,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ (ОБ'ЄДНАНІ СТРАТЕГІЇ) ---
+# --- АНАЛІЗ РИНКУ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -151,7 +151,7 @@ async def analyze_market(symbol):
         signal = None
         stop_loss = 0
 
-        # Варіант 1: Межевий реверс (флет/межі)
+        # Варіант 1: Межевий реверс
         if current_price <= min_40_low * 1.003 and is_volume_spike:
             body = abs(last_candle['close'] - last_candle['open'])
             lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
@@ -166,7 +166,7 @@ async def analyze_market(symbol):
                 signal = "SHORT"
                 stop_loss = max_40_high * (1 + 0.003)
 
-        # Варіант 2: Трендовий відкат (імпульс -> корекція -> реакція)
+        # Варіант 2: Трендовий відкат
         if not signal:
             recent_impulse_up = prev_candle['close'] > prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
             recent_impulse_down = prev_candle['close'] < prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
@@ -234,25 +234,12 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
-# --- ВІДКРИТТЯ ПОЗИЦІЇ ---
+# --- ВІДКРИТТЯ ПОЗИЦІЇ (БЕЗ ЗАПИТУ ПЛЕЧА) ---
 async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
-        lev_payload = {
-            "symbol": symbol,
-            "leverage": LEVERAGE,
-            "side": side,
-            "marginType": "CROSSED"
-        }
-        lev_res = await bingx_request("POST", "/openApi/swap/v1/trade/leverage", lev_payload)
-        if not lev_res or (isinstance(lev_res, dict) and lev_res.get("code") != 0):
-            msg_err = lev_res.get('msg', 'Network error') if isinstance(lev_res, dict) else 'Network error'
-            if "this api is not exist" in str(msg_err):
-                BLACKLIST.add(symbol)
-                print(f"[BLACKLIST] Автоматично додано у чорний список: {symbol}", flush=True)
-            raise Exception(f"Не вдалося встановити плече: {msg_err}")
-
+        # Плече вже налаштоване на біржі, відправляємо одразу маркет-ордер
         qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
         order_payload = {
             "symbol": symbol,
@@ -434,4 +421,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-            
+        
