@@ -629,7 +629,7 @@ async def main_scanner():
         except Exception as e:
             await log_and_alert("Помилка в головному циклі сканування", str(e))
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     try:
