@@ -128,85 +128,87 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
+
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 40)
         raw_1h = await get_klines(symbol, "1h", 30)
-        
+
         if len(raw_15m) < 35 or len(raw_1h) < 20:
             return None, False, "Недостатньо історичних даних"
-            
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
+
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
                        'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
-        klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h]
-        
+        klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_1h]
+
         atr_15m = calculate_atr(klines_15m)
         current_price = klines_15m[-1]['close']
-        
-        max_40_high = max([x['high'] for x in klines_15m])
+
         min_40_low = min([x['low'] for x in klines_15m])
-        price_range = max_40_high - min_40_low
-        
-        if price_range <= 0 or atr_15m <= 0:
-            return None, False, "Нульовий діапазон або ATR"
-            
-        price_position = (current_price - min_40_low) / price_range
-        
+        max_40_high = max([x['high'] for x in klines_15m])
+
+        if atr_15m <= 0:
+            return None, False, "Нульовий ATR"
+
         avg_volume = sum([x['volume'] for x in klines_15m[-20:]]) / 20
         last_candle = klines_15m[-1]
         prev_candle = klines_15m[-2]
         is_volume_spike = last_candle['volume'] > avg_volume * 1.5
-        
+
         signal = None
         stop_loss = 0
         tp1 = tp2 = tp3 = 0
-        
+
         # 1. LONG: Заборона купувати тільки при різкому панічному вильоті (перегріві)
         is_overextended_long = (current_price - min_40_low) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) > (atr_15m * 1.8)
         if not is_overextended_long and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
-        
+            
             if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] < prev_candle['open'])):
-                
+                signal = "LONG"
+                stop_loss = min_40_low - atr_15m
+
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
-                nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 4)
-                
+                nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 3.0)
+
                 tp1 = min(nearest_res - (atr_15m * 0.5), current_price + (atr_15m * 2.0))
                 tp2 = tp1 + (atr_15m * 1.5)
                 tp3 = tp2 + (atr_15m * 1.5)
-                
+
                 if not (stop_loss < current_price < tp1 < tp2 < tp3):
-                    return None, is_volume_spike, "Не валідна структура SL/TP для LONG"
+                    signal = None
 
-          # 2. SHORT: Заборона шортити тільки при різкому панічному обвалі
-          is_overextended_short = (max_40_high - current_price) > (atr_15m * 8.0) and (last_candle['open'] - last_candle['close']) > (atr_15m * 1.8)
-          if not signal and not is_overextended_short and is_volume_spike:
-              body_last = last_candle['close'] - last_candle['open']
-              is_sharp_dump = body_last < -atr_15m * 0.8
-              is_red_candle = last_candle['close'] < last_candle['open']
+        # 2. SHORT: Заборона шортити тільки при різкому панічному обвалі
+        is_overextended_short = (max_40_high - current_price) > (atr_15m * 8.0) and (last_candle['open'] - last_candle['close']) > (atr_15m * 1.8)
+        if not signal and not is_overextended_short and is_volume_spike:
+            body_last = last_candle['close'] - last_candle['open']
+            is_sharp_dump = body_last < -atr_15m * 0.8
+            is_red_candle = last_candle['close'] < last_candle['open']
 
-              if not is_sharp_dump and is_red_candle and (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])):
-                
+            if not is_sharp_dump and is_red_candle and (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])):
+                signal = "SHORT"
+                stop_loss = max_40_high + atr_15m
+
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
-                nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 4)
-                
+                nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 3.0)
+
                 tp1 = max(nearest_sup + (atr_15m * 0.5), current_price - (atr_15m * 2.0))
                 tp2 = tp1 - (atr_15m * 1.5)
                 tp3 = tp2 - (atr_15m * 1.5)
-                
+
                 if not (stop_loss > current_price > tp1 > tp2 > tp3):
-                    return None, is_volume_spike, "Не валідна структура SL/TP для SHORT"
+                    signal = None
 
         if not signal:
             if not is_volume_spike:
                 reason = "Немає сплеску об'єму (< 1.5x)"
-            elif price_position >= 0.7:
-                reason = "Ціна занадто висока для LONG ( >= 0.7 )"
-            elif price_position <= 0.3:
-                reason = "Ціна занадто низька для SHORT ( <= 0.3 )"
+            elif is_overextended_long:
+                reason = "Ціна занадто перегріта для LONG (ATR виліт)"
+            elif is_overextended_short:
+                reason = "Ціна занадто перепродана для SHORT (ATR обвал)"
             else:
-                reason = "Не пройшла фільтри структури свічок (зелена свічка на шорт / різкий пролив)"
+                reason = "Не пройшла фільтри структури свічок"
             return None, is_volume_spike, reason
 
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
@@ -219,6 +221,7 @@ async def analyze_market(symbol):
             "symbol": symbol, "signal": signal, "entry": current_price,
             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
         }, is_volume_spike, "OK"
+
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
