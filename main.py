@@ -407,10 +407,13 @@ async def monitor_trades_loop():
                 if current_price == 0:
                     continue
 
-                # Отримуємо ціну входу з біржі або локальної пам'яті
-                exchange_entry = float(current_pos_data.get('averagePrice', 0) or current_pos_data.get('entryPrice', 0)) if current_pos_data else 0
-                entry_price = data.get('entry') or exchange_entry
+                # Гарантовано знаходимо позицію на біржі за поточним символом
+                pos_item = next((p for p in positions if p.get('symbol') == symbol), None)
+                exchange_entry = 0.0
+                if pos_item:
+                    exchange_entry = float(pos_item.get('averagePrice', 0) or pos_item.get('entryPrice', 0) or pos_item.get('price', 0))
 
+                entry_price = data.get('entry') or exchange_entry
                 atr_val = data.get('atr', current_price * 0.01)
                 side_val = data.get('side', "LONG" if current_pos_data.get('positionSide') == "LONG" else "SHORT")
                 
