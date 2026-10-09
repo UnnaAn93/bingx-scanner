@@ -12,7 +12,7 @@ import urllib.parse
 import math
 import websockets
 
-# --- КОНСТАНТИ ТА НАЛАШТУВАННЯ ---[span_0](start_span)[span_0](end_span)
+# --- КОНСТАНТИ ТА НАЛАШТУВАННЯ ---
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -25,7 +25,7 @@ MARGIN_USD = 0.5
 MAX_RISK_POSITIONS = 2
 server_time_offset = 0
 active_trade_monitors = {}
-coin_cooldowns = {} # {symbol: timestamp паузи після помилки}[span_1](start_span)[span_1](end_span)
+coin_cooldowns = {} # {symbol: timestamp паузи після помилки}
 
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC"}
 
@@ -85,7 +85,7 @@ async def bingx_request(method, endpoint, params=None):
         try:
             async with session.request(method, url, headers=headers, timeout=15) as resp:
                 data = await resp.json()
-                if data.get("code") != 0:
+                if isinstance(data, dict) and data.get("code") != 0:
                     print(f"[API WARN] Endpoint {endpoint} returned code {data.get('code')}: {data.get('msg')}")
                 return data
         except Exception as e:
@@ -98,8 +98,10 @@ async def get_klines(symbol, interval, limit=40):
         try:
             async with session.get(url, timeout=10) as resp:
                 res = await resp.json()
-                if res.get("code") == 0:
+                if isinstance(res, dict) and res.get("code") == 0:
                     return res.get("data", [])
+                elif isinstance(res, list):
+                    return res
         except Exception as e:
             print(f"[LOG ERROR] Klines error {symbol}: {e}")
     return []
@@ -190,8 +192,10 @@ async def analyze_market(symbol):
 # --- ПЕРЕВІРКА ПОЗИЦІЙ ТА РИЗИКУ НА БІРЖІ ---
 async def get_exchange_positions():
     res = await bingx_request("GET", "/openApi/swap/v2/user/positions")
-    if res and res.get("code") == 0:
+    if isinstance(res, dict) and res.get("code") == 0:
         return res.get("data", [])
+    elif isinstance(res, list):
+        return res
     return []
 
 async def count_risk_positions():
@@ -218,8 +222,9 @@ async def open_position(setup):
     side = setup['signal']
     try:
         lev_res = await bingx_request("POST", "/openApi/swap/v1/trade/leverage", {"symbol": symbol, "leverage": LEVERAGE, "side": side})
-        if not lev_res or lev_res.get("code") != 0:
-            raise Exception(f"Не вдалося встановити плече: {lev_res.get('msg') if lev_res else 'Network error'}")
+        if not lev_res or (isinstance(lev_res, dict) and lev_res.get("code") != 0):
+            msg_err = lev_res.get('msg') if isinstance(lev_res, dict) else 'Network error'
+            raise Exception(f"Не вдалося встановити плече: {msg_err}")
 
         qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
         order_payload = {
@@ -231,8 +236,8 @@ async def open_position(setup):
         }
         
         res = await bingx_request("POST", "/openApi/swap/v2/trade/order", order_payload)
-        if not res or res.get("code") != 0:
-            err_msg = res.get("msg", "Unknown API error") if res else "Connection failed"
+        if not res or (isinstance(res, dict) and res.get("code") != 0):
+            err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
             raise Exception(f"Помилка ордеру маркет: {err_msg}")
             
         active_trade_monitors[symbol] = {
@@ -326,12 +331,25 @@ async def main_scanner():
             print("🔍 Початок нового циклу сканування ринку...")
             
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
-            if not res or res.get("code") != 0:
-                await log_and_alert("Помилка отримання контракту з біржі", res.get("msg") if res else "No response")
+            if not res:
                 await asyncio.sleep(30)
                 continue
                 
-            symbols = [item['symbol'] for item in res['data'].get('contracts', []) if item['symbol'].endswith('-USDT') or item['symbol'].endswith('USDT')]
+            contracts_data = []
+            if isinstance(res, list):
+                contracts_data = res
+            elif isinstance(res, dict):
+                if res.get("code") != 0:
+                    await log_and_alert("Помилка отримання контракту з біржі", res.get("msg", "Unknown"))
+                    await asyncio.sleep(30)
+                    continue
+                data_field = res.get("data", [])
+                if isinstance(data_field, list):
+                    contracts_data = data_field
+                elif isinstance(data_field, dict):
+                    contracts_data = data_field.get("contracts", [])
+
+            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and (item['symbol'].endswith('-USDT') or item['symbol'].endswith('USDT'))]
             
             for symbol in symbols:
                 if is_blacklisted(symbol):
@@ -364,4 +382,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.")
-    
+        
