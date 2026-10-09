@@ -74,7 +74,7 @@ async def log_and_alert(error_title, error_message, symbol=None):
     print(traceback.format_exc(), flush=True)
     await send_telegram(full_text)
 
-# --- BINGX API SIGNATURE & REQUESTС ---
+# --- BINGX API SIGNATURE & REQUESTS ---
 def get_sign(api_secret, payload):
     return hmac.new(api_secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -365,7 +365,6 @@ async def main_scanner():
                 await asyncio.sleep(30)
                 continue
 
-            # Отримуємо тикери для перевірки добового об'єму (quoteVolume)
             tickers_res = await bingx_request("GET", "/openApi/swap/v2/quote/ticker")
             ticker_volumes = {}
             if tickers_res and isinstance(tickers_res, dict) and tickers_res.get("code") == 0:
@@ -403,9 +402,8 @@ async def main_scanner():
                 if is_blacklisted(symbol):
                     continue
                 
-                # Перевірка об'єму за 24 години (300k - 30M USDT)
                 vol_24h = ticker_volumes.get(symbol, 0)
-                if vol_24h > 0 andnot (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
+                if vol_24h > 0 and not (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
                     continue
                 
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
@@ -424,7 +422,7 @@ async def main_scanner():
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
-            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар (з урахуванням об'єму): {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
+            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
 
         except Exception as e:
             await log_and_alert("Помилка в головному циклі сканування", str(e))
@@ -436,4 +434,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-        
+            
