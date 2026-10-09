@@ -143,8 +143,8 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m)
         current_price = klines_15m[-1]['close']
 
-        min_24_low = min([x['low'] for x in klines_15m])
-        max_24_high = max([x['high'] for x in klines_15m])
+        min_40_low = min([x['low'] for x in klines_15m])
+        max_40_high = max([x['high'] for x in klines_15m])
 
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
