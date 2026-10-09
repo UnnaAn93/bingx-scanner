@@ -249,6 +249,7 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
+
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
     symbol = setup['symbol']
@@ -272,7 +273,7 @@ async def open_position(setup):
         res = await bingx_request("POST", "/openApi/swap/v2/trade/order", order_payload)
         if not res or (isinstance(res, dict) and res.get("code") != 0):
             err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
-            raise Exception(f"Помилка ордеру маркет: {err_msg}")
+            raise Exception(f"Помилка маркет ордеру: {err_msg}")
             
         sl_side = "SELL" if side == "LONG" else "BUY"
 
@@ -286,10 +287,13 @@ async def open_position(setup):
             "workingType": "MARK_PRICE",
             "reduceOnly": "true"
         }
-        await bingx_request("POST", "/openApi/swap/v2/trade/order", sl_payload)
+        sl_res = await bingx_request("POST", "/openApi/swap/v2/trade/order", sl_payload)
+        if not sl_res or (isinstance(sl_res, dict) and sl_res.get("code") != 0):
+            err_msg = sl_res.get("msg", "Unknown error") if isinstance(sl_res, dict) else "No response"
+            await log_and_alert("ПОМИЛКА СТОП-ЛОСУ", f"Не вдалося виставити стоп: {err_msg}", symbol)
 
         # 3. Виставлення трьох Тейк-Профітів (50% / 25% / 25%)
-        for tp_price, tp_qty in [(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)]:
+        for i, (tp_price, tp_qty) in enumerate([(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)], 1):
             if tp_qty > 0:
                 tp_payload = {
                     "symbol": symbol,
@@ -301,7 +305,10 @@ async def open_position(setup):
                     "workingType": "MARK_PRICE",
                     "reduceOnly": "true"
                 }
-                await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
+                tp_res = await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
+                if not tp_res or (isinstance(tp_res, dict) and tp_res.get("code") != 0):
+                    err_msg = tp_res.get("msg", "Unknown error") if isinstance(tp_res, dict) else "No response"
+                    await log_and_alert(f"ПОМИЛКА TP{i}", f"Не вдалося виставити TP{i}: {err_msg}", symbol)
 
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
@@ -316,11 +323,11 @@ async def open_position(setup):
                f"TP2 (25%): `{setup['tp2']}`\n"
                f"TP3 (25%): `{setup['tp3']}`")
         await send_telegram(msg)
-        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та виставлено 3 тейки і стоп на біржі.", flush=True)
+        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та надіслано ордери.", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
-
+        
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
