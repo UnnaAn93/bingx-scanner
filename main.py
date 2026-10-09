@@ -219,7 +219,6 @@ async def get_open_positions(session):
 
 # --- ВИКОНАННЯ УГОДИ ---
 async def execute_trade(session, symbol, entry_price, side="LONG"):
-async def execute_trade(session, symbol, entry_price, side="LONG"):
     pos_side = "LONG" if str(side).upper() in ["LONG", "BUY"] else "SHORT"
     order_side = "BUY" if pos_side == "LONG" else "SELL"
     
