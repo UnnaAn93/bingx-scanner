@@ -32,7 +32,8 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol or "-" in symbol:
+    # Прибрали перевірку дефіса, залишили лише базовий захист
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol:
         return True
     return False
 
@@ -234,12 +235,11 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
-# --- ВІДКРИТТЯ ПОЗИЦІЇ (БЕЗ ЗАПИТУ ПЛЕЧА) ---
+# --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
-        # Плече вже налаштоване на біржі, відправляємо одразу маркет-ордер
         qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
         order_payload = {
             "symbol": symbol,
@@ -357,7 +357,7 @@ async def main_scanner():
             if tickers_res and isinstance(tickers_res, dict) and tickers_res.get("code") == 0:
                 for t in tickers_res.get("data", []):
                     sym = t.get("symbol")
-                    q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0))
+                    q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0) or 0)
                     ticker_volumes[sym] = q_vol
 
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
@@ -421,4 +421,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-        
+    
