@@ -32,7 +32,7 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol:
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCC")) or "USD" not in symbol or "." in symbol:
         return True
     return False
 
