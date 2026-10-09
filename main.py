@@ -613,8 +613,8 @@ async def scan_market(session):
                 continue
 
             closes_th = [float(k['close']) for k in klines_th if isinstance(k, dict)]
-            ema_th_curr = calculate_ema(closes_th[-1], period=50)
-            ema_th_past = calculate_ema(closes_th[-2], period=50)
+            ema_th_curr = calculate_ema(closes_th, period=50)
+            ema_th_past = calculate_ema(closes_th[:-1], period=50)
             atr_th = calculate_atr(klines_th, period=14)
 
             if not ema_th_curr or not ema_th_past:
@@ -630,8 +630,8 @@ async def scan_market(session):
                 continue
 
             closes_15m = [float(k['close']) for k in klines_15m if isinstance(k, dict)]
-            ema_current_15 = calculate_ema(closes_15m[-1], period=50)
-            ema_past_15 = calculate_ema(closes_15m[-2], period=50)
+            ema_current_15 = calculate_ema(closes_15m, period=50)
+            ema_past_15 = calculate_ema(closes_15m[:-1], period=50)
             atr_15m = calculate_atr(klines_15m, period=14)
 
             if not ema_current_15 or not ema_past_15 or not atr_15m:
