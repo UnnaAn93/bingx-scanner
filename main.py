@@ -508,16 +508,25 @@ async def main_scanner():
 
                 scanned_count += 1
                 try:
-                    setup, has_spike, reason = await analyze_market(symbol)
-                    if has_spike:
-                        volume_spikes_count += 1
-                    if setup:
-                        signals_found += 1
-                        await open_position(setup)
-                        break 
-                except Exception as e:
-                    coin_cooldowns[symbol] = time.time() + 300
-                    print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+                     res = await analyze_market(symbol)
+                     if isinstance(res, tuple) and len(res) == 3:
+                         setup, has_spike, reason = res
+                     else:
+                         setup, has_spike = res
+                         reason = "Невідома причина"
+            
+                     if has_spike:
+                         volume_spikes_count += 1
+                         if not setup:
+                             skipped_details.append(f"• {symbol}: {reason}")
+                    
+                     if setup:
+                         signals_found += 1
+                         await open_position(setup)
+                         break
+                 except Exception as e:
+                     coin_cooldowns[symbol] = time.time() + 300
+                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
             print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
 
