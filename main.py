@@ -260,39 +260,39 @@ async def open_position(setup):
         qty_25_1 = round(total_qty * 0.25, 4)
         qty_25_2 = round(total_qty - qty_50 - qty_25_1, 4)
 
-        # 1. Ринковий ордер на вхід
+        # 1. Ринківй ордер на вхід
         order_payload = {
             "symbol": symbol,
             "side": "BUY" if side == "LONG" else "SELL",
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "MARKET",
-            "quantity": total_qty
+            "quantity": total_qty,
         }
-        
-        res = await bingx_request("POST", "/openApi/swap/v2/trade/order", order_payload)
+
+        res = await bingx_request('POST', '/openApi/swap/v2/trade/order', order_payload)
         if not res or (isinstance(res, dict) and res.get("code") != 0):
             err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
             raise Exception(f"Помилка маркет ордеру: {err_msg}")
-            
+
         sl_side = "SELL" if side == "LONG" else "BUY"
 
-        # 2. Стоп-лосс на весь обсяг
+        # 2. Стоп-лосс на весь об'єм (без reduceOnly для Hedge Mode)
         sl_payload = {
             "symbol": symbol,
             "side": sl_side,
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "STOP_MARKET",
             "stopPrice": round(setup['stop_loss'], 4),
-            "workingType": "MARK_PRICE",
-            "reduceOnly": "true"
+            "workingType": "MARK_PRICE"
         }
-        sl_res = await bingx_request("POST", "/openApi/swap/v2/trade/order", sl_payload)
+
+        sl_res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
         if not sl_res or (isinstance(sl_res, dict) and sl_res.get("code") != 0):
             err_msg = sl_res.get("msg", "Unknown error") if isinstance(sl_res, dict) else "No response"
             await log_and_alert("ПОМИЛКА СТОП-ЛОСУ", f"Не вдалося виставити стоп: {err_msg}", symbol)
 
-        # 3. Виставлення трьох Тейк-Профітів (50% / 25% / 25%)
-        for i, (tp_price, tp_qty) in enumerate([(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)], 1):
+        # 3. Виставлення трьох Тейк-Профітів (50% / 25% / 25%) (без reduceOnly для Hedge Mode)
+        for i, (tp_price, tp_qty) in enumerate([(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)]):
             if tp_qty > 0:
                 tp_payload = {
                     "symbol": symbol,
@@ -301,31 +301,32 @@ async def open_position(setup):
                     "type": "TAKE_PROFIT_MARKET",
                     "stopPrice": round(tp_price, 4),
                     "quantity": tp_qty,
-                    "workingType": "MARK_PRICE",
-                    "reduceOnly": "true"
+                    "workingType": "MARK_PRICE"
                 }
-                tp_res = await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
+
+                tp_res = await bingx_request('POST', '/openApi/swap/v2/trade/order', tp_payload)
                 if not tp_res or (isinstance(tp_res, dict) and tp_res.get("code") != 0):
                     err_msg = tp_res.get("msg", "Unknown error") if isinstance(tp_res, dict) else "No response"
-                    await log_and_alert(f"ПОМИЛКА TP{i}", f"Не вдалося виставити TP{i}: {err_msg}", symbol)
+                    await log_and_alert(f"ПОМИЛКА TP{i+1}", f"Не вдалося виставити TP{i+1}: {err_msg}", symbol)
 
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
             "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
         }
-        
-        msg = (f"🚀 *Відкрито позицію ({side}) з 3 TP (50/25/25)*\n"
-               f"Монета: `{symbol}`\n"
-               f"Вхід: `{setup['entry']}`\n"
-               f"Стоп: `{setup['stop_loss']}`\n"
-               f"TP1 (50%): `{setup['tp1']}`\n"
-               f"TP2 (25%): `{setup['tp2']}`\n"
-               f"TP3 (25%): `{setup['tp3']}`")
+
+        msg = (f"🚀 Відкрито позиція ({side}) з 3 TP (50/25/25)\n"
+               f"📌 Монета: {symbol}\n"
+               f"📍 Вхід: {setup['entry']}\n"
+               f"🛑 Стоп: {setup['stop_loss']}\n"
+               f"🎯 TP1 (50%): {setup['tp1']}\n"
+               f"🎯 TP2 (25%): {setup['tp2']}\n"
+               f"🎯 TP3 (25%): {setup['tp3']}")
         await send_telegram(msg)
         print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та надіслано ордери.", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
+        
         
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
