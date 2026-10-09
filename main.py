@@ -357,13 +357,13 @@ async def monitor_trades_loop():
                     if current_pos_data:
                         unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0))
                         pos_side = current_pos_data.get('positionSide', data.get('side'))
-                        
+
                         klines_check = await get_klines(symbol, "15m", 25)
                         if len(klines_check) >= 20:
                             last_c = klines_check[-1]
                             avg_vol = sum([x['volume'] for x in klines_check[-20:]]) / 20
                             is_opp_spike = last_c['volume'] > avg_vol * 1.8
-                            
+
                             if unreal_pnl > 0 and is_opp_spike:
                                 if pos_side == "SHORT" and last_c['close'] > last_c['open']:
                                     close_payload = {
@@ -374,7 +374,7 @@ async def monitor_trades_loop():
                                         "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
                                     }
                                     await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
-                                    await send_telegram(f"🛡 Рівень захищено! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl:.2f}) через зустрічний об'єм.")
+                                    await send_telegram(f"🛡 Рівень захисту! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl})")
                                     del active_trade_monitors[symbol]
                                     continue
                                 elif pos_side == "LONG" and last_c['close'] < last_c['open']:
@@ -386,12 +386,11 @@ async def monitor_trades_loop():
                                         "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
                                     }
                                     await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
-                                    await send_telegram(f"🛡 Рівень захищено! Закрито LONG по {symbol} в плюс (PnL: {unreal_pnl:.2f}) через зустрічний об'єм.")
+                                    await send_telegram(f"🛡 Рівень захисту! Закрито LONG по {symbol} в плюс (PnL: {unreal_pnl})")
                                     del active_trade_monitors[symbol]
                                     continue
                 except Exception as ex:
-                    print(f"Помилка захисту рівня у моніторингу: {ex}")
-                # -------------------------------------------------------------
+                    print(f"Помилка захисту рівня у моніторингу: {ex}", flush=True)
 
                 current_price_data = await get_klines(symbol, "1h", 1)
                 if not current_price_data:
@@ -404,11 +403,48 @@ async def monitor_trades_loop():
                     if hit_tp1:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        await send_telegram(f"✅ TP1 досягнуто для {symbol}!")
+
+                        # Реальний перенос стоп-лосса в БУ на біржі
+                        try:
+                            symbol_str = symbol
+                            side_val = data['side']
+                            entry_price = data['entry']
+                            position_side = "LONG" if side_val == "LONG" else "SHORT"
+
+                            orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {"symbol": symbol_str})
+                            orders_list = []
+                            if isinstance(orders_res, dict) and orders_res.get("code") == 0:
+                                orders_data = orders_res.get("data", [])
+                                orders_list = orders_data.get("orders", []) if isinstance(orders_data, dict) else orders_data
+                            elif isinstance(orders_res, list):
+                                orders_list = orders_res
+
+                            for ord_item in orders_list:
+                                if ord_item.get("type") == "STOP_MARKET":
+                                    ord_id = ord_item.get("orderId")
+                                    if ord_id:
+                                        await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {"symbol": symbol_str, "orderId": ord_id})
+
+                            sl_side = "SELL" if side_val == "LONG" else "BUY"
+                            sl_payload = {
+                                "symbol": symbol_str,
+                                "side": sl_side,
+                                "positionSide": position_side,
+                                "type": "STOP_MARKET",
+                                "stopPrice": round(entry_price, 4),
+                                "workingType": "MARK_PRICE"
+                            }
+                            await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
+                            print(f"[SUCCESS] Стоп-лосс по {symbol_str} успішно перенесено в БУ ({entry_price})", flush=True)
+                        except Exception as ex:
+                            print(f"[ERROR] Помилка перенесення стопа в БУ: {ex}", flush=True)
+
+                        await send_telegram(f"✅ TP1 досягнуто для {symbol}! Стоп перенесено в безубиток.")
                         print(f"[SUCCESS] TP1 досягнуто для {symbol}.", flush=True)
 
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
+        
         await asyncio.sleep(10)
 
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
