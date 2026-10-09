@@ -449,20 +449,20 @@ async def main_scanner():
     asyncio.create_task(monitor_trades_loop())
     asyncio.create_task(report_loop())
     asyncio.create_task(self_ping_loop())
-    
+
     threading.Thread(target=run_http_server, daemon=True).start()
-    
+
     while True:
         try:
             print("🔍 Початок нового циклу сканування ринку...", flush=True)
-            
+
             risk_pos_count = await count_risk_positions()
             if risk_pos_count >= MAX_RISK_POSITIONS:
                 print(f"🛑 Зупинка сканування: вже є {risk_pos_count} ризикових позицій (ліміт: {MAX_RISK_POSITIONS})", flush=True)
                 await asyncio.sleep(30)
                 continue
 
-            tickers_res = await bingx_request("GET", "/openApi/swap/v2/quote/ticker")
+            tickers_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker')
             ticker_volumes = {}
             if tickers_res and isinstance(tickers_res, dict) and tickers_res.get("code") == 0:
                 for t in tickers_res.get("data", []):
@@ -470,11 +470,11 @@ async def main_scanner():
                     q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0) or 0)
                     ticker_volumes[sym] = q_vol
 
-            res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
+            res = await bingx_request('GET', '/openApi/swap/v2/quote/contracts')
             if not res:
                 await asyncio.sleep(30)
                 continue
-                
+
             contracts_data = []
             if isinstance(res, list):
                 contracts_data = res
@@ -489,50 +489,56 @@ async def main_scanner():
                 elif isinstance(data_field, dict):
                     contracts_data = data_field.get("contracts", [])
 
-            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT')]
-            
+            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item]
+
             scanned_count = 0
             volume_spikes_count = 0
             signals_found = 0
+            skipped_details = []  # Обов'язково ініціалізуємо список перед циклом
 
             for symbol in symbols:
                 if is_blacklisted(symbol):
                     continue
-                
+
                 vol_24h = ticker_volumes.get(symbol, 0)
                 if vol_24h > 0 and not (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
                     continue
-                
+
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
                     continue
 
                 scanned_count += 1
                 try:
-                     res = await analyze_market(symbol)
-                     if isinstance(res, tuple) and len(res) == 3:
-                         setup, has_spike, reason = res
-                     else:
-                         setup, has_spike = res
-                         reason = "Невідома причина"
-            
-                     if has_spike:
-                         volume_spikes_count += 1
-                         if not setup:
-                             skipped_details.append(f"• {symbol}: {reason}")
-                    
-                     if setup:
-                         signals_found += 1
-                         await open_position(setup)
-                         break
-                 except Exception as e:
-                     coin_cooldowns[symbol] = time.time() + 300
-                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+                    res = await analyze_market(symbol)
+                    if isinstance(res, tuple) and len(res) == 3:
+                        setup, has_spike, reason = res
+                    else:
+                        setup, has_spike = res
+                        reason = "Невідома причина"
 
-            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
+                    if has_spike:
+                        volume_spikes_count += 1
+                        if not setup:
+                            skipped_details.append(f"• {symbol}: {reason}")
+
+                    if setup:
+                        signals_found += 1
+                        await open_position(setup)
+                        break
+                except Exception as e:
+                    coin_cooldowns[symbol] = time.time() + 300
+                    print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+
+            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count}", flush=True)
+
+            if skipped_details:
+                report_msg = "🔍 **Монети зі сплеском об'єму (відсіяні):**\n" + "\n".join(skipped_details)
+                print(report_msg, flush=True)
+                await send_telegram(report_msg)
 
         except Exception as e:
             await log_and_alert("Помилка в головному циклі сканування", str(e))
-            
+
         await asyncio.sleep(30)
 
 if __name__ == "__main__":
