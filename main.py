@@ -26,19 +26,23 @@ server_time_offset = 0
 active_trade_monitors = {}
 coin_cooldowns = {} 
 
-BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC"}
+BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "-" in symbol:
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol:
         return True
     return False
 
-# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ ---
+# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ (З підтримкою HEAD) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive and running!")
+        
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def run_http_server():
     server = HTTPServer(('0.0.0.0', 10000), HealthCheckHandler)
@@ -67,7 +71,7 @@ async def log_and_alert(error_title, error_message, symbol=None):
     print(traceback.format_exc(), flush=True)
     await send_telegram(full_text)
 
-# --- BINGX API SIGNATURE & REQUESTS ---
+# --- BINGX API SIGNATURE & REQUESTС ---
 def get_sign(api_secret, payload):
     return hmac.new(api_secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -105,7 +109,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ (ОБ'ЄДНАНА СТРАТЕГІЯ: ФЛЕТОВИЙ РЕВЕРС + ТРЕНДОВИЙ ВІДКАТ) ---
+# --- АНАЛІЗ РИНКУ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -144,7 +148,7 @@ async def analyze_market(symbol):
         signal = None
         stop_loss = 0
 
-        # --- ВАРІАНТ 1: МЕЖЕВИЙ РЕВЕРС (ФЛЕТ / ЗАКІНЧЕННЯ ДІАПАЗОНУ) ---
+        # Варіант 1: Межевий реверс
         if current_price <= min_40_low * 1.003 and is_volume_spike:
             body = abs(last_candle['close'] - last_candle['open'])
             lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
@@ -159,44 +163,31 @@ async def analyze_market(symbol):
                 signal = "SHORT"
                 stop_loss = max_40_high * (1 + 0.003)
 
-        # --- ВАРІАНТ 2: ТРЕНДОВИЙ ВІДКАТ (ІМПУЛЬС -> КОРЕКЦІЯ -> РЕАКЦІЯ) ---
+        # Варіант 2: Трендовий відкат
         if not signal:
-            # Визначаємо чи був імпульс на попередніх свічках (наприклад, свічка N-2 або N-3 росла/падала із сильним об'ємом)
             recent_impulse_up = prev_candle['close'] > prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
             recent_impulse_down = prev_candle['close'] < prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
 
-            # Відкат: поточна свічка робить невелику корекцію вниз (для лонга) або вгору (для шорта)
-            # Реакція: поява покупця/продавця зі сплеском об'єму на поточній свічці
             if recent_impulse_up and last_candle['close'] > last_candle['open'] and is_volume_spike:
-                # Покупці захистили рівень після відкату
                 signal = "LONG"
                 stop_loss = min(last_candle['low'], prev_candle['low']) * (1 - 0.002)
 
             elif recent_impulse_down and last_candle['close'] < last_candle['open'] and is_volume_spike:
-                # Продавці тиснуть далі після невеликої корекції
                 signal = "SHORT"
                 stop_loss = max(last_candle['high'], prev_candle['high']) * (1 + 0.002)
 
         if not signal:
             return None, is_volume_spike
 
-        if signal == "LONG":
-            risk = current_price - stop_loss
-        else:
-            risk = stop_loss - current_price
-
+        risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
         if risk <= 0:
             return None, is_volume_spike
 
         if signal == "LONG":
             tp1 = max([x['high'] for x in klines_15m if x['high'] > current_price], default=current_price + (atr_15m * 2)) + atr_15m + 1
-            tp2 = max([x['high'] for x in klines_1h if x['high'] > tp1], default=tp1 + (atr_15m * 3)) + atr_15m + 1
-            tp3 = max([x['high'] for x in klines_1h if x['high'] > tp2], default=tp2 + (atr_15m * 4)) + atr_15m + 1
             reward_tp1 = tp1 - current_price
         else:
             tp1 = min([x['low'] for x in klines_15m if x['low'] < current_price], default=current_price - (atr_15m * 2)) - atr_15m - 1
-            tp2 = min([x['low'] for x in klines_1h if x['low'] < tp1], default=tp1 - (atr_15m * 3)) - atr_15m - 1
-            tp3 = min([x['low'] for x in klines_1h if x['low'] < tp2], default=tp2 - (atr_15m * 4)) - atr_15m - 1
             reward_tp1 = current_price - tp1
 
         if (reward_tp1 / risk) < 1.3:
@@ -204,13 +195,13 @@ async def analyze_market(symbol):
 
         return {
             "symbol": symbol, "signal": signal, "entry": current_price,
-            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+            "stop_loss": stop_loss, "tp1": tp1, "atr": atr_15m
         }, is_volume_spike
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False
 
-# --- ПЕРЕВІРКА ПОЗИЦІЙ ТА РИЗИКУ ---
+# --- ПЕРЕВІРКА ПОЗИЦІЙ ---
 async def get_exchange_positions():
     res = await bingx_request("GET", "/openApi/swap/v2/user/positions")
     if isinstance(res, dict) and res.get("code") == 0:
@@ -266,8 +257,7 @@ async def open_position(setup):
             
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
-            "tp1": setup['tp1'], "tp2": setup['tp2'], "tp3": setup['tp3'],
-            "in_breakeven": False, "tp1_hit": False
+            "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
         }
         
         msg = f"🚀 *Відкрито позицію ({side})*\nМонета: `{symbol}`\nВхід: `{setup['entry']}`\nСтоп: `{setup['stop_loss']}`\nTP1: `{setup['tp1']}`"
@@ -286,7 +276,7 @@ async def monitor_trades_loop():
             
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
-                    await send_telegram(f"🏁 Позиція по `{symbol}` закрита на біржі (Стоп / Тейк спрацювали).")
+                    await send_telegram(f"🏁 Позиція по `{symbol}` закрита на біржі.")
                     print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
                     del active_trade_monitors[symbol]
                     continue
@@ -305,8 +295,8 @@ async def monitor_trades_loop():
                     if hit_tp1:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        await send_telegram(f"✅ TP1 досягнуто для `{symbol}`! Стоп переведено в безубиток (БУ).")
-                        print(f"[SUCCESS] TP1 досягнуто для {symbol}, стоп переведено в БУ.", flush=True)
+                        await send_telegram(f"✅ TP1 досягнуто для `{symbol}`! Стоп переведено в БУ.")
+                        print(f"[SUCCESS] TP1 досягнуто для {symbol}, стоп в БУ.", flush=True)
                         
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
@@ -359,7 +349,7 @@ async def main_scanner():
             
             risk_pos_count = await count_risk_positions()
             if risk_pos_count >= MAX_RISK_POSITIONS:
-                print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
+                print(f"🛑 Зупинка сканування: вже є {risk_pos_count} ризикових позицій (ліміт: {MAX_RISK_POSITIONS})", flush=True)
                 await asyncio.sleep(30)
                 continue
 
@@ -373,7 +363,7 @@ async def main_scanner():
                 contracts_data = res
             elif isinstance(res, dict):
                 if res.get("code") != 0:
-                    await log_and_alert("Помилка отримання контракту з біржі", res.get("msg", "Unknown"))
+                    await log_and_alert("Помилка отримання контракту", res.get("msg", "Unknown"))
                     await asyncio.sleep(30)
                     continue
                 data_field = res.get("data", [])
@@ -382,7 +372,8 @@ async def main_scanner():
                 elif isinstance(data_field, dict):
                     contracts_data = data_field.get("contracts", [])
 
-            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT') and '-' not in item['symbol']]
+            # Виправляємо фільтр: дозволяємо стандартні ф'ючерси з дефісами (наприклад, BTC-USDT)
+            symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT')]
             
             scanned_count = 0
             volume_spikes_count = 0
