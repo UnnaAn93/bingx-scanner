@@ -105,7 +105,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ ТА РІВНІВ ---
+# --- АНАЛІЗ РИНКУ (ОБ'ЄДНАНА СТРАТЕГІЯ: ФЛЕТОВИЙ РЕВЕРС + ТРЕНДОВИЙ ВІДКАТ) ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -124,7 +124,7 @@ async def analyze_market(symbol):
         raw_1h = await get_klines(symbol, "1h", 30)
         
         if len(raw_15m) < 35 or len(raw_1h) < 20:
-            return None
+            return None, False
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
                        'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
@@ -138,33 +138,55 @@ async def analyze_market(symbol):
         
         avg_volume = sum([x['volume'] for x in klines_15m[-20:]]) / 20
         last_candle = klines_15m[-1]
+        prev_candle = klines_15m[-2]
         is_volume_spike = last_candle['volume'] > avg_volume * 1.5
 
         signal = None
+        stop_loss = 0
+
+        # --- ВАРІАНТ 1: МЕЖЕВИЙ РЕВЕРС (ФЛЕТ / ЗАКІНЧЕННЯ ДІАПАЗОНУ) ---
         if current_price <= min_40_low * 1.003 and is_volume_spike:
             body = abs(last_candle['close'] - last_candle['open'])
             lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
             if lower_shadow > body * 1.5 and last_candle['close'] >= last_candle['open']:
                 signal = "LONG"
+                stop_loss = min_40_low * (1 - 0.003)
 
         elif current_price >= max_40_high * 0.997 and is_volume_spike:
             body = abs(last_candle['close'] - last_candle['open'])
             upper_shadow = last_candle['high'] - max(last_candle['open'], last_candle['close'])
             if upper_shadow > body * 1.5 and last_candle['close'] <= last_candle['open']:
                 signal = "SHORT"
+                stop_loss = max_40_high * (1 + 0.003)
+
+        # --- ВАРІАНТ 2: ТРЕНДОВИЙ ВІДКАТ (ІМПУЛЬС -> КОРЕКЦІЯ -> РЕАКЦІЯ) ---
+        if not signal:
+            # Визначаємо чи був імпульс на попередніх свічках (наприклад, свічка N-2 або N-3 росла/падала із сильним об'ємом)
+            recent_impulse_up = prev_candle['close'] > prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
+            recent_impulse_down = prev_candle['close'] < prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
+
+            # Відкат: поточна свічка робить невелику корекцію вниз (для лонга) або вгору (для шорта)
+            # Реакція: поява покупця/продавця зі сплеском об'єму на поточній свічці
+            if recent_impulse_up and last_candle['close'] > last_candle['open'] and is_volume_spike:
+                # Покупці захистили рівень після відкату
+                signal = "LONG"
+                stop_loss = min(last_candle['low'], prev_candle['low']) * (1 - 0.002)
+
+            elif recent_impulse_down and last_candle['close'] < last_candle['open'] and is_volume_spike:
+                # Продавці тиснуть далі після невеликої корекції
+                signal = "SHORT"
+                stop_loss = max(last_candle['high'], prev_candle['high']) * (1 + 0.002)
 
         if not signal:
-            return None
+            return None, is_volume_spike
 
         if signal == "LONG":
-            stop_loss = min_40_low * (1 - 0.003)
             risk = current_price - stop_loss
         else:
-            stop_loss = max_40_high * (1 + 0.003)
             risk = stop_loss - current_price
 
         if risk <= 0:
-            return None
+            return None, is_volume_spike
 
         if signal == "LONG":
             tp1 = max([x['high'] for x in klines_15m if x['high'] > current_price], default=current_price + (atr_15m * 2)) + atr_15m + 1
@@ -178,15 +200,15 @@ async def analyze_market(symbol):
             reward_tp1 = current_price - tp1
 
         if (reward_tp1 / risk) < 1.3:
-            return None
+            return None, is_volume_spike
 
         return {
             "symbol": symbol, "signal": signal, "entry": current_price,
             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-        }
+        }, is_volume_spike
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
-        return None
+        return None, False
 
 # --- ПЕРЕВІРКА ПОЗИЦІЙ ТА РИЗИКУ ---
 async def get_exchange_positions():
@@ -206,7 +228,6 @@ async def count_risk_positions():
             if float(p.get('positionAmt', 0)) != 0:
                 total_open += 1
                 symbol = p.get('symbol')
-                # Якщо позиція є на біржі, але ще не занесена в монітор — додаємо її автоматично як ризикову
                 if symbol not in active_trade_monitors:
                     active_trade_monitors[symbol] = {"in_breakeven": False}
                 
@@ -361,9 +382,12 @@ async def main_scanner():
                 elif isinstance(data_field, dict):
                     contracts_data = data_field.get("contracts", [])
 
-            # Жорсткий фільтр: беремо тільки чисті ф'ючерси USDT без дефісів та зайвої екзотики
             symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT') and '-' not in item['symbol']]
             
+            scanned_count = 0
+            volume_spikes_count = 0
+            signals_found = 0
+
             for symbol in symbols:
                 if is_blacklisted(symbol):
                     continue
@@ -371,14 +395,20 @@ async def main_scanner():
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
                     continue
 
+                scanned_count += 1
                 try:
-                    setup = await analyze_market(symbol)
+                    setup, has_spike = await analyze_market(symbol)
+                    if has_spike:
+                        volume_spikes_count += 1
                     if setup:
+                        signals_found += 1
                         await open_position(setup)
                         break 
                 except Exception as e:
                     coin_cooldowns[symbol] = time.time() + 300
-                    await log_and_alert("Помилка при відкритті позиції", str(e), symbol)
+                    print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+
+            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
 
         except Exception as e:
             await log_and_alert("Помилка в головному циклі сканування", str(e))
