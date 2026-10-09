@@ -533,7 +533,7 @@ async def main_scanner():
 
             tickers_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker')
             ticker_volumes = {}
-            if tickers_res and isinstance(tickers_res, dict) and tickers_res.get("code") == 0:
+            if tickers_res and isinstance(tickers_res, dict) and tickers_res.get('code') == 0:
                 for t in tickers_res.get("data", []):
                     sym = t.get("symbol")
                     q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0) or 0)
@@ -563,7 +563,7 @@ async def main_scanner():
             scanned_count = 0
             volume_spikes_count = 0
             signals_found = 0
-            skipped_details = []  # Обов'язково ініціалізуємо список перед циклом
+            skipped_details = []  # Звіт по відсіяних монетах
 
             for symbol in symbols:
                 if is_blacklisted(symbol):
@@ -588,6 +588,7 @@ async def main_scanner():
                     if has_spike:
                         volume_spikes_count += 1
                         if not setup:
+                            # Додаємо детальну інформацію про відсіювання зі сплеском об'єму
                             skipped_details.append(f"• {symbol}: {reason}")
 
                     if setup:
@@ -601,7 +602,7 @@ async def main_scanner():
             print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count}", flush=True)
 
             if skipped_details:
-                report_msg = "🔍 **Монети зі сплеском об'єму (відсіяні):**\n" + "\n".join(skipped_details)
+                report_msg = "🔍 Монети зі сплеском об'єму (відсіяні):\n" + "\n".join(skipped_details)
                 print(report_msg, flush=True)
                 await send_telegram(report_msg)
 
@@ -615,3 +616,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
+        
