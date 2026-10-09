@@ -398,10 +398,14 @@ async def monitor_trades_loop():
                 except Exception as ex:
                     print(f"Помилка захисту рівня у моніторингу: {ex}", flush=True)
 
-                current_price_data = await get_klines(symbol, "1h", 1)
-                if not current_price_data:
+                ticker_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker', {'symbol': symbol})
+                if not ticker_res or not isinstance(ticker_res, dict) or ticker_res.get('code') != 0:
                     continue
-                current_price = float(current_price_data[0]['close'])
+                ticker_data = ticker_res.get('data', {})
+                # Залежно від структури відповіді біржі беремо останню ціну (lastPrice) або ціну маркування
+                current_price = float(ticker_data.get('lastPrice', 0) or ticker_data.get('price', 0))
+                if current_price == 0:
+                    continue
 
                 # Отримуємо ціну входу з біржі або локальної пам'яті
                 exchange_entry = float(current_pos_data.get('averagePrice', 0) or current_pos_data.get('entryPrice', 0)) if current_pos_data else 0
