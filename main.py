@@ -22,6 +22,9 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 LEVERAGE = 10
 MARGIN_USD = 0.5
 MAX_RISK_POSITIONS = 2
+MIN_24H_VOLUME = 300_000
+MAX_24H_VOLUME = 30_000_000
+
 server_time_offset = 0
 active_trade_monitors = {}
 coin_cooldowns = {} 
@@ -29,11 +32,11 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol:
+    if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol:
         return True
     return False
 
-# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ (З підтримкою HEAD) ---
+# --- ДОПОМІЖНИЙ HTTP-СЕРВЕР ДЛЯ САМОПІНГУ ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -109,7 +112,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ ---
+# --- АНАЛІЗ РИНКУ (ОБ'ЄДНАНІ СТРАТЕГІЇ) ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -148,7 +151,7 @@ async def analyze_market(symbol):
         signal = None
         stop_loss = 0
 
-        # Варіант 1: Межевий реверс
+        # Варіант 1: Межевий реверс (флет/межі)
         if current_price <= min_40_low * 1.003 and is_volume_spike:
             body = abs(last_candle['close'] - last_candle['open'])
             lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
@@ -163,7 +166,7 @@ async def analyze_market(symbol):
                 signal = "SHORT"
                 stop_loss = max_40_high * (1 + 0.003)
 
-        # Варіант 2: Трендовий відкат
+        # Варіант 2: Трендовий відкат (імпульс -> корекція -> реакція)
         if not signal:
             recent_impulse_up = prev_candle['close'] > prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
             recent_impulse_down = prev_candle['close'] < prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
@@ -236,9 +239,18 @@ async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
-        lev_res = await bingx_request("POST", "/openApi/swap/v1/trade/leverage", {"symbol": symbol, "leverage": LEVERAGE, "side": side})
+        lev_payload = {
+            "symbol": symbol,
+            "leverage": LEVERAGE,
+            "side": side,
+            "marginType": "CROSSED"
+        }
+        lev_res = await bingx_request("POST", "/openApi/swap/v1/trade/leverage", lev_payload)
         if not lev_res or (isinstance(lev_res, dict) and lev_res.get("code") != 0):
-            msg_err = lev_res.get('msg') if isinstance(lev_res, dict) else 'Network error'
+            msg_err = lev_res.get('msg', 'Network error') if isinstance(lev_res, dict) else 'Network error'
+            if "this api is not exist" in str(msg_err):
+                BLACKLIST.add(symbol)
+                print(f"[BLACKLIST] Автоматично додано у чорний список: {symbol}", flush=True)
             raise Exception(f"Не вдалося встановити плече: {msg_err}")
 
         qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
@@ -353,6 +365,15 @@ async def main_scanner():
                 await asyncio.sleep(30)
                 continue
 
+            # Отримуємо тикери для перевірки добового об'єму (quoteVolume)
+            tickers_res = await bingx_request("GET", "/openApi/swap/v2/quote/ticker")
+            ticker_volumes = {}
+            if tickers_res and isinstance(tickers_res, dict) and tickers_res.get("code") == 0:
+                for t in tickers_res.get("data", []):
+                    sym = t.get("symbol")
+                    q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0))
+                    ticker_volumes[sym] = q_vol
+
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
             if not res:
                 await asyncio.sleep(30)
@@ -372,7 +393,6 @@ async def main_scanner():
                 elif isinstance(data_field, dict):
                     contracts_data = data_field.get("contracts", [])
 
-            # Виправляємо фільтр: дозволяємо стандартні ф'ючерси з дефісами (наприклад, BTC-USDT)
             symbols = [item['symbol'] for item in contracts_data if isinstance(item, dict) and 'symbol' in item and item['symbol'].endswith('USDT')]
             
             scanned_count = 0
@@ -381,6 +401,11 @@ async def main_scanner():
 
             for symbol in symbols:
                 if is_blacklisted(symbol):
+                    continue
+                
+                # Перевірка об'єму за 24 години (300k - 30M USDT)
+                vol_24h = ticker_volumes.get(symbol, 0)
+                if vol_24h > 0 andnot (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
                     continue
                 
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
@@ -399,7 +424,7 @@ async def main_scanner():
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
-            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар: {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
+            print(f"📊 [СКАНУВАННЯ ЗАВЕРШЕНО] Перевірено пар (з урахуванням об'єму): {scanned_count} | Сплесків об'єму: {volume_spikes_count} | Знайдено сигналів: {signals_found}", flush=True)
 
         except Exception as e:
             await log_and_alert("Помилка в головному циклі сканування", str(e))
