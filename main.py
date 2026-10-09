@@ -56,7 +56,7 @@ async def send_telegram(text):
             async with session.post(url, json=payload, timeout=10) as resp:
                 pass
         except Exception as e:
-            print(f"[LOG ERROR] Помилка відправки в Telegram: {e}")
+            print(f"[LOG ERROR] Помилка відправки в Telegram: {e}", flush=True)
 
 async def log_and_alert(error_title, error_message, symbol=None):
     full_text = f"❌ *{error_title}*"
@@ -64,8 +64,8 @@ async def log_and_alert(error_title, error_message, symbol=None):
         full_text += f"\nМонета: `{symbol}`"
     full_text += f"\nПомилка: `{error_message}`"
     
-    print(f"[ERROR] {error_title} | Symbol: {symbol} | Msg: {error_message}")
-    print(traceback.format_exc())
+    print(f"[ERROR] {error_title} | Symbol: {symbol} | Msg: {error_message}", flush=True)
+    print(traceback.format_exc(), flush=True)
     await send_telegram(full_text)
 
 # --- BINGX API SIGNATURE & REQUESTS ---
@@ -80,13 +80,14 @@ async def bingx_request(method, endpoint, params=None):
     signature = get_sign(API_SECRET, query_string)
     url = f"{BINGX_BASE_URL}{endpoint}?{query_string}&signature={signature}"
     
-    headers = {"X-BingX-API-KEY": API_KEY}
+    # Використовуємо правильний заголовок для авторизації в BingX API
+    headers = {"X-BX-APIKEY": API_KEY}
     async with aiohttp.ClientSession() as session:
         try:
             async with session.request(method, url, headers=headers, timeout=15) as resp:
                 data = await resp.json()
                 if isinstance(data, dict) and data.get("code") != 0:
-                    print(f"[API WARN] Endpoint {endpoint} returned code {data.get('code')}: {data.get('msg')}")
+                    print(f"[API WARN] Endpoint {endpoint} returned code {data.get('code')}: {data.get('msg')}", flush=True)
                 return data
         except Exception as e:
             await log_and_alert("Помилка запиту до API", str(e), endpoint)
@@ -103,7 +104,7 @@ async def get_klines(symbol, interval, limit=40):
                 elif isinstance(res, list):
                     return res
         except Exception as e:
-            print(f"[LOG ERROR] Klines error {symbol}: {e}")
+            print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
 # --- АНАЛІЗ РИНКУ ТА РІВНІВ (RESONANCE + ATR) ---
@@ -210,7 +211,7 @@ async def count_risk_positions():
                 if symbol in active_trade_monitors and not active_trade_monitors[symbol].get('in_breakeven', False):
                     risk_count += 1
         
-        print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | З них з ризиком: {risk_count}")
+        print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | Ризикових: {risk_count}", flush=True)
         return risk_count
     except Exception as e:
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
@@ -248,7 +249,7 @@ async def open_position(setup):
         
         msg = f"🚀 *Відкрито позицію ({side})*\nМонета: `{symbol}`\nВхід: `{setup['entry']}`\nСтоп: `{setup['stop_loss']}`\nTP1: `{setup['tp1']}`"
         await send_telegram(msg)
-        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} за ціною {setup['entry']}")
+        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} за ціною {setup['entry']}", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
@@ -263,7 +264,7 @@ async def monitor_trades_loop():
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
                     await send_telegram(f"🏁 Позиція по `{symbol}` закрита на біржі (Стоп / Тейк спрацювали).")
-                    print(f"[INFO] Позиція {symbol} закрита на біржі.")
+                    print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
                     del active_trade_monitors[symbol]
                     continue
                 
@@ -279,7 +280,7 @@ async def monitor_trades_loop():
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         await send_telegram(f"✅ TP1 досягнуто для `{symbol}`! Стоп переведено в безубиток (БУ).")
-                        print(f"[SUCCESS] TP1 досягнуто для {symbol}, стоп переведено в БУ.")
+                        print(f"[SUCCESS] TP1 досягнуто для {symbol}, стоп переведено в БУ.", flush=True)
                         
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
@@ -294,7 +295,7 @@ async def report_loop():
             open_positions_list = [p for p in positions if float(p.get('positionAmt', 0)) != 0]
             
             if not open_positions_list:
-                print("[LOG REPORT] Немає відкритих позицій для звіту.")
+                print("[LOG REPORT] Немає відкритих позицій для звіту.", flush=True)
                 continue
                 
             report = f"📊 *Звіт по відкритих позиціях (15 хв):*\nВсього активних: `{len(open_positions_list)}`\n"
@@ -316,7 +317,7 @@ async def self_ping_loop():
                     async with session.get(RENDER_URL, timeout=10) as resp:
                         pass
                 except Exception as e:
-                    print(f"[LOG WARN] Самопінг не вдався: {e}")
+                    print(f"[LOG WARN] Самопінг не вдався: {e}", flush=True)
 
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
@@ -328,7 +329,7 @@ async def main_scanner():
     
     while True:
         try:
-            print("🔍 Початок нового циклу сканування ринку...")
+            print("🔍 Початок нового циклу сканування ринку...", flush=True)
             
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
             if not res:
@@ -360,7 +361,7 @@ async def main_scanner():
 
                 risk_pos_count = await count_risk_positions()
                 if risk_pos_count >= MAX_RISK_POSITIONS:
-                    print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})")
+                    print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
                     break
 
                 try:
@@ -381,5 +382,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
-        print("[INFO] Бот зупинений користувачем.")
+        print("[INFO] Бот зупинений користувачем.", flush=True)
         
