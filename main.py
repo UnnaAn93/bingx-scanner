@@ -210,7 +210,7 @@ async def count_risk_positions():
         return risk_count
     except Exception as e:
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
-        return MAX_RISK_POSITIONS # Захист від відкриття у разі збою
+        return MAX_RISK_POSITIONS
 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА УПРАВЛІННЯ ---
 async def open_position(setup):
@@ -323,6 +323,8 @@ async def main_scanner():
     
     while True:
         try:
+            print("🔍 Початок нового циклу сканування ринку...")
+            
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
             if not res or res.get("code") != 0:
                 await log_and_alert("Помилка отримання контракту з біржі", res.get("msg") if res else "No response")
@@ -340,8 +342,7 @@ async def main_scanner():
 
                 risk_pos_count = await count_risk_positions()
                 if risk_pos_count >= MAX_RISK_POSITIONS:
-                    print(f"[INFO] Досягнуто ліміт ризикових позицій ({risk_pos_count}/{MAX_RISK_POSITIONS}). Сканування припинено до звільнення місця.")
-                    await asyncio.sleep(10)
+                    print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})")
                     break
 
                 try:
