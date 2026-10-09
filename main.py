@@ -129,7 +129,8 @@ def calculate_atr(klines, period=14):
 async def set_leverage(session, symbol, leverage, side=None):
     path = "/openApi/swap/v2/trade/leverage"
     ts = str(int(time.time() * 1000) + server_time_offset)
-    params = {"symbol": symbol, "leverage": LEVERAGE, "timestamp": ts}
+    corrected_side = "LONG" if str(side).upper() in ["LONG", "BUY"] else "SHORT"
+    params = {"symbol": symbol, "leverage": str(LEVERAGE), "side": corrected_side, "timestamp": ts}
     query_str = urllib.parse.urlencode(sorted(params.items()))
     sig = get_sign(API_SECRET, query_str)
     url = f"{BINGX_BASE_URL}{path}?{query_str}&signature={sig}"
