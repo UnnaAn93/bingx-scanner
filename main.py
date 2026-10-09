@@ -480,12 +480,14 @@ async def monitor_trades_loop():
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol_str, 'orderId': ord_id})
 
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
+                            current_qty = abs(float(current_pos_data.get('positionAmt', 0)))
                             sl_payload = {
                                 "symbol": symbol_str,
                                 "side": sl_side,
                                 "positionSide": position_side,
                                 "type": "STOP_MARKET",
                                 "stopPrice": round(entry_price, 4),
+                                "quantity": current_qty,
                                 "workingType": "MARK_PRICE"
                             }
                             await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
