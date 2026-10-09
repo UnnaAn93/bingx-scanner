@@ -348,9 +348,6 @@ async def monitor_trades_loop():
                     del active_trade_monitors[symbol]
                     continue
 
-                if 'tp1' not in data:
-                    continue
-
                 # --- Перевірка зустрічного об'єму для дострокової фіксації плюсу ---
                 try:
                     current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
@@ -397,18 +394,29 @@ async def monitor_trades_loop():
                     continue
                 current_price = float(current_price_data[0]['close'])
 
+                # Отримуємо ціну входу з біржі або локальної пам'яті
+                exchange_entry = float(current_pos_data.get('averagePrice', 0) or current_pos_data.get('entryPrice', 0)) if current_pos_data else 0
+                entry_price = data.get('entry') or exchange_entry
+
+                atr_val = data.get('atr', current_price * 0.01)
+                side_val = data.get('side', "LONG" if current_pos_data.get('positionSide') == "LONG" else "SHORT")
+                
+                if 'tp1' in data:
+                    tp1_price = data['tp1']
+                else:
+                    tp1_price = entry_price + (atr_val * 2.0) if side_val == "LONG" else entry_price - (atr_val * 2.0)
+
                 if not data.get('tp1_hit', False):
-                    hit_tp1 = (data['side'] == "LONG" and current_price >= data['tp1']) or \
-                              (data['side'] == "SHORT" and current_price <= data['tp1'])
-                    if hit_tp1:
+                    hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or \
+                              (side_val == "SHORT" and current_price <= tp1_price)
+                    
+                    if hit_tp1 and entry_price > 0:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
 
                         # Реальний перенос стоп-лосса в БУ на біржі
                         try:
                             symbol_str = symbol
-                            side_val = data['side']
-                            entry_price = data['entry']
                             position_side = "LONG" if side_val == "LONG" else "SHORT"
 
                             orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {"symbol": symbol_str})
@@ -439,7 +447,7 @@ async def monitor_trades_loop():
                         except Exception as ex:
                             print(f"[ERROR] Помилка перенесення стопа в БУ: {ex}", flush=True)
 
-                        await send_telegram(f"✅ TP1 досягнуто для {symbol}! Стоп перенесено в безубиток.")
+                        await send_telegram(f"✅ TP1 досягнуто для {symbol}! Стоп перенесено в безубиток на {entry_price}.")
                         print(f"[SUCCESS] TP1 досягнуто для {symbol}.", flush=True)
 
         except Exception as e:
