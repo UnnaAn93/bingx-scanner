@@ -345,9 +345,9 @@ async def open_position(setup):
 async def monitor_trades_loop():
     while True:
         try:
-            positions = await get_exchange_positions()
+            positions = await get_exchange_pssions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
-
+            
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
                     await send_telegram(f"❌ Позиція по {symbol} закрита на біржі.")
@@ -395,6 +395,7 @@ async def monitor_trades_loop():
                                     await send_telegram(f"🛡 Рівень захисту! Закрито LONG по {symbol} в плюс (PnL: {unreal_pnl})")
                                     del active_trade_monitors[symbol]
                                     continue
+
                 except Exception as ex:
                     print(f"Помилка захисту рівня у моніторингу: {ex}", flush=True)
 
@@ -402,35 +403,25 @@ async def monitor_trades_loop():
                 if not ticker_res or not isinstance(ticker_res, dict) or ticker_res.get('code') != 0:
                     continue
                 ticker_data = ticker_res.get('data', {})
-                # Залежно від структури відповіді біржі беремо останню ціну (lastPrice) або ціну маркування
+                
                 current_price = float(ticker_data.get('lastPrice', 0) or ticker_data.get('price', 0))
                 if current_price == 0:
                     continue
 
-                # Робимо прямий запит на біржу для отримання інформації по конкретній позиції цього символу
-                pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
-                exchange_entry = 0.0
-                if pos_res and isinstance(pos_res, dict) and pos_res.get('code') == 0:
-                    pos_list = pos_res.get('data', [])
-                    # Якщо прийшов словник, а не список
-                    if isinstance(pos_list, dict):
-                        pos_list = pos_list.get('positions', [])
-    
-                    for p in pos_list:
-                        if p.get('symbol') == symbol or p.get('symbol') == symbol.replace('-', ''):
-                            exchange_entry = float(
-                                p.get('averagePrice', 0) or 
-                                p.get('entryPrice', 0) or 
-                                p.get('price', 0) or 
-                                p.get('openPrice', 0)
-                            )
-                            break
-                entry_price = data.get('entry') or exchange_entry
-                atr_val = data.get('atr', current_price * 0.01)
-                side_val = data.get('side', "LONG" if current_pos_data.get('positionSide') == "LONG" else "SHORT")
+                # Надійне отримання ціни входу та розрахунок тейку без зайвих запитів
+                entry_price = float(data.get('entry', 0))
+                if entry_price == 0:
+                    entry_price = current_price
+
+                atr_val = float(data.get('atr', current_price * 0.01))
                 
+                if 'side' in data:
+                    side_val = data['side']
+                else:
+                    side_val = "LONG" if current_pos_data and current_pos_data.get('positionSide') == "LONG" else "SHORT"
+
                 if 'tp1' in data:
-                    tp1_price = data['tp1']
+                    tp1_price = float(data['tp1'])
                 else:
                     tp1_price = entry_price + (atr_val * 2.0) if side_val == "LONG" else entry_price - (atr_val * 2.0)
 
@@ -438,19 +429,18 @@ async def monitor_trades_loop():
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or \
                               (side_val == "SHORT" and current_price <= tp1_price)
                     print(f"[MONITOR DEBUG] {symbol} | Поточна ціна: {current_price} | TP1: {tp1_price} | Сторона: {side_val} | TP1 досягнуто: {hit_tp1}", flush=True)
-                                                               
+
                     if hit_tp1 and entry_price > 0:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
 
-                        # Реальний перенос стоп-лосса в БУ на біржі
                         try:
                             symbol_str = symbol
                             position_side = "LONG" if side_val == "LONG" else "SHORT"
 
-                            orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {"symbol": symbol_str})
+                            orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol_str})
                             orders_list = []
-                            if isinstance(orders_res, dict) and orders_res.get("code") == 0:
+                            if isinstance(orders_res, dict) and orders_res.get('code') == 0:
                                 orders_data = orders_res.get("data", [])
                                 orders_list = orders_data.get("orders", []) if isinstance(orders_data, dict) else orders_data
                             elif isinstance(orders_res, list):
@@ -460,7 +450,7 @@ async def monitor_trades_loop():
                                 if ord_item.get("type") == "STOP_MARKET":
                                     ord_id = ord_item.get("orderId")
                                     if ord_id:
-                                        await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {"symbol": symbol_str, "orderId": ord_id})
+                                        await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol_str, 'orderId': ord_id})
 
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
                             sl_payload = {
@@ -481,7 +471,7 @@ async def monitor_trades_loop():
 
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
-        
+
         await asyncio.sleep(10)
         
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
