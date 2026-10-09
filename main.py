@@ -115,7 +115,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ З ЗАХИСТОМ ВІД ХАЇВ/ЛОЇВ ТА ПРОЛИВІВ ---
+# --- АНАЛІЗ РИНКУ З УРАХУВАННЯМ РІВНІВ ТА КОЕФІЦІЄНТА 1.3 ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -159,7 +159,7 @@ async def analyze_market(symbol):
 
         signal = None
         stop_loss = 0
-        tp1 = 0
+        tp1 = tp2 = tp3 = 0
 
         # 1. LONG: Заборона купувати на хаях або під час обвалу
         if price_position < 0.7 and is_volume_spike:
@@ -168,8 +168,14 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
                 signal = "LONG"
-                stop_loss = current_price - (atr_15m * 1.5)
-                tp1 = current_price + (atr_15m * 2.0)
+                stop_loss = min_40_low * (1 - 0.003)
+                
+                resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
+                resistances_1h = sorted([x['high'] for x in klines_1h if x['high'] > current_price])
+                
+                tp1 = resistances_15m[0] + atr_15m + 1 if resistances_15m else current_price + (atr_15m * 2) + 1
+                tp2 = resistances_1h[1] if len(resistances_1h) > 1 else (resistances_1h[0] + atr_15m + 1 if resistances_1h else tp1 + atr_15m)
+                tp3 = resistances_1h[2] if len(resistances_1h) > 2 else tp2 + atr_15m
 
         # 2. SHORT: ЖОРСТКА ЗАБОРОНА шортити на лоях або після різкого проливу вниз
         if not signal and price_position > 0.3 and is_volume_spike:
@@ -178,19 +184,28 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
-                stop_loss = current_price + (atr_15m * 1.5)
-                tp1 = current_price - (atr_15m * 2.0)
+                stop_loss = max_40_high * (1 + 0.003)
+                
+                supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
+                supports_1h = sorted([x['low'] for x in klines_1h if x['low'] < current_price], reverse=True)
+                
+                tp1 = supports_15m[0] - (atr_15m + 1) if supports_15m else current_price - (atr_15m * 2) - 1
+                tp2 = supports_1h[1] if len(supports_1h) > 1 else (supports_1h[0] - (atr_15m + 1) if supports_1h else tp1 - atr_15m)
+                tp3 = supports_1h[2] if len(supports_1h) > 2 else tp2 - atr_15m
 
         if not signal:
             return None, is_volume_spike
 
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
-        if risk <= 0 or tp1 <= 0 or (signal == "LONG" and tp1 <= current_price) or (signal == "SHORT" and tp1 >= current_price):
+        reward_tp1 = (tp1 - current_price) if signal == "LONG" else (current_price - tp1)
+
+        # Перевірка співвідношення ризику до прибутку для TP1 (>= 1.3)
+        if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
             return None, is_volume_spike
 
         return {
             "symbol": symbol, "signal": signal, "entry": current_price,
-            "stop_loss": stop_loss, "tp1": tp1, "atr": atr_15m
+            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
         }, is_volume_spike
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
@@ -226,20 +241,24 @@ async def count_risk_positions():
         await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
-# --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ SL/TP НА БІРЖІ ---
+# --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
-        qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
+        total_qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
         
+        qty_50 = round(total_qty * 0.5, 4)
+        qty_25_1 = round(total_qty * 0.25, 4)
+        qty_25_2 = round(total_qty - qty_50 - qty_25_1, 4)
+
         # 1. Ринковий ордер на вхід
         order_payload = {
             "symbol": symbol,
             "side": "BUY" if side == "LONG" else "SELL",
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "MARKET",
-            "quantity": qty
+            "quantity": total_qty
         }
         
         res = await bingx_request("POST", "/openApi/swap/v2/trade/order", order_payload)
@@ -247,8 +266,9 @@ async def open_position(setup):
             err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
             raise Exception(f"Помилка ордеру маркет: {err_msg}")
             
-        # 2. Виставлення Стоп-Лосу (STOP_MARKET) на біржі
         sl_side = "SELL" if side == "LONG" else "BUY"
+
+        # 2. Стоп-лосс на весь обсяг
         sl_payload = {
             "symbol": symbol,
             "side": sl_side,
@@ -260,26 +280,35 @@ async def open_position(setup):
         }
         await bingx_request("POST", "/openApi/swap/v2/trade/order", sl_payload)
 
-        # 3. Виставлення Тейк-Профіту (TAKE_PROFIT_MARKET) на біржі
-        tp_payload = {
-            "symbol": symbol,
-            "side": sl_side,
-            "positionSide": "LONG" if side == "LONG" else "SHORT",
-            "type": "TAKE_PROFIT_MARKET",
-            "stopPrice": round(setup['tp1'], 4),
-            "workingType": "MARK_PRICE",
-            "reduceOnly": "true"
-        }
-        await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
+        # 3. Виставлення трьох Тейк-Профітів (50% / 25% / 25%)
+        for tp_price, tp_qty in [(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)]:
+            if tp_qty > 0:
+                tp_payload = {
+                    "symbol": symbol,
+                    "side": sl_side,
+                    "positionSide": "LONG" if side == "LONG" else "SHORT",
+                    "type": "TAKE_PROFIT_MARKET",
+                    "stopPrice": round(tp_price, 4),
+                    "quantity": tp_qty,
+                    "workingType": "MARK_PRICE",
+                    "reduceOnly": "true"
+                }
+                await bingx_request("POST", "/openApi/swap/v2/trade/order", tp_payload)
 
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
             "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
         }
         
-        msg = f"🚀 *Відкрито позицію ({side}) з SL/TP*\nМонета: `{symbol}`\nВхід: `{setup['entry']}`\nСтоп: `{setup['stop_loss']}`\nTP1: `{setup['tp1']}`"
+        msg = (f"🚀 *Відкрито позицію ({side}) з 3 TP (50/25/25)*\n"
+               f"Монета: `{symbol}`\n"
+               f"Вхід: `{setup['entry']}`\n"
+               f"Стоп: `{setup['stop_loss']}`\n"
+               f"TP1 (50%): `{setup['tp1']}`\n"
+               f"TP2 (25%): `{setup['tp2']}`\n"
+               f"TP3 (25%): `{setup['tp3']}`")
         await send_telegram(msg)
-        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та виставлено стоп/тейк на біржі.", flush=True)
+        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та виставлено 3 тейки і стоп на біржі.", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
@@ -312,8 +341,8 @@ async def monitor_trades_loop():
                     if hit_tp1:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        await send_telegram(f"✅ TP1 досягнуто для `{symbol}`! Стоп переведено в БУ.")
-                        print(f"[SUCCESS] TP1 досягнуто для {symbol}, стоп в БУ.", flush=True)
+                        await send_telegram(f"✅ TP1 досягнуто для `{symbol}`!")
+                        print(f"[SUCCESS] TP1 досягнуто для {symbol}.", flush=True)
                         
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
