@@ -498,7 +498,7 @@ async def monitor_trades_loop():
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(60)
         
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
