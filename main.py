@@ -135,11 +135,11 @@ async def analyze_market(symbol):
         
         if len(raw_15m) < 35 or len(raw_1h) < 20:
             return None, False
-
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
+            
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
                        'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
-        klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_1h]
-
+        klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h]
+        
         atr_15m = calculate_atr(klines_15m)
         current_price = klines_15m[-1]['close']
         
@@ -149,18 +149,18 @@ async def analyze_market(symbol):
         
         if price_range <= 0 or atr_15m <= 0:
             return None, False
-
+            
         price_position = (current_price - min_40_low) / price_range
         
         avg_volume = sum([x['volume'] for x in klines_15m[-20:]]) / 20
         last_candle = klines_15m[-1]
         prev_candle = klines_15m[-2]
         is_volume_spike = last_candle['volume'] > avg_volume * 1.5
-
+        
         signal = None
         stop_loss = 0
         tp1 = tp2 = tp3 = 0
-
+        
         # 1. LONG: Заборона купувати на хаях або під час обвалу
         if price_position < 0.7 and is_volume_spike:
             body_last = last_candle['close'] - last_candle['open']
@@ -168,15 +168,15 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
                 signal = "LONG"
-                # Стоп нижче найнижчої свічки за 40 свічок мінус 0.3%
-                stop_loss = min_40_low * (1 - 0.003)
+                stop_loss = min_40_low - atr_15m
                 
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
-                resistances_1h = sorted([x['high'] for x in klines_1h if x['high'] > current_price])
+                nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 4)
                 
-                tp1 = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 1.5)
-                tp2 = resistances_1h[1] if len(resistances_1h) > 1 else (resistances_1h[0] if resistances_1h else tp1 + atr_15m)
-                tp3 = resistances_1h[2] if len(resistances_1h) > 2 else tp2 + atr_15m
+                # TP1 нижче опору, але не ближче ніж 2 * ATR
+                tp1 = min(nearest_res - (atr_15m * 0.5), current_price + (atr_15m * 2.0))
+                tp2 = tp1 + (atr_15m * 1.5)
+                tp3 = tp2 + (atr_15m * 1.5)
                 
                 if not (stop_loss < current_price < tp1 < tp2 < tp3):
                     return None, is_volume_spike
@@ -188,15 +188,15 @@ async def analyze_market(symbol):
 
             if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
-                # Стоп вище найвищої свічки за 40 свічок плюс 0.3%
-                stop_loss = max_40_high * (1 + 0.003)
+                stop_loss = max_40_high + atr_15m
                 
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
-                supports_1h = sorted([x['low'] for x in klines_1h if x['low'] < current_price], reverse=True)
+                nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 4)
                 
-                tp1 = supports_15m[0] if supports_15m else current_price - (atr_15m * 1.5)
-                tp2 = supports_1h[1] if len(supports_1h) > 1 else (supports_1h[0] if supports_1h else tp1 - atr_15m)
-                tp3 = supports_1h[2] if len(supports_1h) > 2 else tp2 - atr_15m
+                # TP1 вище підтримки, але не ближче ніж 2 * ATR
+                tp1 = max(nearest_sup + (atr_15m * 0.5), current_price - (atr_15m * 2.0))
+                tp2 = tp1 - (atr_15m * 1.5)
+                tp3 = tp2 - (atr_15m * 1.5)
                 
                 if not (stop_loss > current_price > tp1 > tp2 > tp3):
                     return None, is_volume_spike
@@ -218,6 +218,7 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False
+        
 
 # --- ПЕРЕВІРКА ПОЗИЦІЙ ---
 async def get_exchange_positions():
