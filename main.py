@@ -331,6 +331,13 @@ async def main_scanner():
         try:
             print("🔍 Початок нового циклу сканування ринку...", flush=True)
             
+            # Перевіряємо ліміт позицій один раз на початку циклу
+            risk_pos_count = await count_risk_positions()
+            if risk_pos_count >= MAX_RISK_POSITIONS:
+                print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
+                await asyncio.sleep(30)
+                continue
+
             res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
             if not res:
                 await asyncio.sleep(30)
@@ -359,11 +366,6 @@ async def main_scanner():
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
                     continue
 
-                risk_pos_count = await count_risk_positions()
-                if risk_pos_count >= MAX_RISK_POSITIONS:
-                    print(f"🛑 Зупинка сканування: вже є {risk_pos_count} позиції з ризиком (ліміт: {MAX_RISK_POSITIONS})", flush=True)
-                    break
-
                 try:
                     setup = await analyze_market(symbol)
                     if setup:
@@ -383,4 +385,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
-        
+    
