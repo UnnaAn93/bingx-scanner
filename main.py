@@ -508,7 +508,7 @@ async def main_scanner():
 
                 scanned_count += 1
                 try:
-                    setup, has_spike = await analyze_market(symbol)
+                    setup, has_spike, reason = await analyze_market(symbol)
                     if has_spike:
                         volume_spikes_count += 1
                     if setup:
