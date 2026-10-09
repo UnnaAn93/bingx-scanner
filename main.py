@@ -408,7 +408,7 @@ async def monitor_trades_loop():
                 if current_price == 0:
                     continue
 
-                # Надійне отримання справжньої ТВХ (з пам'яті -> з біржі -> поточна як крайній випадок)
+                # 1. Фіксуємо ТВХ один раз і зберігаємо в пам'ять (Пам'ять -> Біржа -> Поточна ціна як fallback)
                 entry_price = float(data.get('entry', 0))
                 if entry_price == 0 and current_pos_data:
                     entry_price = float(
@@ -418,6 +418,8 @@ async def monitor_trades_loop():
                     )
                 if entry_price == 0:
                     entry_price = current_price
+                
+                data['entry'] = entry_price  # Надійно зберігаємо в пам'ять
 
                 atr_val = float(data.get('atr', current_price * 0.01))
                 
@@ -425,11 +427,14 @@ async def monitor_trades_loop():
                     side_val = data['side']
                 else:
                     side_val = "LONG" if current_pos_data and current_pos_data.get('positionSide') == "LONG" else "SHORT"
+                data['side'] = side_val
 
+                # 2. Фіксуємо TP1 один раз і зберігаємо в пам'ять, щоб він не плавав
                 if 'tp1' in data:
                     tp1_price = float(data['tp1'])
                 else:
                     tp1_price = entry_price + (atr_val * 2.0) if side_val == "LONG" else entry_price - (atr_val * 2.0)
+                    data['tp1'] = tp1_price  # Фіксуємо в пам'яті
 
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or \
