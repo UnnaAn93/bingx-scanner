@@ -427,6 +427,7 @@ async def monitor_trades_loop():
                 entry_price = float(data.get('entry', 0))
                 if entry_price == 0 and current_pos_data:
                     entry_price = float(
+                        current_pos_data.get('avgPrice', 0) or 
                         current_pos_data.get('entryPrice', 0) or 
                         current_pos_data.get('averagePrice', 0) or 
                         current_pos_data.get('price', 0) or 0
