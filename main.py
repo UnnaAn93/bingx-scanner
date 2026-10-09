@@ -32,7 +32,6 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
-    # Прибрали перевірку дефіса, залишили лише базовий захист
     if symbol in BLACKLIST or symbol.startswith(("NCF", "NCS", "NCCOX")) or "USD" not in symbol or "." in symbol:
         return True
     return False
@@ -113,7 +112,7 @@ async def get_klines(symbol, interval, limit=40):
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
 
-# --- АНАЛІЗ РИНКУ ---
+# --- АНАЛІЗ РИНКУ З ЗАХИСТОМ ВІД ХАЇВ/ЛОЇВ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -143,6 +142,12 @@ async def analyze_market(symbol):
         
         max_40_high = max([x['high'] for x in klines_15m])
         min_40_low = min([x['low'] for x in klines_15m])
+        price_range = max_40_high - min_40_low
+        
+        if price_range <= 0 or atr_15m <= 0:
+            return None, False
+
+        price_position = (current_price - min_40_low) / price_range
         
         avg_volume = sum([x['volume'] for x in klines_15m[-20:]]) / 20
         last_candle = klines_15m[-1]
@@ -151,50 +156,34 @@ async def analyze_market(symbol):
 
         signal = None
         stop_loss = 0
+        tp1 = 0
 
-        # Варіант 1: Межевий реверс
-        if current_price <= min_40_low * 1.003 and is_volume_spike:
-            body = abs(last_candle['close'] - last_candle['open'])
-            lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
-            if lower_shadow > body * 1.5 and last_candle['close'] >= last_candle['open']:
+        # 1. LONG: Тільки якщо ми НЕ на хаях (price_position < 0.7) і немає різкого падіння
+        if price_position < 0.7 and is_volume_spike:
+            body_last = last_candle['close'] - last_candle['open']
+            is_sharp_dump = body_last < -atr_15m * 0.8  # Заборона купувати під час обвалу
+
+            if not is_sharp_dump and (current_price <= min_40_low * 1.015 or (prev_candle['close'] > prev_candle['open'] and last_candle['close'] > last_candle['open'])):
                 signal = "LONG"
-                stop_loss = min_40_low * (1 - 0.003)
+                stop_loss = current_price - (atr_15m * 1.5)
+                tp1 = current_price + (atr_15m * 2.0)
 
-        elif current_price >= max_40_high * 0.997 and is_volume_spike:
-            body = abs(last_candle['close'] - last_candle['open'])
-            upper_shadow = last_candle['high'] - max(last_candle['open'], last_candle['close'])
-            if upper_shadow > body * 1.5 and last_candle['close'] <= last_candle['open']:
+        # 2. SHORT: Тільки якщо ми НЕ на лоях (price_position > 0.3) і НЕ після різкого проливу вниз
+        if not signal and price_position > 0.3 and is_volume_spike:
+            body_last = last_candle['close'] - last_candle['open']
+            is_sharp_dump = body_last < -atr_15m * 0.8  # ЖОРСТКА ЗАБОРОНА ШОРТИТИ ПІСЛЯ ПРОЛИВУ ВНИЗ!
+
+            if not is_sharp_dump and (current_price >= max_40_high * 0.985 or (prev_candle['close'] < prev_candle['open'] and last_candle['close'] < last_candle['open'])):
                 signal = "SHORT"
-                stop_loss = max_40_high * (1 + 0.003)
-
-        # Варіант 2: Трендовий відкат
-        if not signal:
-            recent_impulse_up = prev_candle['close'] > prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
-            recent_impulse_down = prev_candle['close'] < prev_candle['open'] and prev_candle['volume'] > avg_volume * 1.3
-
-            if recent_impulse_up and last_candle['close'] > last_candle['open'] and is_volume_spike:
-                signal = "LONG"
-                stop_loss = min(last_candle['low'], prev_candle['low']) * (1 - 0.002)
-
-            elif recent_impulse_down and last_candle['close'] < last_candle['open'] and is_volume_spike:
-                signal = "SHORT"
-                stop_loss = max(last_candle['high'], prev_candle['high']) * (1 + 0.002)
+                stop_loss = current_price + (atr_15m * 1.5)
+                tp1 = current_price - (atr_15m * 2.0)
 
         if not signal:
             return None, is_volume_spike
 
+        # Фінальна перевірка безпеки цін
         risk = (current_price - stop_loss) if signal == "LONG" else (stop_loss - current_price)
-        if risk <= 0:
-            return None, is_volume_spike
-
-        if signal == "LONG":
-            tp1 = max([x['high'] for x in klines_15m if x['high'] > current_price], default=current_price + (atr_15m * 2)) + atr_15m + 1
-            reward_tp1 = tp1 - current_price
-        else:
-            tp1 = min([x['low'] for x in klines_15m if x['low'] < current_price], default=current_price - (atr_15m * 2)) - atr_15m - 1
-            reward_tp1 = current_price - tp1
-
-        if (reward_tp1 / risk) < 1.3:
+        if risk <= 0 or tp1 <= 0 or (signal == "LONG" and tp1 <= current_price) or (signal == "SHORT" and tp1 >= current_price):
             return None, is_volume_spike
 
         return {
