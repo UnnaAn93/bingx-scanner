@@ -620,10 +620,17 @@ async def main_scanner():
             signals_found = 0
             skipped_details = []  # Звіт по відсіяних монетах
 
+            # Отримуємо список відкритих позицій, щоб не відкривати дублікати
+            open_pos = await get_exchange_positions()
+            active_symbols = [p['symbol'] for p in open_pos if float(p.get('positionAmt', 0)) != 0]
+
             for symbol in symbols:
+                if symbol in active_symbols:
+                    continue  # Монета вже в позиції — пропускаємо
+        
                 if is_blacklisted(symbol):
                     continue
-
+            
                 vol_24h = ticker_volumes.get(symbol, 0)
                 if vol_24h > 0 and not (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
                     continue
