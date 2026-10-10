@@ -130,7 +130,7 @@ def calculate_atr(klines, period=14):
 
 async def analyze_market(symbol):
     try:
-        raw_15m = await get_klines(symbol, "15m", 40)
+        raw_15m = await get_klines(symbol, "15m", 100)
         raw_1h = await get_klines(symbol, "1h", 30)
         if len(raw_15m) < 20 or len(raw_1h) < 20:
             return None, False, "Недостатньо історичних даних"
@@ -139,7 +139,8 @@ async def analyze_market(symbol):
         klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_1h]
 
         atr_15m = calculate_atr(klines_15m, period=14)
-        current_price = klines_15m[-1]['close']
+        current_price = klines_15m[-1]['close'
+        ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else current_price
 
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
