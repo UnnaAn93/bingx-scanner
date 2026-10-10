@@ -401,9 +401,9 @@ async def monitor_trades_loop():
 
                         klines_check = await get_klines(symbol, "15m", 25)
                         if len(klines_check) >= 20:
-                            last_c = klines_check[-1]
-                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-20:]]) / 20
-                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 1.8
+                            last_c = klines_check[-2]
+                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20  # Середній об'єм по 20 попередніх закритих свічках
+                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.5
 
                             if unreal_pnl > 0 and is_opp_spike:
                                 last_close = float(last_c.get('close', 0))
@@ -417,7 +417,7 @@ async def monitor_trades_loop():
                                 body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
 
                                 # Вимагаємо, щоб тіло свічки було не менше 40% від усього діапазону (відсікаємо довгі тіні)
-                                is_valid_result = body_ratio >= 0.40
+                                is_valid_result = body_ratio >= 0.50
 
                                 if pos_side == "SHORT" and last_close > last_open and is_valid_result:
                                     close_payload = {
