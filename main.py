@@ -134,8 +134,8 @@ def calculate_atr(klines, period=14):
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
-        raw_1h = await get_klines(symbol, "1h", 30)
-        if len(raw_15m) < 100 or len(raw_1h) < 30:
+        raw_1h = await get_klines(symbol, "1h", 100)
+        if len(raw_15m) < 100 or len(raw_1h) < 50:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k.get('volume', 0))} for k in raw_15m]
@@ -144,6 +144,7 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m, period=14)
         current_price = klines_15m[-1]['close']
         ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else sum(x['close'] for x in klines_15m) / len(klines_15m)
+        ema_50_1h = sum(x['close'] for x in klines_1h[-50:]) / 50 if len(klines_1h) >= 50 else sum(x['close'] for x in klines_1h) / len(klines_1h)
         
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
@@ -252,7 +253,7 @@ async def analyze_market(symbol):
 
             # Перевірка зони опору: або класичний максимум, або зона біля EMA50 (тренд)
             is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-            is_near_ema_resistance = abs(current_price - ema_50) <= (atr_15m * 2.0)
+            is_near_ema_resistance = abs(current_price - ema_50_1h) <= (atr_15m * 2.0)
     
             is_near_resistance = is_near_classic_resistance or is_near_ema_resistance
             has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m) or (abs(prev_candle['high'] - ema_50) <= atr_15m)
@@ -267,7 +268,7 @@ async def analyze_market(symbol):
                 signal = "SHORT"
                 # Динамічний стоп-лос для шорту
                 if is_near_ema_resistance and not is_near_classic_resistance:
-                    stop_loss = ema_50 + atr_15m
+                    stop_loss = ema_50_1h + atr_15m
                 else:
                     stop_loss = max_40_high + atr_15m
                 
