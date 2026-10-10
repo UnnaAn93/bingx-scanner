@@ -262,7 +262,6 @@ async def analyze_market(symbol):
         await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
         
-        
 async def get_exchange_positions():
     res = await bingx_request('GET', '/openApi/swap/v2/user/positions')
     if isinstance(res, dict) and res.get("code") == 0:
@@ -281,17 +280,17 @@ async def count_risk_positions():
                 total_open += 1
                 symbol = p.get('symbol')
                 if symbol not in active_trade_monitors:
-                    active_trade_monitors[symbol] = {"in_breakeven": False}
+                    active_trade_monitors[symbol] = {'in_breakeven': False}
                 
+                # Перевіряємо статус безубитку з моніторингу
                 if not active_trade_monitors[symbol].get('in_breakeven', False):
                     risk_count += 1
         
         print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | Ризикових: {risk_count}", flush=True)
-        return risk_count
+        return risk_count  # Повертаємо саме кількість РИЗИКОВИХ позицій
     except Exception as e:
-        await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
+        await log_and_alert(f"Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
-
 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
