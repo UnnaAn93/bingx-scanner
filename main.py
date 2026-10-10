@@ -172,7 +172,7 @@ async def analyze_market(symbol):
         fib_618 = max_20_high - (amplitude * 0.618)
 
         # 1. Фільтр корекції: ціна має бути нижче рівня 0.618 (не на хаї)
-        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']):
+        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if float(c['close']) < float(c['open'])) >= 4:
             long_reasons.append("вище 0.618 або свічка не зелена")
         else:
             body_last = last_candle['close'] - last_candle['open']
@@ -218,7 +218,7 @@ async def analyze_market(symbol):
         fib_618_short = min_20_low + (amplitude * 0.618)
 
         # 1. Фільтр корекції для шорта: ціна має бути вище рівня 0.618 від низу
-        if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']):
+        if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if float(c['close']) > float(c['open'])) >= 4:
             short_reasons.append("нижче 0.618 або свічка не червона")
         else:
             body_last = last_candle['close'] - last_candle['open']
