@@ -332,6 +332,7 @@ async def open_position(setup):
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "STOP_MARKET",
             "stopPrice": round(setup['stop_loss'], 4),
+            "quantity": total_qty,
             "workingType": "MARK_PRICE"
         }
 
