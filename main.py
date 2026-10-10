@@ -186,12 +186,12 @@ async def analyze_market(symbol):
 
             if is_sharp_dump:
                 long_reasons.append("Різкий дамп")
-            elif not (current_price <= (min_24_low + atr_15m) or (prev_candle['close'] < prev_candle['open'])) or not is_valid_body:
+            elif not (current_price <= (min_40_low + atr_15m) or (prev_candle['close'] < prev_candle['open'])) or not is_valid_body:
                 long_reasons.append("Немає точки входу LONG")
             else:
                 # Спробуємо розрахувати LONG
                 signal = "LONG"
-                stop_loss = min_24_low - atr_15m
+                stop_loss = min_40_low - atr_15m
                 resistances_15m = sorted([x['high'] for x in klines_15m if x['high'] > current_price])
                 nearest_res = resistances_15m[0] if resistances_15m else current_price + (atr_15m * 3.0)
                 tp1 = min(nearest_res - (atr_15m * 0.5), current_price + (atr_15m * 2.0))
