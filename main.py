@@ -145,6 +145,8 @@ async def analyze_market(symbol):
 
         min_40_low = min([x['low'] for x in klines_15m])
         max_40_high = max([x['high'] for x in klines_15m])
+        min_20_low = min([x['low'] for x in klines_15m[-20:]])
+        max_20_high = max([x['high'] for x in klines_15m[-20:]])
 
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
@@ -169,7 +171,7 @@ async def analyze_market(symbol):
         short_reasons = []
 
         # --- Перевірка LONG ---
-        is_overextended_long = (current_price - min_24_low) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) < 0
+        is_overextended_long = (current_price - min_20_low) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) < 0
         if is_overextended_long:
             long_reasons.append("Перегріта")
         else:
@@ -211,7 +213,7 @@ async def analyze_market(symbol):
                         }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
-        is_overextended_short = (max_24_high - current_price) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) > 0
+        is_overextended_short = (max_20_high - current_price) > (atr_15m * 8.0) and (last_candle['close'] - last_candle['open']) > 0
         if is_overextended_short:
             short_reasons.append("Перепродана")
         else:
@@ -226,12 +228,12 @@ async def analyze_market(symbol):
 
             if is_sharp_pump:
                 short_reasons.append("Різкий памп")
-            elif not (current_price >= (max_24_high - atr_15m) or (prev_candle['close'] > prev_candle['open'])) or not is_valid_body:
+            elif not (current_price >= (max_40_high - atr_15m) or (prev_candle['close'] > prev_candle['open'])) or not is_valid_body:
                 short_reasons.append("Немає точки входу SHORT")
             else:
                 # Спробуємо розрахувати SHORT
                 signal = "SHORT"
-                stop_loss = max_24_high + atr_15m
+                stop_loss = max_40_high + atr_15m
                 supports_15m = sorted([x['low'] for x in klines_15m if x['low'] < current_price], reverse=True)
                 nearest_sup = supports_15m[0] if supports_15m else current_price - (atr_15m * 3.0)
                 tp1 = max(nearest_sup + (atr_15m * 0.5), current_price - (atr_15m * 2.0))
