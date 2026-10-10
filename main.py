@@ -175,9 +175,16 @@ async def analyze_market(symbol):
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
+        
+            # Структура свічки для Resonance
+            c_range = last_candle['high'] - last_candle['low']
+            b_size = abs(body_last)
+            b_ratio = (b_size / c_range) if c_range > 0 else 0.0
+            is_valid_body = b_ratio >= 0.40
+
             if is_sharp_dump:
                 long_reasons.append("Різкий дамп")
-            elif not (current_price <= min_40_low * 1.015 or (prev_candle['close'] < prev_candle['open'])):
+            elif not (current_price <= min_40_low * 1.015 or (prev_candle['close'] < prev_candle['open'])) or not is_valid_body:
                 long_reasons.append("Немає точки входу LONG")
             else:
                 # Спробуємо розрахувати LONG
@@ -210,9 +217,16 @@ async def analyze_market(symbol):
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_pump = body_last > atr_15m * 0.8
+        
+            # Структура свічки для Resonance
+            c_range = last_candle['high'] - last_candle['low']
+            b_size = abs(body_last)
+            b_ratio = (b_size / c_range) if c_range > 0 else 0.0
+            is_valid_body = b_ratio >= 0.40
+
             if is_sharp_pump:
                 short_reasons.append("Різкий памп")
-            elif not (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])):
+            elif not (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])) or not is_valid_body:
                 short_reasons.append("Немає точки входу SHORT")
             else:
                 # Спробуємо розрахувати SHORT
