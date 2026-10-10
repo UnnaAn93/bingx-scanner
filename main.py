@@ -188,18 +188,26 @@ async def analyze_market(symbol):
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = b_ratio >= 0.40
-
-            is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
-            has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_40_low + atr_15m)
+            
+            # Перевірка зони підтримки: або класичний мінімум, або зона біля EMA50 (тренд)
+            is_near_classic_support = current_price <= (min_40_low + (atr_15m * 2.0))
+            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 1.5)
+    
+            is_near_support = is_near_classic_support or is_near_ema_support
+            has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_40_low + atr_15m) or (abs(prev_candle['low'] - ema_50) <= atr_15m)
 
             if not is_near_support:
-                long_reasons.append("LONG (флет): далеко від підтримки")
+                long_reasons.append("LONG: далеко від підтримки та EMA50")
             elif not has_bounce_signal:
                 long_reasons.append("LONG: немає сигналу відскоку")
             elif not is_valid_body:
                 long_reasons.append("LONG: мале тіло свічки")
             else:
                 signal = "LONG"
+            # Динамічний стоп-лос для лонгу
+            if is_near_ema_support and not is_near_classic_support:
+                stop_loss = ema_50 - atr_15m
+            else:
                 stop_loss = min_40_low - atr_15m
                 
                 # Тейк-профіти за структурою: TP1 вище максимуму за 20 свічок
@@ -233,18 +241,25 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = b_ratio >= 0.55
 
-            is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-            has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
+            is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
+            is_near_ema_resistance = abs(current_price - ema_50) <= (atr_15m * 1.5)
+    
+            is_near_resistance = is_near_classic_resistance or is_near_ema_resistance
+            has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m) or (abs(prev_candle['high'] - ema_50) <= atr_15m)
 
             if not is_near_resistance:
-                short_reasons.append("SHORT (флет): далеко від опору")
+                short_reasons.append("SHORT: далеко від опору та EMA50")
             elif not has_drop_signal:
                 short_reasons.append("SHORT: немає сигналу розвороту")
             elif not is_valid_body:
                 short_reasons.append("SHORT: мале тіло свічки")
             else:
                 signal = "SHORT"
-                stop_loss = max_40_high + atr_15m
+                # Динамічний стоп-лос для шорту
+                if is_near_ema_resistance and not is_near_classic_resistance:
+                    stop_loss = ema_50 + atr_15m
+                else:
+                    stop_loss = max_40_high + atr_15m
                 
                 # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
                 tp1 = current_price - (atr_15m * 2.0)
