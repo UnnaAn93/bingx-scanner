@@ -303,11 +303,16 @@ async def open_position(setup):
     symbol = setup['symbol']
     side = setup['signal']
     try:
-        total_qty = round(MARGIN_USD * LEVERAGE / setup['entry'], 4)
+        total_qty = int(MARGIN_USD * LEVERAGE / setup['entry'])
+        if total_qty < 1:
+            total_qty = 1  # мінімум 1 контракт
         
-        qty_50 = round(total_qty * 0.5, 4)
-        qty_25_1 = round(total_qty * 0.25, 4)
-        qty_25_2 = round(total_qty - qty_50 - qty_25_1, 4)
+        qty_50 = int(total_qty * 0.5)
+        qty_25_1 = int(total_qty * 0.25)
+        qty_25_2 = total_qty - qty_50 - qty_25_1
+        if qty_50 < 1: qty_50 = 1
+        if qty_25_1 < 1: qty_25_1 = 1
+        if qty_25_2 < 1: qty_25_2 = 1
 
         # 1. Ринківй ордер на вхід
         order_payload = {
