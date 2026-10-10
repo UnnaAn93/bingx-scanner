@@ -131,7 +131,7 @@ def calculate_atr(klines, period=14):
 
 async def analyze_market(symbol):
     try:
-        raw_15m = await get_klines(symbol, "15m", 24)
+        raw_15m = await get_klines(symbol, "15m", 40)
         raw_1h = await get_klines(symbol, "1h", 30)
 
         if len(raw_15m) < 20 or len(raw_1h) < 20:
@@ -143,8 +143,8 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m)
         current_price = klines_15m[-1]['close']
 
-        min_24_low = min([x['low'] for x in klines_15m])
-        max_24_high = max([x['high'] for x in klines_15m])
+        min_40_low = min([x['low'] for x in klines_15m])
+        max_40_high = max([x['high'] for x in klines_15m])
 
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
@@ -158,7 +158,7 @@ async def analyze_market(symbol):
             return None, False, "Немає сплеску об'єму (< 1.5x)"
 
         # Фільтр флету
-        recent_klines = klines_15m[-25:]
+        recent_klines = klines_15m[-40:]
         recent_range = max([x['high'] for x in recent_klines]) - min([x['low'] for x in recent_klines])
 
         if recent_range < atr_15m * 2.5:
