@@ -184,7 +184,7 @@ async def analyze_market(symbol):
 
             if is_sharp_dump:
                 long_reasons.append("Різкий дамп")
-            elif not (current_price <= min_40_low * 1.015 or (prev_candle['close'] < prev_candle['open'])) or not is_valid_body:
+            elif not (current_price <= (min_40_low + atr_15m) or (prev_candle['close'] < prev_candle['open'])) or not is_valid_body:
                 long_reasons.append("Немає точки входу LONG")
             else:
                 # Спробуємо розрахувати LONG
@@ -226,7 +226,7 @@ async def analyze_market(symbol):
 
             if is_sharp_pump:
                 short_reasons.append("Різкий памп")
-            elif not (current_price >= max_40_high * 0.985 or (prev_candle['close'] > prev_candle['open'])) or not is_valid_body:
+            elif not (current_price >= (max_40_high - atr_15m) or (prev_candle['close'] > prev_candle['open'])) or not is_valid_body:
                 short_reasons.append("Немає точки входу SHORT")
             else:
                 # Спробуємо розрахувати SHORT
