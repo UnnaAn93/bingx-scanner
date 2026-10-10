@@ -171,7 +171,7 @@ async def analyze_market(symbol):
         fib_618 = max_40_high - (amplitude * 0.618)
 
         # 1. Фільтр корекції: ціна має бути нижче рівня 0.618 (не на хаї)
-        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or has_two_red_in_a_row:
+        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or any(klines_15m[i]['close'] <= klines_15m[i]['open'] and klines_15m[i-1]['close'] <= klines_15m[i-1]['open'] for i in range(-4, 0)):
             long_reasons.append("вище 0.618 або свічка не зелена")
         else:
             body_last = last_candle['close'] - last_candle['open']
