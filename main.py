@@ -135,7 +135,7 @@ async def analyze_market(symbol):
         if len(raw_15m) < 20 or len(raw_1h) < 20:
             return None, False, "Недостатньо історичних даних"
 
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_15m]
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k.get('volume', 0))} for k in raw_15m]
         klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_1h]
 
         atr_15m = calculate_atr(klines_15m, period=14)
