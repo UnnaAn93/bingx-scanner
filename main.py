@@ -197,7 +197,7 @@ async def analyze_market(symbol):
                 stop_loss = min_20_low - atr_15m
                 
                 # Тейк-профіти за структурою: TP1 вище максимуму за 20 свічок
-                tp1 = max_20_high + (atr_15m * 0.5)
+                tp1 = current_price + (atr_15m * 2.0)
                 tp2 = tp1 + (atr_15m * 2.0)
                 tp3 = tp2 + (atr_15m * 2.0)
 
@@ -243,7 +243,7 @@ async def analyze_market(symbol):
                 stop_loss = max_20_high + atr_15m
                 
                 # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
-                tp1 = min_20_low - (atr_15m * 0.5)
+                tp1 = current_price - (atr_15m * 2.0)
                 tp2 = tp1 - (atr_15m * 2.0)
                 tp3 = tp2 - (atr_15m * 2.0)
 
