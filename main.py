@@ -524,7 +524,7 @@ async def monitor_trades_loop():
                                 "side": sl_side,
                                 "positionSide": position_side,
                                 "type": "STOP_MARKET",
-                                "stopPrice": float(f"{entry_price:.8f}")
+                                "stopPrice": float(f"{entry_price:.8f}"),
                                 "quantity": current_qty,
                                 "workingType": "MARK_PRICE"
                             }
