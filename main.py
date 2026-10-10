@@ -386,7 +386,18 @@ async def monitor_trades_loop():
                             if unreal_pnl > 0 and is_opp_spike:
                                 last_close = float(last_c.get('close', 0))
                                 last_open = float(last_c.get('open', 0))
-                                if pos_side == "SHORT" and last_close > last_open:
+                                last_high = float(last_c.get('high', 0))
+                                last_low = float(last_c.get('low', 0))
+    
+                                # Розраховуємо пропорцію тіла свічки до її загальної висоти (Зусилля проти Результату)
+                                candle_range = last_high - last_low
+                                body_size = abs(last_close - last_open)
+                                body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
+
+                                # Вимагаємо, щоб тіло свічки було не менше 40% від усього діапазону (відсікаємо довгі тіні)
+                                is_valid_result = body_ratio >= 0.40
+
+                                if pos_side == "SHORT" and last_close > last_open and is_valid_result:
                                     close_payload = {
                                         "symbol": symbol,
                                         "side": "BUY",
@@ -398,7 +409,7 @@ async def monitor_trades_loop():
                                     await send_telegram(f"🛡 Рівень захисту! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl})")
                                     del active_trade_monitors[symbol]
                                     continue
-                                elif pos_side == "LONG" and last_close < last_open:
+                                elif pos_side == "LONG" and last_close < last_open and is_valid_result:
                                     close_payload = {
                                         "symbol": symbol,
                                         "side": "SELL",
