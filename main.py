@@ -524,7 +524,7 @@ async def monitor_trades_loop():
                                 "side": sl_side,
                                 "positionSide": position_side,
                                 "type": "STOP_MARKET",
-                                "stopPrice": round(entry_price, 4),
+                                "stopPrice": float(f"{entry_price:.8f}")
                                 "quantity": current_qty,
                                 "workingType": "MARK_PRICE"
                             }
@@ -533,7 +533,7 @@ async def monitor_trades_loop():
                         except Exception as ex:
                             print(f"[ERROR] Помилка перенесення стопа в БУ: {ex}", flush=True)
 
-                        await send_telegram(f"✅ TP1 досягнуто для {symbol}! Стоп перенесено в безубиток на {entry_price}.")
+                        await send_telegram(f"✅ TP1 досягнуто для {symbol}! Стоп перенесено в безубуток на {entry_price:.8f}".rstrip('0').rstrip('.'))
                         print(f"[SUCCESS] TP1 досягнуто для {symbol}.", flush=True)
 
         except Exception as e:
