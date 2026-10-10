@@ -139,9 +139,9 @@ async def analyze_market(symbol):
         klines_1h = [{'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close'])} for k in raw_1h]
 
         atr_15m = calculate_atr(klines_15m, period=14)
-        current_price = klines_15m[-1]['close'
-        ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else current_price
-
+        current_price = klines_15m[-1]['close']
+        ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else sum(x['close'] for x in klines_15m) / len(klines_15m)
+        
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
         min_20_low = min(x['low'] for x in klines_15m[-20:])
@@ -173,7 +173,7 @@ async def analyze_market(symbol):
         fib_618 = max_20_high - (amplitude * 0.618)
 
         # 1. Фільтр корекції: ціна має бути нижче рівня 0.618 (не на хаї)
-        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if float(c['close']) < float(c['open'])) >= 4 or (ema_50 - current_price) > (atr_15m * 5.0):
+        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if c['close'] < c['open']) < 4:
             long_reasons.append("вище 0.618 або свічка не зелена")
         else:
             body_last = last_candle['close'] - last_candle['open']
@@ -219,8 +219,8 @@ async def analyze_market(symbol):
         fib_618_short = min_20_low + (amplitude * 0.618)
 
         # 1. Фільтр корекції для шорта: ціна має бути вище рівня 0.618 від низу
-        if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if float(c['close']) > float(c['open'])) >= 4 or (current_price - ema_50) > (atr_15m * 5.0):
-            short_reasons.append("нижче 0.618 або свічка не червона")
+        if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if c['close'] > c['open']) < 4 or (current_price >= ema_50) or ((ema_50 - current_price) > atr_15m * 2.0):
+            short_reasons.append("SHORT: вище EMA або занадто далеко внизу (падаючий ніж)")
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_pump = body_last > atr_15m * 0.8
