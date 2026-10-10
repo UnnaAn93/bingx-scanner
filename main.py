@@ -132,7 +132,7 @@ async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1h = await get_klines(symbol, "1h", 30)
-        if len(raw_15m) < 20 or len(raw_1h) < 20:
+        if len(raw_15m) < 100 or len(raw_1h) < 30:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k.get('volume', 0))} for k in raw_15m]
@@ -144,9 +144,7 @@ async def analyze_market(symbol):
         
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
-        min_20_low = min(x['low'] for x in klines_15m[-20:])
-        max_20_high = max(x['high'] for x in klines_15m[-20:])
-
+        
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
 
@@ -169,8 +167,8 @@ async def analyze_market(symbol):
         short_reasons = []
 
         # --- Перевірка LONG ---
-        amplitude = max_20_high - min_20_low
-        fib_618 = max_20_high - (amplitude * 0.618)
+        amplitude = max_40_high - min_40_low
+        fib_618 = max_40_high - (amplitude * 0.618)
 
         # 1. Фільтр корекції: ціна має бути нижче рівня 0.618 (не на хаї)
         if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if c['close'] < c['open']) < 4:
@@ -184,8 +182,8 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = b_ratio >= 0.40
 
-            is_near_support = current_price <= (min_20_low + (atr_15m * 2.0))
-            has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_20_low + atr_15m)
+            is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
+            has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_40_low + atr_15m)
 
             if not is_near_support:
                 long_reasons.append("LONG (флет): далеко від підтримки")
@@ -195,7 +193,7 @@ async def analyze_market(symbol):
                 long_reasons.append("LONG: мале тіло свічки")
             else:
                 signal = "LONG"
-                stop_loss = min_20_low - atr_15m
+                stop_loss = min_40_low - atr_15m
                 
                 # Тейк-профіти за структурою: TP1 вище максимуму за 20 свічок
                 tp1 = current_price + (atr_15m * 2.0)
@@ -216,7 +214,7 @@ async def analyze_market(symbol):
                         }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
-        fib_618_short = min_20_low + (amplitude * 0.618)
+        fib_618_short = min_40_low + (amplitude * 0.618)
 
         # 1. Фільтр корекції для шорта: ціна має бути вище рівня 0.618 від низу
         if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if c['close'] > c['open']) < 4 or (current_price >= ema_50) or ((ema_50 - current_price) > atr_15m * 2.0):
@@ -230,8 +228,8 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = b_ratio >= 0.55
 
-            is_near_resistance = current_price >= (max_20_high - (atr_15m * 2.0))
-            has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_20_high - atr_15m)
+            is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
+            has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
 
             if not is_near_resistance:
                 short_reasons.append("SHORT (флет): далеко від опору")
@@ -241,7 +239,7 @@ async def analyze_market(symbol):
                 short_reasons.append("SHORT: мале тіло свічки")
             else:
                 signal = "SHORT"
-                stop_loss = max_20_high + atr_15m
+                stop_loss = max_40_high + atr_15m
                 
                 # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
                 tp1 = current_price - (atr_15m * 2.0)
