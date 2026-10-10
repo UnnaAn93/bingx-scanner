@@ -167,9 +167,19 @@ async def analyze_market(symbol):
         short_reasons = []
 
         # --- Перевірка LONG --
-        # 1. Фільтр корекції (не на хаї)
-        if (last_candle['close'] <= last_candle['open']) or any(klines_15m[i]['close'] <= klines_15m[i]['open'] and klines_15m[i-1]['close'] <= klines_15m[i-1]['open'] for i in range(-4, 0)):
-            long_reasons.append("свічка не зелена або є 2 червоні поспіль")
+        c_range = last_candle['high'] - last_candle['low']
+        body_size = abs(last_candle['close'] - last_candle['open'])
+        lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
+    
+        # Умова 1: Довга нижня тінь (відскок / пін-бар >= 40%)
+        has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.40
+    
+        # Умова 2: Сильне тіло у верхній частині (тіло >= 60% і свічка зелена)
+        is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.60 and last_candle['close'] > last_candle['open']
+
+        # Якщо немає ні довгої тіні, ні сильного тіла — відсіюємо
+        if not (has_long_lower_wick or is_strong_green_body):
+            long_reasons.append("слабкий відскок (немає ні тіні, ні сильного тіла)")
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
