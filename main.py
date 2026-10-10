@@ -227,7 +227,7 @@ async def analyze_market(symbol):
             c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
-            is_valid_body = b_ratio >= 0.40
+            is_valid_body = b_ratio >= 0.55
 
             is_near_resistance = current_price >= (max_20_high - (atr_15m * 2.0))
             has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_20_high - atr_15m)
