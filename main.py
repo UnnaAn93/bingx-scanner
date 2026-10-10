@@ -176,10 +176,10 @@ async def analyze_market(symbol):
         lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
     
         # Умова 1: Довга нижня тінь (відскок / пін-бар >= 40%)
-        has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.40
+        has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
     
         # Умова 2: Сильне тіло у верхній частині (тіло >= 60% і свічка зелена)
-        is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.60 and last_candle['close'] > last_candle['open']
+        is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.50 and last_candle['close'] > last_candle['open']
 
         # Якщо немає ні довгої тіні, ні сильного тіла — відсіюємо
         if not (has_long_lower_wick or is_strong_green_body):
@@ -191,11 +191,11 @@ async def analyze_market(symbol):
             c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
-            is_valid_body = (b_ratio >= 0.35) or has_long_lower_wick
+            is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
             # Перевірка зони підтримки: або класичний мінімум, або зона біля EMA50 (тренд)
-            is_near_classic_support = current_price <= (min_40_low + (atr_15m * 2.0))
-            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
+            is_near_classic_support = current_price <= (min_40_low + (atr_15m * 2.5))
+            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.5)
     
             is_near_support = is_near_classic_support or is_near_ema_support
             has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_40_low + atr_15m) or (abs(prev_candle['low'] - ema_50) <= atr_15m)
