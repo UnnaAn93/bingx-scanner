@@ -32,10 +32,13 @@ coin_cooldowns = {}
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
 
 def is_blacklisted(symbol):
+    # Дозволяємо тільки пари, що закінчуються на -USDT
+    if not symbol.endswith("-USDT"):
+        return True
+        
     if (symbol in BLACKLIST or 
         symbol.startswith(("NCF", "NCS", "NCC")) or 
-        "USD" not in symbol or 
-        "." in symbol):
+        "," in symbol):
         return True
     return False
 
@@ -241,6 +244,7 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = b_ratio >= 0.55
 
+            # Перевірка зони опору: або класичний максимум, або зона біля EMA50 (тренд)
             is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
             is_near_ema_resistance = abs(current_price - ema_50) <= (atr_15m * 1.5)
     
