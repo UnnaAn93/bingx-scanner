@@ -150,8 +150,8 @@ async def analyze_market(symbol):
             return None, False, "Нульовий ATR"
 
         avg_volume = sum(x['volume'] for x in klines_15m[-20:]) / 20
-        last_candle = klines_15m[-1]
-        prev_candle = klines_15m[-2]
+        last_candle = klines_15m[-2]
+        prev_candle = klines_15m[-3]
         is_volume_spike = last_candle['volume'] > avg_volume * 1.5
 
         if not is_volume_spike:
