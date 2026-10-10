@@ -144,7 +144,9 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m, period=14)
         current_price = klines_15m[-1]['close']
         ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else sum(x['close'] for x in klines_15m) / len(klines_15m)
-        ema_50_1h = sum(x['close'] for x in klines_1h[-50:]) / 50 if len(klines_1h) >= 50 else sum(x['close'] for x in klines_1h) / len(klines_1h)
+        # Рахуємо 1h EMA строго по вже закритих свічках (відкидаємо останню незавершену[-1])
+        closed_klines_1h = klines_1h[:-1] if len(klines_1h) > 1 else klines_1h
+        ema_50_1h = sum(x['close'] for x in closed_klines_1h[-50:]) / 50 if len(closed_klines_1h) >= 50 else sum(x['close'] for x in closed_klines_1h) / len(closed_klines_1h)
         
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
