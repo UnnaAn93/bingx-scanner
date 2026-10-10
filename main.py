@@ -166,13 +166,10 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
-        # --- Перевірка LONG ---
-        amplitude = max_40_high - min_40_low
-        fib_618 = max_40_high - (amplitude * 0.618)
-
-        # 1. Фільтр корекції: ціна має бути нижче рівня 0.618 (не на хаї)
-        if current_price > fib_618 or (last_candle['close'] <= last_candle['open']) or any(klines_15m[i]['close'] <= klines_15m[i]['open'] and klines_15m[i-1]['close'] <= klines_15m[i-1]['open'] for i in range(-4, 0)):
-            long_reasons.append("вище 0.618 або свічка не зелена")
+        # --- Перевірка LONG --
+        # 1. Фільтр корекції (не на хаї)
+        if (last_candle['close'] <= last_candle['open']) or any(klines_15m[i]['close'] <= klines_15m[i]['open'] and klines_15m[i-1]['close'] <= klines_15m[i-1]['open'] for i in range(-4, 0)):
+            long_reasons.append("свічка не зелена або є 2 червоні поспіль")
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_dump = body_last < -atr_15m * 0.8
@@ -214,11 +211,9 @@ async def analyze_market(symbol):
                         }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
-        fib_618_short = min_40_low + (amplitude * 0.618)
-
-        # 1. Фільтр корекції для шорта: ціна має бути вище рівня 0.618 від низу
-        if current_price < fib_618_short or (last_candle['close'] >= last_candle['open']) or sum(1 for c in klines_15m[-6:-1] if c['close'] > c['open']) < 4 or (current_price >= ema_50) or ((ema_50 - current_price) > atr_15m * 2.0):
-            short_reasons.append("SHORT: вище EMA або занадто далеко внизу (падаючий ніж)")
+        # 1. Фільтр корекції для шортів 
+        if (last_candle['close'] >= last_candle['open']) or any(klines_15m[i]['close'] >= klines_15m[i]['open'] and klines_15m[i-1]['close'] >= klines_15m[i-1]['open'] for i in range(-4, 0)) or (current_price > ema_50):
+            short_reasons.append("свічка не червона, є 2 зелені поспіль або ціна вище EMA")
         else:
             body_last = last_candle['close'] - last_candle['open']
             is_sharp_pump = body_last > atr_15m * 0.8
