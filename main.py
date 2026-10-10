@@ -190,7 +190,7 @@ async def analyze_market(symbol):
             c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
-            is_valid_body = b_ratio >= 0.40
+            is_valid_body = (b_ratio >= 0.35) or has_long_lower_wick
             
             # Перевірка зони підтримки: або класичний мінімум, або зона біля EMA50 (тренд)
             is_near_classic_support = current_price <= (min_40_low + (atr_15m * 2.0))
@@ -242,7 +242,13 @@ async def analyze_market(symbol):
             c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
-            is_valid_body = b_ratio >= 0.55
+    
+            # Додаємо перевірку верхньої тіні (пін-бар на відбій від опору >= 40%)
+            upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
+            has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
+    
+            # Дозволяємо або нормальне тіло (знизивши поріг до 0.35), або наявність гарної верхньої тіні
+            is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
             # Перевірка зони опору: або класичний максимум, або зона біля EMA50 (тренд)
             is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
