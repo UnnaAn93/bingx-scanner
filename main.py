@@ -212,6 +212,7 @@ async def analyze_market(symbol):
 
             # Визначаємо підсумкову перевірку зони підтримки
             is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
+            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
 
             # 4. Захисний фільтр від пробою (вимагаємо або сильну зелену свічку, або довгу нижню тень/молот з об'ємом)
             is_green_candle = last_candle['close'] > last_candle['open']
