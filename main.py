@@ -11,6 +11,24 @@ import traceback
 import urllib.parse
 import math
 
+STATE_FILE = "trades_state.json"
+
+def load_trades_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_trades_state(state):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[ERROR] Помилка збереження стану: {e}", flush=True)
+        
 # --- КОНСТАНТИ ТА НАЛАШТУВАННЯ ---
 API_KEY = os.environ.get("BINGX_API_KEY", "")
 API_SECRET = os.environ.get("BINGX_SECRET_KEY", "")
@@ -26,7 +44,7 @@ MIN_24H_VOLUME = 300_000
 MAX_24H_VOLUME = 30_000_000
 
 server_time_offset = 0
-active_trade_monitors = {}
+active_trade_monitors = load_trades_state()
 coin_cooldowns = {} 
 
 BLACKLIST = {"BTCUSDT", "LTCUSDT", "USDUSDT", "USD-USDT", "BTC", "LTC", "BTC-USDT", "LTC-USDT"}
@@ -431,6 +449,7 @@ async def open_position(setup):
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
             "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
         }
+        save_trades_state(active_trade_monitors)
 
         msg = (f"🚀 Відкрито позиція ({side}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {symbol}\n"
@@ -460,14 +479,17 @@ async def monitor_trades_loop():
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         entry_p = float(p.get('entryPrice', 0))
-                        active_trade_monitors[sym] = {
-                            'entry': entry_p,
-                            'stop_loss': entry_p * 0.98 if pos_side == 'LONG' else entry_p * 1.02,
-                            'tp1': entry_p * 1.02 if pos_side == 'LONG' else entry_p * 0.98,
-                            'in_breakeven': False,
-                            'tp1_hit': False,
-                            'side': pos_side
-                        }
+                        if sym not in active_trade_monitors:
+                            active_trade_monitors[sym] = {
+                                'entry': entry_p,
+                                'stop_loss': entry_p * 0.98 if pos_side == 'LONG' else entry_p * 1.02,
+                                'tp1': entry_p * 1.02 if pos_side == 'LONG' else entry_p * 0.98,
+                                'in_breakeven': False,
+                                'tp1_hit': False,
+                                'side': pos_side
+                            }
+                            save_trades_state(active_trade_monitors)
+
                         print(f"[INFO] Відновлено моніторинг забутої позиції після перезапуску: {sym}", flush=True)
             
             for symbol, data in list(active_trade_monitors.items()):
@@ -480,6 +502,7 @@ async def monitor_trades_loop():
                         print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
                 
                     del active_trade_monitors[symbol]
+                    save_trades_state(active_trade_monitors)
                     continue
                 # --- Перевірка зустрічного об'єму для дострокової фіксації плюсу ---
                 try:
@@ -582,6 +605,7 @@ async def monitor_trades_loop():
                     if hit_tp1 and entry_price > 0:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
+                        save_trades_state(active_trade_monitors)
                 # 2.1. Фіксуємо ТР3 для відстеження повного профіту
                 if 'tp3' in data:
                     tp3_price = float(data['tp3'])
