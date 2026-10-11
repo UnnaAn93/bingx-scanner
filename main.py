@@ -269,14 +269,17 @@ async def analyze_market(symbol):
                     risk = current_price - stop_loss
                     reward_tp1 = tp1 - current_price
         
-                    # Адаптивний R:R зі зсувом всієї сітки тейків на дельту
+                    # Адаптивний R:R зі зсувом сітки та захистом від занадто близького опору
                     if risk > 0 and (reward_tp1 / risk) < 1.3:
                         min_tp1 = current_price + (risk * 1.3)
-                        shift = min_tp1 - tp1
-                        tp1 = min_tp1
-                        tp2 += shift
-                        tp3 += shift
-                        reward_tp1 = tp1 - current_price
+                        if min_tp1 - current_price < atr_15m * 0.5:
+                            long_reasons.append("занадто близько до опору / замалий потенціал руху")
+                        else:
+                            shift = min_tp1 - tp1
+                            tp1 = min_tp1
+                            tp2 += shift
+                            tp3 += shift
+                            reward_tp1 = tp1 - current_price
 
                     if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
                         long_reasons.append("малий Risk/Reward (<1.3)")
