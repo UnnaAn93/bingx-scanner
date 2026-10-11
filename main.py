@@ -197,24 +197,21 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
-            # 1. Перевіряємо, чи є чітка підтримка на 15 хв (чи повторюється мінімум в історії 15м)
-            # Шукаємо, чи є кілька свічок з подібним мінімумом (похибка в межах 0.5 ATR)
-            similar_lows_15m = sum(1 for x in klines_15m[:-3] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
-            has_clear_15m_support = similar_lows_15m >= 2
+            # Фільтр падіння: перевіряємо, чи останні свічки не летять стрімко вниз (падаючий ніж)
+            recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
 
-            # 2. Перевіряємо годинну підтримку
-            is_near_1h_support = current_price <= (min_1h_low + (atr_15m * 2.5))
+            # 1. Перевіряємо, чи є чітка підтримка на 15 хв (ігноруємо, якщо йде різке падіння)
+            similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
+            has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
 
-            # 3. Перевіряємо подвійне торкання на 15 хв (якщо немає чіткої підтримки і годинної)
-            # Тобто ціна близько до min_40_low, і це саме другий дотик (є попередній схожий мінімум раніше)
-            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and similar_lows_15m >= 1
+            # 2. Перевіряємо годинну підтримку (ігноруємо під час імпульсного падіння)
+            is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0))) and not recent_is_falling
 
-            # Визначаємо, чи пройдена перевірка зони підтримки за нашою новою ієрархією:
-            # Або є чітка підтримка на 15м, або є підтримка на 1г, або це підтверджене подвійне торкання на 15м
+            # 3. Перевіряємо подвійне торкання на 15 хв (тільки без стрімкого падіння)
+            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1) and not recent_is_falling
+
+            # Визначаємо підсумкову перевірку зони підтримки
             is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
-            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.5)
-
-            is_near_support = is_near_classic_support or is_near_ema_support
 
             # 4. Захисний фільтр від пробою (вимагаємо або сильну зелену свічку, або довгу нижню тень/молот з об'ємом)
             is_green_candle = last_candle['close'] > last_candle['open']
