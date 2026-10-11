@@ -223,9 +223,9 @@ async def analyze_market(symbol):
             has_long_pinbar = candle_range_val > 0 and (lower_wick_val / candle_range_val) >= 0.35
 
             # Сигнал відскоку спрацьовує тільки якщо є підтвердження свічки (зелене тіло або пін-бар) біля рівня
-            has_bounce_signal = is_near_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
-
-            if not is_near_support:
+            has_bounce_signal = is_near_classic_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
+            
+            if not is_near_classic_support:
                 long_reasons.append("LONG: далеко від підтримки та EMA50")
             elif not has_bounce_signal:
                 long_reasons.append("LONG: немає сигналу відскоку")
