@@ -341,16 +341,26 @@ async def count_risk_positions():
                 total_open += 1
                 symbol = p.get('symbol')
                 if symbol not in active_trade_monitors:
-                    active_trade_monitors[symbol] = {'in_breakeven': False}
-                
-                # Перевіряємо статус безубитку з моніторингу
-                if not active_trade_monitors[symbol].get('in_breakeven', False):
+                    pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
+                    entry_p = float(p.get('entryPrice', 0))
+                    active_trade_monitors[symbol] = {
+                        'entry': entry_p,
+                        'stop_loss': entry_p * 0.98 if pos_side == 'LONG' else entry_p * 1.02,
+                        'tp1': entry_p * 1.02 if pos_side == 'LONG' else entry_p * 0.98,
+                        'in_breakeven': False,
+                        'tp1_hit': False,
+                        'side': pos_side
+                    }
                     risk_count += 1
-        
+                else:
+                    monitor_data = active_trade_monitors[symbol]
+                    is_safe = monitor_data.get('in_breakeven', False) or monitor_data.get('tp1_hit', False)
+                    if not is_safe:
+                        risk_count += 1
         print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | Ризикових: {risk_count}", flush=True)
-        return risk_count  # Повертаємо саме кількість РИЗИКОВИХ позицій
+        return risk_count
     except Exception as e:
-        await log_and_alert(f"Помилка підрахунку ризикових позицій", str(e))
+        await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
         return MAX_RISK_POSITIONS
 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
@@ -444,6 +454,23 @@ async def monitor_trades_loop():
         try:
             positions = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
+
+            # Автоматичне відновлення стану позицій після перезапуску боту
+            for p in positions:
+                if float(p.get('positionAmt', 0)) != 0:
+                    sym = p.get('symbol')
+                    if sym not in active_trade_monitors:
+                        pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
+                        entry_p = float(p.get('entryPrice', 0))
+                        active_trade_monitors[sym] = {
+                            'entry': entry_p,
+                            'stop_loss': entry_p * 0.98 if pos_side == 'LONG' else entry_p * 1.02,
+                            'tp1': entry_p * 1.02 if pos_side == 'LONG' else entry_p * 0.98,
+                            'in_breakeven': False,
+                            'tp1_hit': False,
+                            'side': pos_side
+                        }
+                        print(f"[INFO] Відновлено моніторинг забутої позиції після перезапуску: {sym}", flush=True)
             
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
