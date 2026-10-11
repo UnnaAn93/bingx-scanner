@@ -401,7 +401,7 @@ async def open_position(setup):
             "side": sl_side,
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "STOP_MARKET",
-            "stopPrice": round(setup['stop_loss'], 4),
+            "stopPrice": float(f"{setup['stop_loss']:.8f}"),
             "quantity": total_qty,
             "workingType": "MARK_PRICE"
         }
@@ -419,7 +419,7 @@ async def open_position(setup):
                     "side": sl_side,
                     "positionSide": "LONG" if side == "LONG" else "SHORT",
                     "type": "TAKE_PROFIT_MARKET",
-                    "stopPrice": round(tp_price, 4),
+                    "stopPrice": float(f"{setup['stop_loss']:.8f}"),
                     "quantity": tp_qty,
                     "workingType": "MARK_PRICE"
                 }
@@ -474,11 +474,15 @@ async def monitor_trades_loop():
             
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
-                    await send_telegram(f"❌ Позиція по {symbol} закрита на біржі.")
-                    print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
+                    if data.get('tp3_hit', False):
+                        await send_telegram(f"🎯 **Всі тейки взяті!** Позиція по {symbol} успішно закрита по максимальному профіту!")
+                        print(f"[INFO] Позиція {symbol} закрита по TP3 (всі цілі досягнуто).", flush=True)
+                    else:
+                        await send_telegram(f"❌ Позиція по {symbol} закрита на біржі.")
+                        print(f"[INFO] Позиція {symbol} закрита на біржі.", flush=True)
+                
                     del active_trade_monitors[symbol]
                     continue
-
                 # --- Перевірка зустрічного об'єму для дострокової фіксації плюсу ---
                 try:
                     current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
@@ -580,6 +584,20 @@ async def monitor_trades_loop():
                     if hit_tp1 and entry_price > 0:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
+                # 2.1. Фіксуємо ТР3 для відстеження повного профіту
+                if 'tp3' in data:
+                    tp3_price = float(data['tp3'])
+                else:
+                    # Якщо раптом tp3 не було, беремо його з розрахунку (tp2 + atr*2)
+                    tp2_price = float(data.get('tp2', entry_price + (atr_val * 4.0)))
+                    tp3_price = tp2_price + (atr_val * 2.0) if side_val == "LONG" else tp2_price - (atr_val * 2.0)
+                    data['tp3'] = tp3_price
+
+                if not data.get('tp3_hit', False):
+                    hit_tp3 = (side_val == "LONG" and current_price >= tp3_price) or \
+                              (side_val == "SHORT" and current_price <= tp3_price)
+                    if hit_tp3 and entry_price > 0:
+                        data['tp3_hit'] = True
 
                         try:
                             symbol_str = symbol
