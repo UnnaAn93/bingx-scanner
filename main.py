@@ -399,7 +399,7 @@ async def open_position(setup):
             "side": sl_side,
             "positionSide": "LONG" if side == "LONG" else "SHORT",
             "type": "STOP_MARKET",
-            "stopPrice": float(f"{setup['stop_loss']:.8f}"),
+            "stopPrice": float(f"{stop_loss:.6f}"),
             "quantity": total_qty,
             "workingType": "MARK_PRICE"
         }
@@ -417,7 +417,7 @@ async def open_position(setup):
                     "side": sl_side,
                     "positionSide": "LONG" if side == "LONG" else "SHORT",
                     "type": "TAKE_PROFIT_MARKET",
-                    "stopPrice": float(f"{setup['stop_loss']:.8f}"),
+                    "stopPrice": float(f"{tp_price:.6f}"),
                     "quantity": tp_qty,
                     "workingType": "MARK_PRICE"
                 }
@@ -622,7 +622,7 @@ async def monitor_trades_loop():
                                 "side": sl_side,
                                 "positionSide": position_side,
                                 "type": "STOP_MARKET",
-                                "stopPrice": float(f"{entry_price:.8f}"),
+                                "stopPrice": float(f"{entry_price:.6f}"),
                                 "quantity": current_qty,
                                 "workingType": "MARK_PRICE"
                             }
