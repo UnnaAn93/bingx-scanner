@@ -151,6 +151,7 @@ async def analyze_market(symbol):
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
         max_1h_high = max(x['high'] for x in closed_klines_1h) if closed_klines_1h else max_40_high
+        min_1h_low = min(x['low'] for x in closed_klines_1h) if closed_klines_1h else min_40_low
         
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
@@ -196,12 +197,36 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
-            # Перевірка зони підтримки: або класичний мінімум, або зона біля EMA50 (тренд)
-            is_near_classic_support = current_price <= (min_40_low + (atr_15m * 2.5))
+            # 1. Перевіряємо, чи є чітка підтримка на 15 хв (чи повторюється мінімум в історії 15м)
+            # Шукаємо, чи є кілька свічок з подібним мінімумом (похибка в межах 0.5 ATR)
+            similar_lows_15m = sum(1 for x in klines_15m[:-3] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
+            has_clear_15m_support = similar_lows_15m >= 2
+
+            # 2. Перевіряємо годинну підтримку
+            is_near_1h_support = current_price <= (min_1h_low + (atr_15m * 2.5))
+
+            # 3. Перевіряємо подвійне торкання на 15 хв (якщо немає чіткої підтримки і годинної)
+            # Тобто ціна близько до min_40_low, і це саме другий дотик (є попередній схожий мінімум раніше)
+            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and similar_lows_15m >= 1
+
+            # Визначаємо, чи пройдена перевірка зони підтримки за нашою новою ієрархією:
+            # Або є чітка підтримка на 15м, або є підтримка на 1г, або це підтверджене подвійне торкання на 15м
+            is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
             is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.5)
-    
+
             is_near_support = is_near_classic_support or is_near_ema_support
-            has_bounce_signal = (prev_candle['close'] > prev_candle['open']) or (prev_candle['low'] <= min_40_low + atr_15m) or (abs(prev_candle['low'] - ema_50) <= atr_15m)
+
+            # 4. Захисний фільтр від пробою (вимагаємо або сильну зелену свічку, або довгу нижню тень/молот з об'ємом)
+            is_green_candle = last_candle['close'] > last_candle['open']
+            body_size_val = abs(last_candle['close'] - last_candle['open'])
+            candle_range_val = last_candle['high'] - last_candle['low']
+            is_strong_body = candle_range_val > 0 and (body_size_val / candle_range_val) >= 0.40
+
+            lower_wick_val = min(last_candle['open'], last_candle['close']) - last_candle['low']
+            has_long_pinbar = candle_range_val > 0 and (lower_wick_val / candle_range_val) >= 0.35
+
+            # Сигнал відскоку спрацьовує тільки якщо є підтвердження свічки (зелене тіло або пін-бар) біля рівня
+            has_bounce_signal = is_near_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
 
             if not is_near_support:
                 long_reasons.append("LONG: далеко від підтримки та EMA50")
