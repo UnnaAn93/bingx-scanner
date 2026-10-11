@@ -337,14 +337,17 @@ async def analyze_market(symbol):
                     risk = stop_loss - current_price
                     reward_tp1 = current_price - tp1
         
-                    # Адаптивний R:R для шорта зі зсувом сітки вниз
+                    # Адаптивний R:R для шорта зі зсувом сітки та захистом від занадто близької підтримки
                     if risk > 0 and (reward_tp1 / risk) < 1.3:
                         min_tp1 = current_price - (risk * 1.3)
-                        shift = tp1 - min_tp1
-                        tp1 = min_tp1
-                        tp2 -= shift
-                        tp3 -= shift
-                        reward_tp1 = current_price - tp1
+                        if current_price - min_tp1 < atr_15m * 0.5:
+                            short_reasons.append("занадто близько до підтримки / замалий потенціал руху")
+                        else:
+                            shift = tp1 - min_tp1
+                            tp1 = min_tp1
+                            tp2 -= shift
+                            tp3 -= shift
+                            reward_tp1 = current_price - tp1
 
                     if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
                         short_reasons.append("малий Risk/Reward (<1.3)")
