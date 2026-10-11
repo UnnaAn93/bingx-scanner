@@ -150,6 +150,7 @@ async def analyze_market(symbol):
         
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
+        max_1h_high = max(x['high'] for x in closed_klines_1h) if closed_klines_1h else max_40_high
         
         if atr_15m <= 0:
             return None, False, "Нульовий ATR"
@@ -269,11 +270,8 @@ async def analyze_market(symbol):
             else:
                 signal = "SHORT"
                 # Динамічний стоп-лос для шорту
-                if is_near_ema_resistance and not is_near_classic_resistance:
-                    stop_loss = ema_50_1h + atr_15m
-                else:
-                    stop_loss = max_40_high + atr_15m
-                
+                stop_loss = max(max_40_high, max(x['high'] for x in closed_klines_1h)) + atr_15m
+        
                 # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
                 tp1 = current_price - (atr_15m * 2.0)
                 tp2 = tp1 - (atr_15m * 2.0)
