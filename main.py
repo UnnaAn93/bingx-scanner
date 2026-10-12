@@ -253,7 +253,7 @@ async def analyze_market(symbol):
                 if is_near_ema_support and not is_near_classic_support:
                     stop_loss = ema_50 - atr_15m
                 else:
-                    stop_loss = min_40_low - atr_15m
+                    stop_loss = min_40_low - (atr_15m * 0.5)
                 
                 # Тейк-профіти за структурою: TP1 вище максимуму за 20 свічок
                 tp1 = current_price + (atr_15m * 2.0)
@@ -315,7 +315,7 @@ async def analyze_market(symbol):
             else:
                 signal = "SHORT"
                 # Динамічний стоп-лос для шорту
-                stop_loss = max(max_40_high, max(x['high'] for x in closed_klines_1h)) + atr_15m
+                stop_loss = max(max_40_high, max(x['high'] for x in closed_klines_1h)) + (atr_15m * 0.5)
         
                 # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
                 tp1 = current_price - (atr_15m * 2.0)
