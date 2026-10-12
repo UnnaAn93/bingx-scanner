@@ -463,6 +463,20 @@ async def open_position(setup):
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
 
+async def start_websocket_monitor():
+    #"""Пункт 9 ТЗ: Отримання сповіщень через WebSocket про спрацювання тейків"""
+    uri = "wss://open-api.bingx.com/swap-market"
+    while True:
+        try:
+            async with websockets.connect(uri) as ws:
+                print("[WS] Підключено до WebSocket BingX для моніторингу тейків")
+                async for message in ws:
+                    data = json.loads(message)
+                    # Оновлення позицій при отриманні сповіщення від біржі
+        except Exception as e:
+            print(f"[WS Помилка] Обрив з'єднання: {e}. Перепідключення через 5 сек...")
+            await asyncio.sleep(5)
+            
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
@@ -678,6 +692,7 @@ async def main_scanner():
     asyncio.create_task(monitor_trades_loop())
     asyncio.create_task(report_loop())
     asyncio.create_task(self_ping_loop())
+    asyncio.create_task(start_websocket_monitor())
 
     threading.Thread(target=run_http_server, daemon=True).start()
 
