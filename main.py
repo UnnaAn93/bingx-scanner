@@ -136,6 +136,19 @@ async def get_klines(symbol, interval, limit=40):
     return []
     
 # --- АНАЛІЗ РИНКУ ---
+async def get_exchange_positions():
+    try:
+        res = await bingx_request('GET', '/openApi/swap/v2/user/positions')
+        if isinstance(res, dict) and res.get('code') == 0:
+            return res.get('data', [])
+        if isinstance(res, list):
+            return res
+        return []
+    except Exception as e:
+        print(f"[LOG ERROR] Get positions error: {e}", flush=True)
+        return []
+
+
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
         return 0.0
@@ -147,6 +160,7 @@ def calculate_atr(klines, period=14):
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
     return sum(trs[-period:]) / period
+
 
 async def analyze_market(symbol):
     try:
