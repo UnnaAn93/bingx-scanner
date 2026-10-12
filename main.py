@@ -161,12 +161,11 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
-
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1h = await get_klines(symbol, "1h", 100)
-        if len(raw_15m) < 100 or len(raw_1h) < 50:
+        if len(raw_15m) < 100 or len(raw_1h) < 100:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
@@ -175,13 +174,13 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m, period=14)
         current_price = klines_15m[-1]['close']
         ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else sum(x['close'] for x in klines_15m) / len(klines_15m)
-        closed_klines_1h = klines_1h[:-1] if len(klines_1h) > 1 else klines_1h
-        ema_50_1h = sum(x['close'] for x in closed_klines_1h[-50:]) / 50 if len(closed_klines_1h) >= 50 else sum(x['close'] for x in closed_klines_1h) / len(closed_klines_1h)
+        
+        ema_50_1h = sum(x['close'] for x in klines_1h[-50:]) / 50 if len(klines_1h) >= 50 else sum(x['close'] for x in klines_1h) / len(klines_1h)
 
         min_40_low = min(x['low'] for x in klines_15m)
         max_40_high = max(x['high'] for x in klines_15m)
-        max_1h_high = max(x['high'] for x in closed_klines_1h) if closed_klines_1h else max_40_high
-        min_1h_low = min(x['low'] for x in closed_klines_1h) if closed_klines_1h else min_40_low
+        min_1h_low = min(x['low'] for x in klines_1h)
+        max_1h_high = max(x['high'] for x in klines_1h)
 
         if atr_15m == 0:
             return None, False, "Нульовий ATR"
@@ -201,53 +200,81 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
+        # --- Аналіз усіх 100 свічок на 1h: перевірка торкань до мінімумів (підтримки) або EMA 50 ---
+        support_touches_1h = 0
+        resistance_touches_1h = 0
+        
+        # Визначаємо базові межі старших рівнів з 1h
+        for k_1h in klines_1h:
+            h_1h = float(k_1h['high'])
+            l_1h = float(k_1h['low'])
+            
+            # Якщо ціна на 1h торкалася нижньої зони (поблизу мінімуму або EMA)
+            if abs(l_1h - min_1h_low) <= (atr_15m * 2.0) or abs(l_1h - ema_50_1h) <= (atr_15m * 2.0):
+                support_touches_1h += 1
+            # Якщо ціна на 1h торкалася верхньої зони (поблизу максимуму або EMA)
+            if abs(h_1h - max_1h_high) <= (atr_15m * 2.0) or abs(h_1h - ema_50_1h) <= (atr_15m * 2.0):
+                resistance_touches_1h += 1
+
+        is_strong_support_level = (support_touches_1h >= 2)
+        is_strong_resistance_level = (resistance_touches_1h >= 2)
+
         # --- Перевірка LONG ---
-        c_range = last_candle['high'] - last_candle['low']
-        body_size = abs(last_candle['close'] - last_candle['open'])
-        lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
+        is_closed_above_1h_ema = klines_1h[-1]['close'] > ema_50_1h
+        is_valid_long_trend = is_closed_above_1h_ema or is_strong_support_level or (current_price <= (min_40_low + (atr_15m * 1.5)))
 
-        is_green_candle = last_candle['close'] > last_candle['open']
-        if not is_green_candle:
-            long_reasons.append("LONG: закрита свічка червона")
+        if not is_valid_long_trend:
+            long_reasons.append("LONG: тренд на 1h несприятливий і немає історії торкань підтримки")
         else:
-            has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
-            is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.40
+            c_range = last_candle['high'] - last_candle['low']
+            body_size = abs(last_candle['close'] - last_candle['open'])
+            lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
 
-            if not (has_long_lower_wick or is_strong_green_body):
-                long_reasons.append("LONG: слабкий відскок")
+            is_green_candle = last_candle['close'] > last_candle['open']
+            if not is_green_candle:
+                long_reasons.append("LONG: закрита свічка на 15m червона")
             else:
-                is_at_support = current_price <= (min_40_low + (atr_15m * 1.0))
-                if not is_at_support:
-                    long_reasons.append("LONG: ціна далеко від підтримки")
-                else:
-                    stop_loss = min_40_low - (atr_15m * 0.4)
-                    tp1 = current_price + (atr_15m * 2.0)
-                    tp2 = tp1 + (atr_15m * 2.0)
-                    tp3 = tp2 + (atr_15m * 2.0)
+                has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
+                is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.40
 
-                    if not (stop_loss < current_price < tp1 < tp2 < tp3):
-                        long_reasons.append("LONG: невірні цілі")
+                if not (has_long_lower_wick or is_strong_green_body):
+                    long_reasons.append("LONG: слабкий відскок")
+                else:
+                    # ТВХ на 15 хв: від підтримки АБО від EMA + 1 ATR
+                    is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
+                    is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
+                    is_valid_tvh_zone = is_near_support or is_near_ema_zone
+
+                    if not is_valid_tvh_zone:
+                        long_reasons.append("LONG: ціна не біля підтримки і не біля EMA+ATR")
                     else:
-                        risk = current_price - stop_loss
-                        reward_tp1 = tp1 - current_price
-                        if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
-                            long_reasons.append("малий Risk/Reward")
+                        stop_loss = min_40_low - (atr_15m * 0.4)
+                        tp1 = current_price + (atr_15m * 2.0)
+                        tp2 = tp1 + (atr_15m * 2.0)
+                        tp3 = tp2 + (atr_15m * 2.0)
+
+                        if not (stop_loss < current_price < tp1 < tp2 < tp3):
+                            long_reasons.append("LONG: невірні цілі")
                         else:
-                            return {
-                                "symbol": symbol, "signal": "LONG", "entry": current_price,
-                                "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                            }, is_volume_spike, "OK"
+                            risk = current_price - stop_loss
+                            reward_tp1 = tp1 - current_price
+                            if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
+                                long_reasons.append("малий Risk/Reward")
+                            else:
+                                return {
+                                    "symbol": symbol, "signal": "LONG", "entry": current_price,
+                                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                                }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
         is_near_support_zone = current_price <= (min_40_low + (atr_15m * 2.0))
-
-        # Головна умова 1: остання закрита свічка на годині має бути нижче EMA 1h
-        is_closed_below_1h_ema = closed_klines_1h[-1]['close'] < ema_50_1h if closed_klines_1h else True
+        is_closed_below_1h_ema = klines_1h[-1]['close'] < ema_50_1h
+        is_valid_short_trend = is_closed_below_1h_ema or is_strong_resistance_level or current_price >= (max_40_high - (atr_15m * 1.5))
 
         if is_near_support_zone:
             short_reasons.append("SHORT: ціна внизу біля підтримки, продаж заборонено")
-        elif not is_closed_below_1h_ema:
-            short_reasons.append("SHORT: ціна на 1h вище EMA50 (тренд не шортовий)")
+        elif not is_valid_short_trend:
+            short_reasons.append("SHORT: тренд на 1h вище EMA і немає історії торкань опору")
         elif not (last_candle['close'] < last_candle['open'] or any(klines_15m[i]['close'] >= klines_15m[i]['open'] for i in range(-3, 0))):
             short_reasons.append("SHORT: свічка на 15m не червона")
         else:
@@ -260,22 +287,22 @@ async def analyze_market(symbol):
             has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
             is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
-            # Головна умова 2 на 15m: шукаємо ТВХ біля опору АБО біля EMA + ATR (відкат вгору)
+            # ТВХ на 15 хв: від опору АБО від EMA + 1 ATR
             is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-            is_near_ema_plus_atr = abs(current_price - ema_50_1h) <= (atr_15m * 1.5)
-            
-            is_valid_tvh_zone = is_near_resistance or is_near_ema_plus_atr
+            is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
+            is_valid_tvh_zone = is_near_resistance or is_near_ema_zone
+
             has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
 
             if not is_valid_tvh_zone:
-                short_reasons.append("SHORT: ціна не біля опору і не біля EMA+ATR (немає відкату)")
+                short_reasons.append("SHORT: ціна не біля опору і не біля EMA+ATR")
             elif not has_drop_signal:
                 short_reasons.append("SHORT: немає сигналу розвороту")
             elif not is_valid_body:
                 short_reasons.append("SHORT: мале тіло свічки")
             else:
                 signal = "SHORT"
-                if is_near_ema_plus_atr and not is_near_resistance:
+                if is_near_ema_zone and not is_near_resistance:
                     stop_loss = ema_50_1h + (atr_15m * 0.5)
                     tp1 = current_price - (atr_15m * 2.6)
                 else:
