@@ -203,7 +203,7 @@ async def analyze_market(symbol):
         is_strong_support_level = (support_touches_1h >= 2)
         is_strong_resistance_level = (resistance_touches_1h >= 2)
 
-        # --- ФІЛЬТР НАХИЛУ EMA НА 1H ЗА 5 СВІЧКАМИ ---
+        # --- ГОЛОВНИЙ ФІЛЬТР НАХИЛУ EMA НА 1H ---
         is_ema_sloping_up = ema_50_1h_current >= ema_50_1h_prev
 
         if is_ema_sloping_up:
