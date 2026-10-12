@@ -239,12 +239,15 @@ async def analyze_market(symbol):
             # Сигнал відскоку спрацьовує тільки якщо є підтвердження свічки (зелене тіло або пін-бар) біля рівня
             has_bounce_signal = is_near_classic_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
             
+             # Жорсткий фільтр: забороняємо Лонг, якщо поточна свічка червона (ціна закриття нижче відкриття)
+            is_current_green = last_candle['close'] > last_candle['open']
+
             if not is_near_classic_support:
                 long_reasons.append("LONG: далеко від підтримки та EMA50")
+            elif not is_current_green:
+                long_reasons.append("LONG: поточна свічка червона (падає)")
             elif not has_bounce_signal:
                 long_reasons.append("LONG: немає сигналу відскоку")
-            elif not is_valid_body:
-                long_reasons.append("LONG: мале тіло свічки")
             else:
                 signal = "LONG"
                 # Динамічний стоп-лос для лонгу
