@@ -501,6 +501,7 @@ async def monitor_trades_loop():
                     continue
 
                     # --- Перевірка зустрічного об'єму для сповіщення в Telegram ---
+                    current_pos_data = None
                     try:
                         current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
                         if current_pos_data:
