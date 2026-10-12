@@ -193,7 +193,7 @@ async def analyze_market(symbol):
         body_size = abs(last_candle['close'] - last_candle['open'])
         lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
     
-        # ГОЛОВНА УМОВА: попередня закрита свічка має бути зеленою (покупець домінує)
+        # 1. Головна умова: закрита свічка має бути зеленою (покупець домінує)
         is_green_candle = last_candle['close'] > last_candle['open']
         if not is_green_candle:
             long_reasons.append("LONG: закрита свічка червона (домінує продавець)")
@@ -204,38 +204,22 @@ async def analyze_market(symbol):
             if not (has_long_lower_wick or is_strong_green_body):
                 long_reasons.append("слабкий відскок (мале тіло або немає тіні викупу)")
             else:
-                recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
-
+                # Перевіряємо наявність класичної підтримки (знизу)
                 similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
                 
-                has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
-                
-                is_near_1h_support = (
-                    (current_price <= (min_1h_low + (atr_15m * 2.0))) 
-                    and not recent_is_falling
-                )
-                
-                is_double_touch_15m = (
-                    (abs(current_price - min_40_low) <= (atr_15m * 1.5)) 
-                    and (similar_lows_15m >= 1) 
-                    and not recent_is_falling
-                )
+                has_clear_15m_support = (similar_lows_15m >= 2)
+                is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0)))
+                is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1)
 
                 is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
-                is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
-
-                has_bounce_signal = is_near_classic_support or is_near_ema_support
                 
-                if not has_bounce_signal:
-                    long_reasons.append("LONG: далеко від підтримки та EMA50")
+                # ГОЛОВНЕ ДОЗВОЛЕННЯ: Лонг дозволено, якщо ціна біля підтримки (навіть якщо вона глибоко під EMA50)
+                if not is_near_classic_support:
+                    long_reasons.append("LONG: далеко від підтримки")
                 else:
-                    if is_near_ema_support and not is_near_classic_support:
-                        stop_loss = ema_50 - (atr_15m * 0.5)
-                        tp1 = current_price + (atr_15m * 2.6)
-                    else:
-                        stop_loss = min_40_low - atr_15m
-                        tp1 = current_price + (atr_15m * 2.0)
-                    
+                    # Розрахунок стопу і цілей від підтримки
+                    stop_loss = min_40_low - atr_15m
+                    tp1 = current_price + (atr_15m * 2.0)
                     tp2 = tp1 + (atr_15m * 2.0)
                     tp3 = tp2 + (atr_15m * 2.0)
 
