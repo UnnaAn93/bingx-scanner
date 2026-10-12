@@ -134,7 +134,7 @@ async def get_klines(symbol, interval, limit=40):
         except Exception as e:
             print(f"[LOG ERROR] Klines error {symbol}: {e}", flush=True)
     return []
-
+    
 # --- АНАЛІЗ РИНКУ ---
 def calculate_atr(klines, period=14):
     if len(klines) < period + 1:
@@ -193,66 +193,64 @@ async def analyze_market(symbol):
         body_size = abs(last_candle['close'] - last_candle['open'])
         lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
     
-        has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
-        is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.50 and last_candle['close'] > last_candle['open']
-
-        if not (has_long_lower_wick or is_strong_green_body):
-            long_reasons.append("слабкий відскок (немає ні тіні, ні сильного тіла)")
+        # ГОЛОВНА УМОВА: попередня закрита свічка має бути зеленою (покупець домінує)
+        is_green_candle = last_candle['close'] > last_candle['open']
+        if not is_green_candle:
+            long_reasons.append("LONG: закрита свічка червона (домінує продавець)")
         else:
-            body_last = last_candle['close'] - last_candle['open']
-            b_size = abs(body_last)
-            b_ratio = (b_size / c_range) if c_range > 0 else 0.0
-            is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
-            
-            recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
+            has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
+            is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.40
 
-            similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
-            has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
-            is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0))) and not recent_is_falling
-            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1) and not recent_is_falling
-
-            is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
-            is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
-
-            is_green_candle = last_candle['close'] > last_candle['open']
-            body_size_val = abs(last_candle['close'] - last_candle['open'])
-            candle_range_val = last_candle['high'] - last_candle['low']
-            is_strong_body = candle_range_val > 0 and (body_size_val / candle_range_val) >= 0.40
-            lower_wick_val = min(last_candle['open'], last_candle['close']) - last_candle['low']
-            has_long_pinbar = candle_range_val > 0 and (lower_wick_val / candle_range_val) >= 0.35
-
-            has_bounce_signal = is_near_classic_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
-            
-            if not is_near_classic_support:
-                long_reasons.append("LONG: далеко від підтримки та EMA50")
-            elif not has_bounce_signal:
-                long_reasons.append("LONG: немає сигналу відскоку")
-            elif not is_valid_body:
-                long_reasons.append("LONG: мале тіло свічки")
+            if not (has_long_lower_wick or is_strong_green_body):
+                long_reasons.append("слабкий відскок (мале тіло або немає тіні викупу)")
             else:
-                signal = "LONG"
-                if is_near_ema_support and not is_near_classic_support:
-                    stop_loss = ema_50 - (atr_15m * 0.5)
-                    tp1 = current_price + (atr_15m * 2.6)
-                else:
-                    stop_loss = min_40_low - atr_15m
-                    tp1 = current_price + (atr_15m * 2.0)
-                
-                tp2 = tp1 + (atr_15m * 2.0)
-                tp3 = tp2 + (atr_15m * 2.0)
+                recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
 
-                if not (stop_loss < current_price < tp1 < tp2 < tp3):
-                    long_reasons.append("LONG: невірні цілі")
+                similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
+                
+                has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
+                
+                is_near_1h_support = (
+                    (current_price <= (min_1h_low + (atr_15m * 2.0))) 
+                    and not recent_is_falling
+                )
+                
+                is_double_touch_15m = (
+                    (abs(current_price - min_40_low) <= (atr_15m * 1.5)) 
+                    and (similar_lows_15m >= 1) 
+                    and not recent_is_falling
+                )
+
+                is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
+                is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
+
+                has_bounce_signal = is_near_classic_support or is_near_ema_support
+                
+                if not has_bounce_signal:
+                    long_reasons.append("LONG: далеко від підтримки та EMA50")
                 else:
-                    risk = current_price - stop_loss
-                    reward_tp1 = tp1 - current_price
-                    if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
-                        long_reasons.append("малий Risk/Reward (<1.3)")
+                    if is_near_ema_support and not is_near_classic_support:
+                        stop_loss = ema_50 - (atr_15m * 0.5)
+                        tp1 = current_price + (atr_15m * 2.6)
                     else:
-                        return {
-                            "symbol": symbol, "signal": "LONG", "entry": current_price,
-                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, is_volume_spike, "OK"
+                        stop_loss = min_40_low - atr_15m
+                        tp1 = current_price + (atr_15m * 2.0)
+                    
+                    tp2 = tp1 + (atr_15m * 2.0)
+                    tp3 = tp2 + (atr_15m * 2.0)
+
+                    if not (stop_loss < current_price < tp1 < tp2 < tp3):
+                        long_reasons.append("LONG: невірні цілі")
+                    else:
+                        risk = current_price - stop_loss
+                        reward_tp1 = tp1 - current_price
+                        if risk <= 0 or reward_tp1 <= 0 or (reward_tp1 / risk) < 1.3:
+                            long_reasons.append("малий Risk/Reward (<1.3)")
+                        else:
+                            return {
+                                "symbol": symbol, "signal": "LONG", "entry": current_price,
+                                "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                            }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
         if (last_candle['close'] >= last_candle['open']) or any(klines_15m[i]['close'] >= klines_15m[i]['open'] and klines_15m[i-1]['close'] >= klines_15m[i-1]['open'] for i in range(-4, 0)) or (current_price > ema_50):
