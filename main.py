@@ -214,12 +214,12 @@ async def analyze_market(symbol):
             # Визначаємо чи це тренд (ціна вище EMA50 і є нахил вгору) чи флет
             is_uptrend = current_price > ema_50 and (ema_50 > klines_15m[-10]['close'])
 
+            # Спочатку визначаємо фільтр падіння, щоб він існував до перевірок нижче
+            recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
+
             # 1. Перевірки для ФЛЕТУ (відштовхування від підтримки)
             similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
             has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
-            is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0))) and not recent_is_falling
-            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1) and not recent_is_falling
-            is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
 
             # 2. Перевірки для ТРЕНДУ (відкат до EMA50)
             is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
