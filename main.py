@@ -465,10 +465,10 @@ async def open_position(setup):
         raise e
 
 async def start_websocket_monitor():
-    """Пункт 9 ТЗ: Отримання сповіщень через WebSocket про спрацювання тейків"""
+    #"""Пункт 9 ТЗ: Отримання сповіщень через WebSocket про спрацювання тейків"""
     while True:
         try:
-            ts = str(int(time.time() * 1000)) + server_time_offset
+            ts = str(int(time.time() * 1000) + int(server_time_offset))
             params = {'timestamp': ts}
             query_str = urllib.parse.urlencode(sorted(params.items()))
             sig = get_sign(API_SECRET, query_str)
