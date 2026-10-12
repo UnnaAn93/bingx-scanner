@@ -148,11 +148,10 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
-
 async def analyze_market(symbol):
     try:
-        raw_15m = await get_kines(symbol, "15m", 100)
-        raw_1h = await get_kines(symbol, "1h", 100)
+        raw_15m = await get_klines(symbol, "15m", 100)
+        raw_1h = await get_klines(symbol, "1h", 100)
         if len(raw_15m) < 100 or len(raw_1h) < 100:
             return None, False, "Недостатньо історичних даних"
 
