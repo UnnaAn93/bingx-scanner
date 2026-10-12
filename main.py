@@ -214,8 +214,8 @@ async def analyze_market(symbol):
             # Визначаємо чи це тренд (ціна вище EMA50 і є нахил вгору) чи флет
             is_near_classic_support = False
             is_near_ema_support = False
-            is_uptrend = current_price > ema_50 and (ema_50 > klines_15m[-10]['close'])
-
+            is_uptrend = current_price > ema_50
+            
             # Спочатку визначаємо фільтр падіння, щоб він існував до перевірок нижче
             recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
 
