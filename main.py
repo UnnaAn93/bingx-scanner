@@ -163,8 +163,6 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(klines_15m, period=14)
         current_price = klines_15m[-1]['close']
         ema_50 = sum(x['close'] for x in klines_15m[-50:]) / 50 if len(klines_15m) >= 50 else sum(x['close'] for x in klines_15m) / len(klines_15m)
-        
-        # Рахуємо 1h EMA строго по вже закритих свічках (відкидаємо останню незавершену[-1])[span_0](start_span)[span_0](end_span)
         closed_klines_1h = klines_1h[:-1] if len(klines_1h) > 1 else klines_1h
         ema_50_1h = sum(x['close'] for x in closed_klines_1h[-50:]) / 50 if len(closed_klines_1h) >= 50 else sum(x['close'] for x in closed_klines_1h) / len(closed_klines_1h)
         
@@ -184,79 +182,65 @@ async def analyze_market(symbol):
         if not is_volume_spike:
             return None, False, "Немає сплеску об'єму (< 1.5x)"
 
-        # Збираємо детальні причини по кожному напрямку[span_1](start_span)[span_1](end_span)
+        # Фільтр флету
+        recent_klines = klines_15m[-40:]
+        recent_range = max(x['high'] for x in recent_klines) - min(x['low'] for x in recent_klines)
+        if recent_range < atr_15m * 2.5:
+            return None, is_volume_spike, "Ціна стоїть у флеті (вузький діапазон)"
+
         long_reasons = []
         short_reasons = []
 
-        # --- Перевірка LONG[span_2](start_span)[span_2](end_span) ---
+        # --- Перевірка LONG ---
         c_range = last_candle['high'] - last_candle['low']
         body_size = abs(last_candle['close'] - last_candle['open'])
         lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
     
-        # Умова 1: Довга нижня тінь (відскок / пін-бар >= 30%)
         has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
-    
-        # Умова 2: Сильне тіло у верхній частині (тіло >= 50% і свічка зелена)
         is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.50 and last_candle['close'] > last_candle['open']
 
-        # Якщо немає ні довгої тіні, ні сильного тіла — відсіюємо
         if not (has_long_lower_wick or is_strong_green_body):
             long_reasons.append("слабкий відскок (немає ні тіні, ні сильного тіла)")
         else:
             body_last = last_candle['close'] - last_candle['open']
-            is_sharp_dump = body_last < -atr_15m * 0.8
-
-            c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
-            # Визначаємо чи це тренд (ціна вище EMA50 і є нахил вгору) чи флет
-            is_near_classic_support = False
-            is_near_ema_support = False
-            is_uptrend = current_price > ema_50
-            
-            # Спочатку визначаємо фільтр падіння, щоб він існував до перевірок нижче
             recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
 
-            # 1. Перевірки для ФЛЕТУ (відштовхування від підтримки)
             similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
             has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
+            is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0))) and not recent_is_falling
+            is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1) and not recent_is_falling
 
-            # 2. Перевірки для ТРЕНДУ (відкат до EMA50)
+            is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
             is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
 
-            # Загальна зона входу залежить від режиму (Тренд -> EMA50, Флет -> Підтримка)
-            is_valid_zone = is_near_ema_support if is_uptrend else is_near_classic_support
-
-            # 3. Захисний фільтр свічки відскоку
             is_green_candle = last_candle['close'] > last_candle['open']
             body_size_val = abs(last_candle['close'] - last_candle['open'])
             candle_range_val = last_candle['high'] - last_candle['low']
             is_strong_body = candle_range_val > 0 and (body_size_val / candle_range_val) >= 0.40
-
             lower_wick_val = min(last_candle['open'], last_candle['close']) - last_candle['low']
             has_long_pinbar = candle_range_val > 0 and (lower_wick_val / candle_range_val) >= 0.35
 
-            has_bounce_signal = is_valid_zone and ((is_green_candle and is_strong_body) or has_long_pinbar)
+            has_bounce_signal = is_near_classic_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
             
-            if not is_valid_zone:
-                zone_desc = "далеко від EMA50 (тренд)" if is_uptrend else "далеко від підтримки (флет)"
-                long_reasons.append(f"LONG: {zone_desc}")
+            if not is_near_classic_support:
+                long_reasons.append("LONG: далеко від підтримки та EMA50")
             elif not has_bounce_signal:
                 long_reasons.append("LONG: немає сигналу відскоку")
             elif not is_valid_body:
                 long_reasons.append("LONG: мале тіло свічки")
             else:
                 signal = "LONG"
-                # Динамічний стоп-лос для лонгу
                 if is_near_ema_support and not is_near_classic_support:
-                    stop_loss = ema_50 - atr_15m
+                    stop_loss = ema_50 - (atr_15m * 0.5)
+                    tp1 = current_price + (atr_15m * 2.6)
                 else:
-                    stop_loss = min_40_low - (atr_15m * 0.5)
+                    stop_loss = min_40_low - atr_15m
+                    tp1 = current_price + (atr_15m * 2.0)
                 
-                # Тейк-профіти за структурою: TP1 вище максимуму за 20 свічок
-                tp1 = current_price + (atr_15m * 2.0)
                 tp2 = tp1 + (atr_15m * 2.0)
                 tp3 = tp2 + (atr_15m * 2.0)
 
@@ -273,37 +257,22 @@ async def analyze_market(symbol):
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, is_volume_spike, "OK"
 
-        # --- Перевірка SHORT[span_3](start_span)[span_3](end_span) ---
-        # 1. Фільтр корекції для шортів 
+        # --- Перевірка SHORT ---
         if (last_candle['close'] >= last_candle['open']) or any(klines_15m[i]['close'] >= klines_15m[i]['open'] and klines_15m[i-1]['close'] >= klines_15m[i-1]['open'] for i in range(-4, 0)) or (current_price > ema_50):
             short_reasons.append("свічка не червона, є 2 зелені поспіль або ціна вище EMA")
         else:
             body_last = last_candle['close'] - last_candle['open']
-            is_sharp_pump = body_last > atr_15m * 0.8
-
             c_range = last_candle['high'] - last_candle['low']
             b_size = abs(body_last)
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
     
-            # Додаємо перевірку верхньої тіні (пін-бар на відбій від опору >= 40%)
             upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
             has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
-    
-            # Дозволяємо або нормальне тіло (знизивши поріг до 0.35), або наявність гарної верхньої тіні
             is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
-            # Перевірка нахилу годинної EMA вниз
-            is_ema_down_1h = ema_50_1h < ema_50_1h_prev if 'ema_50_1h_prev' in locals() else True
-
-            # 1. Трендовий шорт (відкат до годинної EMA + ATR, якщо EMA дивиться вниз)
-            is_near_ema_resistance = abs(current_price - ema_50_1h) <= (atr_15m * 2.0) and is_ema_down_1h
-
-            # 2. Флетовий шорт (опір на 15 хвилинах, але обов'язково нижче годинної EMA)
-            is_near_classic_resistance = (current_price >= (max_40_high - (atr_15m * 2.0))) and (current_price < ema_50_1h)
-
-            # Загальна зона для шорта
-            is_near_resistance = is_near_ema_resistance or is_near_classic_resistance
-
+            is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
+            is_near_ema_resistance = abs(current_price - ema_50_1h) <= (atr_15m * 2.0)
+            is_near_resistance = is_near_classic_resistance or is_near_ema_resistance
             has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m) or (abs(prev_candle['high'] - ema_50) <= atr_15m)
 
             if not is_near_resistance:
@@ -314,11 +283,13 @@ async def analyze_market(symbol):
                 short_reasons.append("SHORT: мале тіло свічки")
             else:
                 signal = "SHORT"
-                # Динамічний стоп-лос для шорту
-                stop_loss = max(max_40_high, max(x['high'] for x in closed_klines_1h)) + (atr_15m * 0.5)
+                if is_near_ema_resistance and not is_near_classic_resistance:
+                    stop_loss = ema_50_1h + (atr_15m * 0.5)
+                    tp1 = current_price - (atr_15m * 2.6)
+                else:
+                    stop_loss = max(max_40_high, max(x['high'] for x in closed_klines_1h)) + atr_15m
+                    tp1 = current_price - (atr_15m * 2.0)
         
-                # Тейк-профіти для шорта: TP1 нижче мінімуму за 20 свічок
-                tp1 = current_price - (atr_15m * 2.0)
                 tp2 = tp1 - (atr_15m * 2.0)
                 tp3 = tp2 - (atr_15m * 2.0)
 
@@ -335,7 +306,6 @@ async def analyze_market(symbol):
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, is_volume_spike, "OK"
 
-        # Формуємо детальну причину відсіювання для звіту[span_4](start_span)[span_4](end_span)
         combined_reason = f"L: {', '.join(long_reasons) or 'Отказ'} | S: {', '.join(short_reasons) or 'Отказ'}"
         return None, is_volume_spike, combined_reason
 
@@ -391,7 +361,7 @@ async def open_position(setup):
     try:
         total_qty = int(MARGIN_USD * LEVERAGE / setup['entry'])
         if total_qty < 1:
-            total_qty = 1  # мінімум 1 контракт
+            total_qty = 1
         
         qty_50 = int(total_qty * 0.5)
         qty_25_1 = int(total_qty * 0.25)
@@ -400,7 +370,6 @@ async def open_position(setup):
         if qty_25_1 < 1: qty_25_1 = 1
         if qty_25_2 < 1: qty_25_2 = 1
 
-        # 1. Ринковий ордер на вхід
         order_payload = {
             "symbol": symbol,
             "side": "BUY" if side == "LONG" else "SELL",
@@ -416,7 +385,6 @@ async def open_position(setup):
 
         sl_side = "SELL" if side == "LONG" else "BUY"
 
-        # 2. Стоп-лосс на весь об'єм (без reduceOnly для Hedge Mode)
         sl_payload = {
             "symbol": symbol,
             "side": sl_side,
@@ -429,10 +397,9 @@ async def open_position(setup):
 
         sl_res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
         if not sl_res or (isinstance(sl_res, dict) and sl_res.get("code") != 0):
-            err_msg = sl_res.get("msg", "Unknown error") if isinstance(res, dict) else "No response"
+            err_msg = sl_res.get("msg", "Unknown error") if isinstance(sl_res, dict) else "No response"
             await log_and_alert("ПОМИЛКА СТОП-ЛОСУ", f"Не вдалося виставити стоп: {err_msg}", symbol)
 
-        # 3. Виставлення трьох Тейк-Профітів (50% / 25% / 25%) (без reduceOnly для Hedge Mode)
         for i, (tp_price, tp_qty) in enumerate([(setup['tp1'], qty_50), (setup['tp2'], qty_25_1), (setup['tp3'], qty_25_2)]):
             if tp_qty > 0:
                 tp_payload = {
@@ -452,7 +419,7 @@ async def open_position(setup):
 
         active_trade_monitors[symbol] = {
             "side": side, "entry": setup['entry'], "stop_loss": setup['stop_loss'],
-            "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False
+            "tp1": setup['tp1'], "in_breakeven": False, "tp1_hit": False, "tp2_hit": False, "tp3_hit": False
         }
         save_trades_state(active_trade_monitors)
 
@@ -464,7 +431,7 @@ async def open_position(setup):
                f"🎯 TP2 (25%): {setup['tp2']}\n"
                f"🎯 TP3 (25%): {setup['tp3']}")
         await send_telegram(msg)
-        print(f"[SUCCESS] Успішно відкрито {side} по {symbol} та надіслано ордери.", flush=True)
+        print(f"[SUCCESS] Успішно відкрито координатний ордер по {symbol}.", flush=True)
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), symbol)
         raise e
