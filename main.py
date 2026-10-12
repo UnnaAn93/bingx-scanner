@@ -200,19 +200,15 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
-        # --- Аналіз усіх 100 свічок на 1h: перевірка торкань до мінімумів (підтримки) або EMA 50 ---
+        # --- Аналіз усіх 100 свічок на 1h ---
         support_touches_1h = 0
         resistance_touches_1h = 0
         
-        # Визначаємо базові межі старших рівнів з 1h
         for k_1h in klines_1h:
             h_1h = float(k_1h['high'])
             l_1h = float(k_1h['low'])
-            
-            # Якщо ціна на 1h торкалася нижньої зони (поблизу мінімуму або EMA)
             if abs(l_1h - min_1h_low) <= (atr_15m * 2.0) or abs(l_1h - ema_50_1h) <= (atr_15m * 2.0):
                 support_touches_1h += 1
-            # Якщо ціна на 1h торкалася верхньої зони (поблизу максимуму або EMA)
             if abs(h_1h - max_1h_high) <= (atr_15m * 2.0) or abs(h_1h - ema_50_1h) <= (atr_15m * 2.0):
                 resistance_touches_1h += 1
 
@@ -240,7 +236,6 @@ async def analyze_market(symbol):
                 if not (has_long_lower_wick or is_strong_green_body):
                     long_reasons.append("LONG: слабкий відскок")
                 else:
-                    # ТВХ на 15 хв: від підтримки АБО від EMA + 1 ATR
                     is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
                     is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
                     is_valid_tvh_zone = is_near_support or is_near_ema_zone
@@ -266,15 +261,19 @@ async def analyze_market(symbol):
                                     "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                                 }, is_volume_spike, "OK"
 
-        # --- Перевірка SHORT ---
+        # --- Перевірка SHORT (ЗІ СТРОГИМИ ЗАХИСНИМИ ФІЛЬТРАМИ ВІД ПАРАБОЛІКІВ) ---
         is_near_support_zone = current_price <= (min_40_low + (atr_15m * 2.0))
         is_closed_below_1h_ema = klines_1h[-1]['close'] < ema_50_1h
-        is_valid_short_trend = is_closed_below_1h_ema or is_strong_resistance_level or current_price >= (max_40_high - (atr_15m * 1.5))
+        
+        # ЖОРСТКИЙ ЗАХИСТ: якщо ціна летить в параболічному рості (далеко вище EMA 50 або оновлює хаї без відкату), шорт КАТЕГОРИЧНО ЗАБОРОНЕНИЙ
+        is_parabolic_pump = current_price > (ema_50 + (atr_15m * 2.5)) or (last_candle['close'] > last_candle['open'] and current_price >= max_40_high - (atr_15m * 0.5))
 
         if is_near_support_zone:
             short_reasons.append("SHORT: ціна внизу біля підтримки, продаж заборонено")
-        elif not is_valid_short_trend:
-            short_reasons.append("SHORT: тренд на 1h вище EMA і немає історії торкань опору")
+        elif is_parabolic_pump:
+            short_reasons.append("SHORT: ЗАБОРОНА! Ринок росте імпульсно (параболік вгору)")
+        elif not is_closed_below_1h_ema and not is_strong_resistance_level:
+            short_reasons.append("SHORT: тренд на 1h вище EMA і немає підтвердженого рівня опору")
         elif not (last_candle['close'] < last_candle['open'] or any(klines_15m[i]['close'] >= klines_15m[i]['open'] for i in range(-3, 0))):
             short_reasons.append("SHORT: свічка на 15m не червона")
         else:
@@ -287,7 +286,6 @@ async def analyze_market(symbol):
             has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
             is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
-            # ТВХ на 15 хв: від опору АБО від EMA + 1 ATR
             is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
             is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
             is_valid_tvh_zone = is_near_resistance or is_near_ema_zone
@@ -331,6 +329,7 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
+        
         
 async def count_risk_positions():
     try:
