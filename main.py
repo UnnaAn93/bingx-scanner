@@ -292,11 +292,18 @@ async def analyze_market(symbol):
             # Дозволяємо або нормальне тіло (знизивши поріг до 0.35), або наявність гарної верхньої тіні
             is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
-            # Перевірка зони опору: або класичний максимум, або зона біля EMA50 (тренд)
-            is_near_classic_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-            is_near_ema_resistance = abs(current_price - ema_50_1h) <= (atr_15m * 2.0)
-    
-            is_near_resistance = is_near_classic_resistance or is_near_ema_resistance
+            # Перевірка нахилу годинної EMA вниз
+            is_ema_down_1h = ema_50_1h < ema_50_1h_prev if 'ema_50_1h_prev' in locals() else True
+
+            # 1. Трендовий шорт (відкат до годинної EMA + ATR, якщо EMA дивиться вниз)
+            is_near_ema_resistance = abs(current_price - ema_50_1h) <= (atr_15m * 2.0) and is_ema_down_1h
+
+            # 2. Флетовий шорт (опір на 15 хвилинах, але обов'язково нижче годинної EMA)
+            is_near_classic_resistance = (current_price >= (max_40_high - (atr_15m * 2.0))) and (current_price < ema_50_1h)
+
+            # Загальна зона для шорта
+            is_near_resistance = is_near_ema_resistance or is_near_classic_resistance
+
             has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m) or (abs(prev_candle['high'] - ema_50) <= atr_15m)
 
             if not is_near_resistance:
