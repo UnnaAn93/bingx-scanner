@@ -136,6 +136,32 @@ async def get_klines(symbol, interval, limit=40):
     return []
     
 # --- АНАЛІЗ РИНКУ ---
+async def get_exchange_positions():
+    try:
+        res = await bingx_request('GET', '/openApi/swap/v2/user/positions')
+        if isinstance(res, dict) and res.get('code') == 0:
+            return res.get('data', [])
+        if isinstance(res, list):
+            return res
+        return []
+    except Exception as e:
+        print(f"[LOG ERROR] Get positions error: {e}", flush=True)
+        return []
+
+
+def calculate_atr(klines, period=14):
+    if len(klines) < period + 1:
+        return 0.0
+    trs = []
+    for i in range(1, len(klines)):
+        high = float(klines[i]['high'])
+        low = float(klines[i]['low'])
+        prev_close = float(klines[i - 1]['close'])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    return sum(trs[-period:]) / period
+
+
 async def analyze_market(symbol):
     try:
         raw_15m = await get_kines(symbol, "15m", 100)
@@ -150,7 +176,7 @@ async def analyze_market(symbol):
         current_price = klines_15m[-1]['close']
         ema_50 = sum([x['close'] for x in klines_15m[-50:]]) / 50 if len(klines_15m) >= 50 else current_price
         
-        # Рахуємо нахил EMA 50 на 1h за 5 закритими свічками
+        # Нахил EMA 50 на 1h за 5 закритими свічками
         ema_50_1h_current = sum([x['close'] for x in klines_1h[-50:]]) / 50 if len(klines_1h) >= 50 else klines_1h[-1]['close']
         ema_50_1h_prev = sum([x['close'] for x in klines_1h[-55:-5]]) / 50 if len(klines_1h) >= 55 else ema_50_1h_current
 
@@ -190,7 +216,7 @@ async def analyze_market(symbol):
         is_strong_support_level = (support_touches_1h >= 2)
         is_strong_resistance_level = (resistance_touches_1h >= 2)
 
-        # --- ГОЛОВНИЙ ФІЛЬТР НАХИЛУ EMA НА 1H ---
+        # --- ФІЛЬТР НАХИЛУ EMA НА 1H ЗА 5 СВІЧКАМИ ---
         is_ema_sloping_up = ema_50_1h_current >= ema_50_1h_prev
 
         if is_ema_sloping_up:
@@ -301,7 +327,7 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
-                
+        
         
 async def count_risk_positions():
     try:
