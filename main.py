@@ -211,24 +211,23 @@ async def analyze_market(symbol):
             b_ratio = (b_size / c_range) if c_range > 0 else 0.0
             is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
-            # Фільтр падіння: перевіряємо, чи останні свічки не летять стрімко вниз (падаючий ніж)
-            recent_is_falling = (last_candle['low'] < prev_candle['low']) and (prev_candle['low'] < klines_15m[-3]['low'])
+            # Визначаємо чи це тренд (ціна вище EMA50 і є нахил вгору) чи флет
+            is_uptrend = current_price > ema_50 and (ema_50 > klines_15m[-10]['close'])
 
-            # 1. Перевіряємо, чи є чітка підтримка на 15 хв (ігноруємо, якщо йде різке падіння)
+            # 1. Перевірки для ФЛЕТУ (відштовхування від підтримки)
             similar_lows_15m = sum(1 for x in klines_15m[-10:] if abs(x['low'] - min_40_low) <= (atr_15m * 0.5))
             has_clear_15m_support = (similar_lows_15m >= 2) and not recent_is_falling
-
-            # 2. Перевіряємо годинну підтримку (ігноруємо під час імпульсного падіння)
             is_near_1h_support = (current_price <= (min_1h_low + (atr_15m * 2.0))) and not recent_is_falling
-
-            # 3. Перевіряємо подвійне торкання на 15 хв (тільки без стрімкого падіння)
             is_double_touch_15m = (abs(current_price - min_40_low) <= (atr_15m * 1.5)) and (similar_lows_15m >= 1) and not recent_is_falling
-
-            # Визначаємо підсумкову перевірку зони підтримки
             is_near_classic_support = has_clear_15m_support or is_near_1h_support or is_double_touch_15m
+
+            # 2. Перевірки для ТРЕНДУ (відкат до EMA50)
             is_near_ema_support = abs(current_price - ema_50) <= (atr_15m * 2.0)
 
-            # 4. Захисний фільтр від пробою (вимагаємо або сильну зелену свічку, або довгу нижню тень/молот з об'ємом)
+            # Загальна зона входу залежить від режиму (Тренд -> EMA50, Флет -> Підтримка)
+            is_valid_zone = is_near_ema_support if is_uptrend else is_near_classic_support
+
+            # 3. Захисний фільтр свічки відскоку
             is_green_candle = last_candle['close'] > last_candle['open']
             body_size_val = abs(last_candle['close'] - last_candle['open'])
             candle_range_val = last_candle['high'] - last_candle['low']
@@ -237,18 +236,15 @@ async def analyze_market(symbol):
             lower_wick_val = min(last_candle['open'], last_candle['close']) - last_candle['low']
             has_long_pinbar = candle_range_val > 0 and (lower_wick_val / candle_range_val) >= 0.35
 
-            # Сигнал відскоку спрацьовує тільки якщо є підтвердження свічки (зелене тіло або пін-бар) біля рівня
-            has_bounce_signal = is_near_classic_support and ((is_green_candle and is_strong_body) or has_long_pinbar)
+            has_bounce_signal = is_valid_zone and ((is_green_candle and is_strong_body) or has_long_pinbar)
             
-             # Жорсткий фільтр: забороняємо Лонг, якщо поточна свічка червона (ціна закриття нижче відкриття)
-            is_current_green = last_candle['close'] > last_candle['open']
-
-            if not is_near_classic_support:
-                long_reasons.append("LONG: далеко від підтримки та EMA50")
-            elif not is_current_green:
-                long_reasons.append("LONG: поточна свічка червона (падає)")
+            if not is_valid_zone:
+                zone_desc = "далеко від EMA50 (тренд)" if is_uptrend else "далеко від підтримки (флет)"
+                long_reasons.append(f"LONG: {zone_desc}")
             elif not has_bounce_signal:
                 long_reasons.append("LONG: немає сигналу відскоку")
+            elif not is_valid_body:
+                long_reasons.append("LONG: мале тіло свічки")
             else:
                 signal = "LONG"
                 # Динамічний стоп-лос для лонгу
