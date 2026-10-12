@@ -212,6 +212,8 @@ async def analyze_market(symbol):
             is_valid_body = (b_ratio >= 0.25) or has_long_lower_wick
             
             # Визначаємо чи це тренд (ціна вище EMA50 і є нахил вгору) чи флет
+            is_near_classic_support = False
+            is_near_ema_support = False
             is_uptrend = current_price > ema_50 and (ema_50 > klines_15m[-10]['close'])
 
             # Спочатку визначаємо фільтр падіння, щоб він існував до перевірок нижче
