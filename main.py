@@ -10,6 +10,7 @@ import threading
 import traceback
 import urllib.parse
 import math
+import websockets
 
 STATE_FILE = "trades_state.json"
 
