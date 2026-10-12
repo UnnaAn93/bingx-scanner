@@ -489,6 +489,7 @@ async def monitor_trades_loop():
             
             for symbol, data in list(active_trade_monitors.items()):
                 if symbol not in active_symbols:
+                    current_pos_data = None
                     if data.get('tp3_hit', False):
                         await send_telegram(f"🎯 **Всі тейки взяті!** Позиція по {symbol} успішно закрита по максимальному профіту!")
                         print(f"[INFO] Позиція {symbol} закрита по TP3 (всі цілі досягнуто).", flush=True)
