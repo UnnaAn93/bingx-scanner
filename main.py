@@ -554,9 +554,10 @@ async def monitor_trades_loop():
                 ticker_data = ticker_res.get('data', {})
 
                 current_price = float(ticker_data.get('lastPrice', 0) or ticker_data.get('price', 0))
-                if current_price == 0:
+                if current_price <= 0:
+                    print(f"[WARN] {symbol}: Отримано невалідну нульову ціну з біржі!", flush=True)
                     continue
-
+                    
                 entry_price = float(data.get('entry', 0))
                 if entry_price == 0 and current_pos_data:
                     entry_price = float(
@@ -581,6 +582,10 @@ async def monitor_trades_loop():
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or (side_val == "SHORT" and current_price <= tp1_price)
                     if hit_tp1 and entry_price > 0:
+                        debug_msg = f"🔍 [DEBUG] {symbol} спрацював TP1!\nЦіна: {current_price}\nЦіль TP1: {tp1_price}"
+                        print(debug_msg, flush=True)
+                        await send_telegram(debug_msg)  # Надішле точні цифри в Telegram для перевірки
+                
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         save_trades_state(active_trade_monitors)
