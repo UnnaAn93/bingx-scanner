@@ -149,6 +149,19 @@ async def get_exchange_positions():
         return []
 
 
+def calculate_atr(klines, period=14):
+    if len(klines) < period + 1:
+        return 0.0
+    trs = []
+    for i in range(1, len(klines)):
+        high = float(klines[i]['high'])
+        low = float(klines[i]['low'])
+        prev_close = float(klines[i-1]['close'])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    return sum(trs[-period:]) / period
+
+
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -311,6 +324,7 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
+        
         
     
 async def count_risk_positions():
