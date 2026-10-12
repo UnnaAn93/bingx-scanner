@@ -465,17 +465,33 @@ async def open_position(setup):
         raise e
 
 async def start_websocket_monitor():
-    #"""Пункт 9 ТЗ: Отримання сповіщень через WebSocket про спрацювання тейків"""
-    uri = "wss://open-api.bingx.com/swap-market"
+    """Пункт 9 ТЗ: Отримання сповіщень через WebSocket про спрацювання тейків"""
     while True:
         try:
-            async with websockets.connect(uri) as ws:
-                print("[WS] Підключено до WebSocket BingX для моніторингу тейків")
+            ts = str(int(time.time() * 1000)) + server_time_offset
+            params = {'timestamp': ts}
+            query_str = urllib.parse.urlencode(sorted(params.items()))
+            sig = get_sign(API_SECRET, query_str)
+            url = f"{BINGX_BASE_URL}/openApi/swap/v2/user/listenKey?{query_str}&signature={sig}"
+            headers = {"X-BX-APIKEY": API_KEY}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as resp:
+                    data = await resp.json()
+                    listen_key = data.get("data", {}).get("listenKey") if data.get("code") == 0 else None
+
+            if not listen_key:
+                await asyncio.sleep(10)
+                continue
+
+            ws_url = f"wss://open-api-ws.bingx.com/market?listenKey={listen_key}"
+            async with websockets.connect(ws_url) as ws:
+                print("[WS] Підключено до WebSocket BingX для моніторингу тейків", flush=True)
                 async for message in ws:
                     data = json.loads(message)
-                    # Оновлення позицій при отриманні сповіщення від біржі
+                    # Реакція на події ордерів
         except Exception as e:
-            print(f"[WS Помилка] Обрив з'єднання: {e}. Перепідключення через 5 сек...")
+            print(f"[WS Помилка] Обрив з'єднання: {e}. Перепідключення через 5 сек...", flush=True)
             await asyncio.sleep(5)
             
 # --- МОНІТОРИНГ УГОД ---
