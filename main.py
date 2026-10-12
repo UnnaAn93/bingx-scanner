@@ -604,11 +604,12 @@ async def monitor_trades_loop():
                 data['side'] = side_val
 
                 # 2. Фіксуємо TP1 один раз і зберігаємо в пам'ять
-                if 'tp1' in data:
+                if 'tp1' in data and float(data['tp1']) > 0:
                     tp1_price = float(data['tp1'])
                 else:
-                    tp1_price = entry_price + (atr_val * 2.0) if side_val == "LONG" else entry_price - (atr_val * 2.0)
-                    data['tp1'] = tp1_price 
+                    safe_atr = atr_val if atr_val > 0 else (entry_price * 0.01)
+                    tp1_price = entry_price + (safe_atr * 2.0) if side_val == "LONG" else entry_price - (safe_atr * 2.0)
+                    data['tp1'] = tp1_price
 
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or \
