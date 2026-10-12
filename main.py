@@ -253,7 +253,12 @@ async def analyze_market(symbol):
                             }, is_volume_spike, "OK"
 
         # --- Перевірка SHORT ---
-        if (last_candle['close'] >= last_candle['open']) or any(klines_15m[i]['close'] >= klines_15m[i]['open'] and klines_15m[i-1]['close'] >= klines_15m[i-1]['open'] for i in range(-4, 0)) or (current_price > ema_50):
+        # ЗАБОРОНА: якщо ціна занадто близько до підтримки (внизу діапазону), шортити не можна
+        is_near_support_zone = current_price <= (min_40_low + (atr_15m * 2.0))
+
+        if is_near_support_zone:
+            short_reasons.append("SHORT: ціна внизу біля підтримки, продаж заборонено")
+        elif (last_candle['close'] >= last_candle['open']) or any(klines_15m[i]['close'] >= klines_15m[i]['open'] and klines_15m[i-1]['close'] >= klines_15m[i-1]['open'] for i in range(-4, 0)) or (current_price > ema_50):
             short_reasons.append("свічка не червона, є 2 зелені поспіль або ціна вище EMA")
         else:
             body_last = last_candle['close'] - last_candle['open']
