@@ -500,60 +500,36 @@ async def monitor_trades_loop():
                     save_trades_state(active_trade_monitors)
                     continue
 
-                # --- Перевірка зустрічного об'єму для дострокової фіксації плюсу ---[span_6](start_span)[span_6](end_span)
-                try:
-                    current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
-                    if current_pos_data:
-                        unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0) or 0)
-                        pos_side = current_pos_data.get('positionSide', data.get('side'))
+                    # --- Перевірка зустрічного об'єму для сповіщення в Telegram ---
+                    try:
+                        current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
+                        if current_pos_data:
+                            unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0) or 0)
+                            pos_side = current_pos_data.get('positionSide', data.get('side'))
 
-                        klines_check = await get_klines(symbol, "15m", 25)
-                        if len(klines_check) >= 20:
-                            last_c = klines_check[-2]
-                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20  # Середній об'єм по 20 попередніх закритих свічках
-                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.0  # Зустрічний об'єм > 2x
+                            klines_check = await get_klines(symbol, "15m", 25)
+                            if len(klines_check) >= 20:
+                                last_c = klines_check[-2]
+                                avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20  
+                                is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.5  # Змінено на 2.5x
 
-                            if unreal_pnl > 0 and is_opp_spike:
-                                last_close = float(last_c.get('close', 0))
-                                last_open = float(last_c.get('open', 0))
-                                last_high = float(last_c.get('high', 0))
-                                last_low = float(last_c.get('low', 0))
-    
-                                # Розраховуємо пропорцію тіла свічки до її загальної висоти (Зусилля проти Результату)
-                                candle_range = last_high - last_low
-                                body_size = abs(last_close - last_open)
-                                body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
+                                if unreal_pnl > 0 and is_opp_spike:
+                                    last_close = float(last_c.get('close', 0))
+                                    last_open = float(last_c.get('open', 0))
+                                    last_high = float(last_c.get('high', 0))
+                                    last_low = float(last_c.get('low', 0))
 
-                                # Вимагаємо, щоб тіло свічки було не менше 50% від усього діапазону (відсікаємо довгі тіні)
-                                is_valid_result = body_ratio >= 0.50
+                                    candle_range = last_high - last_low
+                                    body_size = abs(last_close - last_open)
+                                    body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
+                                    is_valid_result = body_ratio >= 0.50
 
-                                if pos_side == "SHORT" and last_close > last_open and is_valid_result:
-                                    close_payload = {
-                                        "symbol": symbol,
-                                        "side": "BUY",
-                                        "positionSide": "SHORT",
-                                        "type": "MARKET",
-                                        "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
-                                    }
-                                    await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
-                                    await send_telegram(f"🛡 Рівень захисту! Закрито SHORT по {symbol} в плюс (PnL: {unreal_pnl})")
-                                    del active_trade_monitors[symbol]
-                                    continue
-                                elif pos_side == "LONG" and last_close < last_open and is_valid_result:
-                                    close_payload = {
-                                        "symbol": symbol,
-                                        "side": "SELL",
-                                        "positionSide": "LONG",
-                                        "type": "MARKET",
-                                        "quantity": abs(float(current_pos_data.get('positionAmt', 0)))
-                                    }
-                                    await bingx_request('POST', '/openApi/swap/v2/trade/order', close_payload)
-                                    await send_telegram(f"🛡 Рівень захисту! Закрито LONG по {symbol} в плюс (PnL: {unreal_pnl})")
-                                    del active_trade_monitors[symbol]
-                                    continue
-
-                except Exception as ex:
-                    print(f"Помилка захисту рівня у моніторингу: {ex}", flush=True)
+                                    if pos_side == "SHORT" and last_close > last_open and is_valid_result:
+                                        await send_telegram(f"⚠️ **Увага!** Потужний зустрічний об'єм (>2.5x) проти SHORT по `{symbol}` (PnL: `{unreal_pnl:.4f} USD`)")
+                                    elif pos_side == "LONG" and last_close < last_open and is_valid_result:
+                                        await send_telegram(f"⚠️ **Увага!** Потужний зустрічний об'єм (>2.5x) проти LONG по `{symbol}` (PnL: `{unreal_pnl:.4f} USD`)")
+                    except Exception as ex:
+                        print(f"Помилка перевірки зустрічного об'єму у моніторингу: {ex}", flush=True)
 
                 ticker_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker', {'symbol': symbol})
                 if not ticker_res or not isinstance(ticker_res, dict) or ticker_res.get('code') != 0:
