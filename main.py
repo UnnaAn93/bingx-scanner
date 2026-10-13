@@ -581,10 +581,18 @@ async def monitor_trades_loop():
                 side_val = data.get('side', "LONG" if current_pos_data and current_pos_data.get('positionSide') == "LONG" else "SHORT")
                 data['side'] = side_val
 
-                tp1_price = float(data['tp1']) if 'tp1' in data and float(data['tp1']) > 0 else (entry_price + (atr_val * 2.0) if side_val == "LONG" else entry_price - (atr_val * 2.0))
-                tp2_price = float(data.get('tp2', tp1_price + (atr_val * 2.0)))
-                tp3_price = float(data.get('tp3', tp2_price + (atr_val * 2.0)))
+                if side_val == "SHORT":
+                default_tp1 = entry_price - (atr_val * 1.0)
+                default_tp2 = default_tp1 - (atr_val * 2.0)
+                default_tp3 = default_tp2 - (atr_val * 2.0)
+            else:
+                default_tp1 = entry_price + (atr_val * 1.0)
+                default_tp2 = default_tp1 + (atr_val * 2.0)
+                default_tp3 = default_tp2 + (atr_val * 2.0)
 
+            tp1_price = float(data.get('tp1')) if 'tp1' in data and float(data.get('tp1')) > 0 else default_tp1
+            tp2_price = float(data.get('tp2')) if 'tp2' in data and float(data.get('tp2')) > 0 else default_tp2
+            tp3_price = float(data.get('tp3')) if 'tp3' in data and float(data.get('tp3')) > 0 else default_tp3
                 # 1. Перевірка TP1 та перенесення в БУ
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or (side_val == "SHORT" and current_price <= tp1_price)
