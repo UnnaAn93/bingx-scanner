@@ -232,10 +232,10 @@ async def analyze_market(symbol):
             for idx in range(-lookback, 0):
                 if idx-1 >= -len(k_list):
                     # Бичачий перетин (K перетинає D знизу вгору в зоні перепроданості < 30)
-                    if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and k_list[idx] < 35:
+                    if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and k_list[idx] < 10:
                         crossed_bullish = True
                     # Ведмежий перетин (K перетинає D зверху вниз у зоні перекупленості > 65)
-                    if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and k_list[idx] > 65:
+                    if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and k_list[idx] > 90:
                         crossed_bearish = True
             return crossed_bullish, crossed_bearish
 
