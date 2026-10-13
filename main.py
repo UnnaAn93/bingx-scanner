@@ -375,16 +375,17 @@ async def open_position(setup):
     side = setup['signal']
     stop_loss = setup['stop_loss']
     try:
-        total_qty = int(MARGIN_USD * LEVERAGE / setup['entry'])
-        if total_qty < 1:
-            total_qty = 1
-        
-        qty_50 = int(total_qty * 0.5)
-        qty_25_1 = int(total_qty * 0.25)
-        qty_25_2 = total_qty - qty_50 - qty_25_1
-        if qty_50 < 1: qty_50 = 1
-        if qty_25_1 < 1: qty_25_1 = 1
-        if qty_25_2 < 1: qty_25_2 = 1
+        raw_qty = (MARGIN_USD * LEVERAGE) / setup['entry']
+        total_qty = round(raw_qty, 4)
+        if total_qty <= 0:
+            total_qty = 0.001
+
+        qty_50 = round(total_qty * 0.5, 4)
+        qty_25_1 = round(total_qty * 0.25, 4)
+        qty_25_2 = round(total_qty - qty_50 - qty_25_1, 4)
+        if qty_50 <= 0: qty_50 = 0.001
+        if qty_25_1 <= 0: qty_25_1 = 0.001
+        if qty_25_2 <= 0: qty_25_2 = 0.001
 
         order_payload = {
             "symbol": symbol,
