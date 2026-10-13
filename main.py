@@ -410,8 +410,8 @@ async def open_position(setup):
                 # Перераховуємо частини тейків під реальний обсяг біржі
                 qty_50 = round(total_qty * 0.5, 6)
                 qty_25_1 = round(total_qty * 0.25, 6)
-                qty_25_2 = round(total_qty
-
+                qty_25_2 = round(total_qty - qty_50 - qty_25_1, 6)
+                
         sl_side = "SELL" if side == "LONG" else "BUY"
 
         sl_payload = {
