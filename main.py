@@ -512,11 +512,11 @@ async def monitor_trades_loop():
 
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
-                
+
                 if symbol not in active_symbols or not current_pos_data:
                     if data.get('tp3_hit', False):
-                        await send_telegram(f"🚀 **Всі цілі досягнуто (ТР3)!** Позиція по `{symbol}` повністю закрита по максимальному профіту.")
-                        print(f"[INFO] Позиція {symbol} закрита по ТР3.", flush=True)
+                        await send_telegram(f"🎯 **Всі цілі досягнуто (TP3)!** Позиція по `{symbol}` повністю закрита в плюс.")
+                        print(f"[INFO] Позиція {symbol} закрита по TP3.", flush=True)
                     else:
                         await send_telegram(f"🛑 **Стоп по позиції!** Позицію по `{symbol}` закрито за стоп-лоссом.")
                         print(f"[INFO] Позиція {symbol} закрита за стоп-лоссом.", flush=True)
@@ -534,8 +534,8 @@ async def monitor_trades_loop():
                         klines_check = await get_klines(symbol, "15m", 25)
                         if len(klines_check) >= 20:
                             last_c = klines_check[-2]
-                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20  
-                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.5  
+                            avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20
+                            is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.5
 
                             if unreal_pnl > 0 and is_opp_spike:
                                 last_close = float(last_c.get('close', 0))
@@ -549,9 +549,9 @@ async def monitor_trades_loop():
                                 is_valid_result = body_ratio >= 0.50
 
                                 if pos_side == "SHORT" and last_close > last_open and is_valid_result:
-                                    await send_telegram(f"⚠️ **Увага!** Зустрічний об'єм проти SHORT по `{symbol}` (PnL: `{unreal_pnl:.4f} USD`)")
+                                    await send_telegram(f"⚠️ **Увага!** Зустрічний об'єм проти SHORT по `{symbol}` (PnL: {unreal_pnl:.2f} USD)")
                                 elif pos_side == "LONG" and last_close < last_open and is_valid_result:
-                                    await send_telegram(f"⚠️ **Увага!** Зустрічний об'єм проти LONG по `{symbol}` (PnL: `{unreal_pnl:.4f} USD`)")
+                                    await send_telegram(f"⚠️ **Увага!** Зустрічний об'єм проти LONG по `{symbol}` (PnL: {unreal_pnl:.2f} USD)")
                 except Exception as ex:
                     print(f"Помилка перевірки зустрічного об'єму: {ex}", flush=True)
 
@@ -564,7 +564,7 @@ async def monitor_trades_loop():
                 if current_price <= 0:
                     print(f"[WARN] {symbol}: Отримано невалідну нульову ціну з біржі!", flush=True)
                     continue
-                    
+
                 entry_price = float(data.get('entry', 0))
                 if entry_price == 0 and current_pos_data:
                     entry_price = float(
@@ -576,23 +576,25 @@ async def monitor_trades_loop():
                 if entry_price == 0:
                     entry_price = current_price
 
-                data['entry'] = entry_price 
+                data['entry'] = entry_price
                 atr_val = float(data.get('atr', current_price * 0.01))
-                side_val = data.get('side', "LONG" if current_pos_data and current_pos_data.get('positionSide') == "LONG" else "SHORT")
+                side_val = data.get('side', 'LONG' if current_pos_data and current_pos_data.get('positionSide') == 'LONG' else 'SHORT')
                 data['side'] = side_val
 
+                # Напрямковий розрахунок дефолтних цілей
                 if side_val == "SHORT":
-                default_tp1 = entry_price - (atr_val * 1.0)
-                default_tp2 = default_tp1 - (atr_val * 2.0)
-                default_tp3 = default_tp2 - (atr_val * 2.0)
-            else:
-                default_tp1 = entry_price + (atr_val * 1.0)
-                default_tp2 = default_tp1 + (atr_val * 2.0)
-                default_tp3 = default_tp2 + (atr_val * 2.0)
+                    default_tp1 = entry_price - (atr_val * 1.0)
+                    default_tp2 = default_tp1 - (atr_val * 2.0)
+                    default_tp3 = default_tp2 - (atr_val * 2.0)
+                else:
+                    default_tp1 = entry_price + (atr_val * 1.0)
+                    default_tp2 = default_tp1 + (atr_val * 2.0)
+                    default_tp3 = default_tp2 + (atr_val * 2.0)
 
-            tp1_price = float(data.get('tp1')) if 'tp1' in data and float(data.get('tp1')) > 0 else default_tp1
-            tp2_price = float(data.get('tp2')) if 'tp2' in data and float(data.get('tp2')) > 0 else default_tp2
-            tp3_price = float(data.get('tp3')) if 'tp3' in data and float(data.get('tp3')) > 0 else default_tp3
+                tp1_price = float(data.get('tp1')) if 'tp1' in data and float(data.get('tp1')) > 0 else default_tp1
+                tp2_price = float(data.get('tp2')) if 'tp2' in data and float(data.get('tp2')) > 0 else default_tp2
+                tp3_price = float(data.get('tp3')) if 'tp3' in data and float(data.get('tp3')) > 0 else default_tp3
+
                 # 1. Перевірка TP1 та перенесення в БУ
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or (side_val == "SHORT" and current_price <= tp1_price)
@@ -654,6 +656,7 @@ async def monitor_trades_loop():
             await log_and_alert("Помилка в моніторингу угод", str(e))
 
         await asyncio.sleep(60)
+        
 
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
