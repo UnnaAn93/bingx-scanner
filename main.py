@@ -589,10 +589,10 @@ async def monitor_trades_loop():
                 if not data.get('tp1_hit', False):
                     hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or (side_val == "SHORT" and current_price <= tp1_price)
                     if hit_tp1 and entry_price > 0:
-                        debug_msg = f"🔍 [DEBUG] {symbol} спрацював TP1!\nЦіна: {current_price}\nЦіль TP1: {tp1_price}"
+                        debug_msg = f"🎯 [DEBUG] {symbol} спрацював TP1!\nЦіна: {current_price} | Ціль TP1: {tp1_price}"
                         print(debug_msg, flush=True)
-                        await send_telegram(debug_msg)  # Надішле точні цифри в Telegram для перевірки
-                
+                        await send_telegram(debug_msg)
+
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         save_trades_state(active_trade_monitors)
@@ -624,7 +624,7 @@ async def monitor_trades_loop():
                         except Exception as ex:
                             print(f"[ERROR] Помилка перенесення стопа в БУ: {ex}", flush=True)
 
-                        await send_telegram(f"🎯 **ТР1 досягнуто!** Монета: `{symbol}`\n🛡 Стоп-лосс успішно перенесено в безубуток (БУ) на рівень: `{entry_price:.6f}`")
+                        await send_telegram(f"🎯 **TP1 досягнуто!** Монета: `{symbol}`\n🛡️ Стоп-лосс успішно перенесено в безубиток (БУ).")
 
                 # 2. Перевірка TP2
                 if data.get('tp1_hit', False) and not data.get('tp2_hit', False):
@@ -632,7 +632,7 @@ async def monitor_trades_loop():
                     if hit_tp2:
                         data['tp2_hit'] = True
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **ТР2 досягнуто!** Монета: `{symbol}` успішно зафіксувала другу частину прибутку.")
+                        await send_telegram(f"🎯 **TP2 досягнуто!** Монета: `{symbol}`\nЦіна: {current_price} | Ціль TP2: {tp2_price}\nУспішно зафіксовано другу частину прибутку.")
 
                 # 3. Перевірка TP3
                 if data.get('tp2_hit', False) and not data.get('tp3_hit', False):
@@ -640,6 +640,7 @@ async def monitor_trades_loop():
                     if hit_tp3:
                         data['tp3_hit'] = True
                         save_trades_state(active_trade_monitors)
+                        await send_telegram(f"🔥 **TP3 досягнуто!** Монета: `{symbol}`\nЦіна: {current_price} | Ціль TP3: {tp3_price}\nФінальна фіксація прибутку!")
 
         except Exception as e:
             await log_and_alert("Помилка в моніторингу угод", str(e))
