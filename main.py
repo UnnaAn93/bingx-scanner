@@ -160,6 +160,7 @@ def calculate_atr(klines, period=14):
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
     return sum(trs[-period:]) / period
+
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -231,8 +232,8 @@ async def analyze_market(symbol):
             if not (has_long_lower_wick or is_strong_green_body):
                 long_reasons.append("LONG: слабкий відскок")
             else:
-                # Збільшено допустиму відстань до EMA до 2.5 * ATR (замість 1.0)
                 is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
+                is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5) # Додано 2.5 ATR для лонгів
                 
                 if is_near_resistance:
                     long_reasons.append("LONG: ціна вгорі біля опору, покупки заборонено")
@@ -280,7 +281,6 @@ async def analyze_market(symbol):
                     short_reasons.append("SHORT: мало тіло свічки")
                 else:
                     signal = "SHORT"
-                    # Якщо близько до EMA (тепер у діапазоні 2.5 ATR), виставляємо відповідний стоп
                     is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
                     if is_near_ema_zone:
                         stop_loss = ema_50_1h_current + (atr_15m * 0.5)
