@@ -271,7 +271,7 @@ async def analyze_market(symbol):
 
                 upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
                 has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
-                is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
+                is_valid_body = (b_ratio >= 0.25) or has_short_upper_wick
 
                 has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
 
