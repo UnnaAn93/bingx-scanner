@@ -226,12 +226,11 @@ async def analyze_market(symbol):
             body_size = abs(last_candle['close'] - last_candle['open'])
             lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
 
-            # ПЕРЕВІРКУ КОЛЬОРУ ВИДАЛЕНО — перевіряємо лише наявність тіні або тіла
             has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
             is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.40
 
             if not (has_long_lower_wick or is_strong_green_body):
-                long_reasons.append("LONG: слабкий відскок (мала тінь/тіло)")
+                long_reasons.append("LONG: слабкий відскок")
             else:
                 is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
                 is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
@@ -262,12 +261,9 @@ async def analyze_market(symbol):
             long_reasons.append("LONG заборонено: EMA на 1h спрямована вниз")
 
             is_near_support_zone = current_price <= (min_40_low + (atr_15m * 2.0))
-            is_parabolic_pump = current_price > (ema_50 + (atr_15m * 2.5)) or (last_candle['close'] > last_candle['open'] and last_candle['close'] > prev_candle['high'])
 
             if is_near_support_zone:
                 short_reasons.append("SHORT: ціна внизу біля підтримки, продаж заборонено")
-            elif is_parabolic_pump:
-                short_reasons.append("SHORT: ЗАБОРОНА! Ринок росте імпульсно (параболік вгору)")
             else:
                 body_last = last_candle['close'] - last_candle['open']
                 c_range = last_candle['high'] - last_candle['low']
@@ -321,7 +317,6 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
-        
         
 async def count_risk_positions():
     try:
