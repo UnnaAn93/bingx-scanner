@@ -160,7 +160,6 @@ def calculate_atr(klines, period=14):
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
     return sum(trs[-period:]) / period
-
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -219,7 +218,7 @@ async def analyze_market(symbol):
         is_ema_sloping_up = ema_50_1h_current >= ema_50_1h_prev
 
         if is_ema_sloping_up:
-            # EMA СПРЯМОВАНА ВГОРУ: Дозволено ТІЛЬКИ ЛОНГ (навіть якщо ціна під нею)
+            # EMA СПРЯМОВАНА ВГОРУ: Дозволено ТІЛЬКИ ЛОНГ
             short_reasons.append("SHORT заборонено: EMA на 1h спрямована вгору")
             
             c_range = last_candle['high'] - last_candle['low']
@@ -232,12 +231,11 @@ async def analyze_market(symbol):
             if not (has_long_lower_wick or is_strong_green_body):
                 long_reasons.append("LONG: слабкий відскок")
             else:
-                is_near_support = current_price <= (min_40_low + (atr_15m * 2.0))
-                is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
-                is_valid_tvh_zone = is_near_support or is_near_ema_zone
-
-                if not is_valid_tvh_zone:
-                    long_reasons.append("LONG: ціна не біля підтримки і не біля EMA+ATR")
+                # Збільшено допустиму відстань до EMA до 2.5 * ATR (замість 1.0)
+                is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
+                
+                if is_near_resistance:
+                    long_reasons.append("LONG: ціна вгорі біля опору, покупки заборонено")
                 else:
                     stop_loss = min_40_low - (atr_15m * 0.4)
                     tp1 = current_price + (atr_15m * 2.0)
@@ -274,21 +272,17 @@ async def analyze_market(symbol):
                 has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
                 is_valid_body = (b_ratio >= 0.35) or has_short_upper_wick
 
-                is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-                is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 1.0)
-                is_valid_tvh_zone = is_near_resistance or is_near_ema_zone
-
                 has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
 
-                if not is_valid_tvh_zone:
-                    short_reasons.append("SHORT: ціна не біля опору і не біля EMA+ATR")
-                elif not has_drop_signal:
+                if not has_drop_signal:
                     short_reasons.append("SHORT: немає сигналу розвороту")
                 elif not is_valid_body:
                     short_reasons.append("SHORT: мало тіло свічки")
                 else:
                     signal = "SHORT"
-                    if is_near_ema_zone and not is_near_resistance:
+                    # Якщо близько до EMA (тепер у діапазоні 2.5 ATR), виставляємо відповідний стоп
+                    is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
+                    if is_near_ema_zone:
                         stop_loss = ema_50_1h_current + (atr_15m * 0.5)
                         tp1 = current_price - (atr_15m * 2.6)
                     else:
@@ -317,6 +311,7 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
+        
         
 async def count_risk_positions():
     try:
