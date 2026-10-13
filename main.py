@@ -168,24 +168,24 @@ async def analyze_market(symbol):
         if len(raw_15m) < 100 or len(raw_1h) < 100:
             return None, False, "Недостатньо історичних даних"
 
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k.get('volume', 0))} for k in raw_15m]
-        klines_1h = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k.get('volume', 0))} for k in raw_1h]
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
+        klines_1h = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h]
 
         atr_15m = calculate_atr(klines_15m, period=14)
         current_price = klines_15m[-1]['close']
         ema_50 = sum([x['close'] for x in klines_15m[-50:]]) / 50 if len(klines_15m) >= 50 else current_price
-        
+
         # Нахил EMA 50 на 1h за 5 закритими свічками
         ema_50_1h_current = sum([x['close'] for x in klines_1h[-50:]]) / 50 if len(klines_1h) >= 50 else klines_1h[-1]['close']
         ema_50_1h_prev = sum([x['close'] for x in klines_1h[-55:-5]]) / 50 if len(klines_1h) >= 55 else ema_50_1h_current
 
-        min_40_low = min([x['low'] for x in klines_15m])
-        max_40_high = max([x['high'] for x in klines_15m])
-        min_1h_low = min([x['low'] for x in klines_1h])
-        max_1h_high = max([x['high'] for x in klines_1h])
+        min_40_low = min([x['low'] for x in klines_15m[-40:]])
+        max_40_high = max([x['high'] for x in klines_15m[-40:]])
+        min_1h_low = min([x['low'] for x in klines_1h[-40:]])
+        max_1h_high = max([x['high'] for x in klines_1h[-40:]])
 
         if atr_15m == 0:
-            return None, False, "Нульовий ATR"
+            return None, False, "Нульовий АТР"
 
         avg_volume = sum([x['volume'] for x in klines_15m[-20:]]) / 20
         last_candle = klines_15m[-1]
@@ -219,9 +219,9 @@ async def analyze_market(symbol):
         is_ema_sloping_up = ema_50_1h_current >= ema_50_1h_prev
 
         if is_ema_sloping_up:
-            # EMA СПРЯМОВАНА ВГОРУ: Дозволено ТІЛЬКИ ЛОНГ
-            short_reasons.append("SHORT заборонено: EMA на 1h спрямована вгору")
-            
+            # EMA СРЯМОВАНА ВГОРУ: Дозволено ТІЛЬКИ ЛОНГ
+            short_reasons.append("SHORT заборонено: ЕМА на 1h спрямована вгору")
+
             c_range = last_candle['high'] - last_candle['low']
             body_size = abs(last_candle['close'] - last_candle['open'])
             lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
@@ -234,30 +234,35 @@ async def analyze_market(symbol):
             else:
                 is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
                 is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
-                
+
                 if is_near_resistance:
                     long_reasons.append("LONG: ціна вгорі біля опору, покупки заборонено")
                 else:
-                    stop_loss = min_40_low - (atr_15m * 0.4)
-                    
-                    # Динамічний TP1 для лонгів (до опору або по ATR від EMA)
                     if is_near_ema_zone:
-                        tp1 = current_price + (atr_15m * 2.6)
+                        # Стоп за найближчий локальний мінімум (фрактал) мінус ATR * 1.0
+                        local_min = min([x['low'] for x in klines_15m[-5:]])
+                        stop_loss = round(local_min - (atr_15m * 1.0), 4)
+                        
+                        tp1 = round(current_price + (atr_15m * 2.0), 4)
+                        tp2 = round(tp1 + (atr_15m * 2.0), 4)
+                        tp3 = round(tp2 + (atr_15m * 2.0), 4)
                     else:
+                        stop_loss = round(min_40_low - (atr_15m * 0.5), 4)
+                        
                         target_resistance = min(max_40_high, current_price + (atr_15m * 4.0))
                         risk = current_price - stop_loss
                         potential_reward = target_resistance - current_price
                         
                         if risk > 0 and (potential_reward / risk) >= 1.3:
-                            tp1 = target_resistance
+                            tp1 = round(target_resistance - (atr_15m * 1.0), 4)
                         else:
-                            tp1 = current_price + (risk * 1.3)
-
-                    tp2 = tp1 + (atr_15m * 2.0)
-                    tp3 = tp2 + (atr_15m * 2.0)
+                            tp1 = round(current_price + (risk * 1.3), 4)
+                            
+                        tp2 = round(tp1 + (atr_15m * 2.0), 4)
+                        tp3 = round(tp2 + (atr_15m * 2.0), 4)
 
                     if not (stop_loss < current_price < tp1 < tp2 < tp3):
-                        long_reasons.append("LONG: невірні цілі")
+                        long_reasons.append("LONG: невірні ціни")
                     else:
                         risk = current_price - stop_loss
                         reward_tp1 = tp1 - current_price
@@ -270,7 +275,7 @@ async def analyze_market(symbol):
                             }, is_volume_spike, "OK"
         else:
             # EMA СПРЯМОВАНА ВНИЗ: Дозволено ТІЛЬКИ ШОРТ
-            long_reasons.append("LONG заборонено: EMA на 1h спрямована вниз")
+            long_reasons.append("LONG заборонено: ЕМА на 1h спрямована вниз")
 
             is_near_support_zone = current_price <= (min_40_low + (atr_15m * 2.0))
 
@@ -286,7 +291,7 @@ async def analyze_market(symbol):
                 has_short_upper_wick = c_range > 0 and (upper_wick / c_range) >= 0.40
                 is_valid_body = (b_ratio >= 0.25) or has_short_upper_wick
 
-                has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - atr_15m)
+                has_drop_signal = (prev_candle['close'] < prev_candle['open']) or (prev_candle['high'] >= max_40_high - (atr_15m * 0.5))
 
                 if not has_drop_signal:
                     short_reasons.append("SHORT: немає сигналу розвороту")
@@ -295,28 +300,32 @@ async def analyze_market(symbol):
                 else:
                     signal = "SHORT"
                     is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
-                    
+
                     if is_near_ema_zone:
-                        stop_loss = ema_50_1h_current + (atr_15m * 0.5)
-                        tp1 = current_price - (atr_15m * 2.6)
-                    else:
-                        stop_loss = max(max_40_high, max_1h_high) + (atr_15m * 0.4)
+                        # Стоп за найближчий локальний максимум (фрактал) плюс ATR * 1.0
+                        local_max = max([x['high'] for x in klines_15m[-5:]])
+                        stop_loss = round(local_max + (atr_15m * 1.0), 4)
                         
-                        # Динамічний TP1 для шортів (до підтримки або по ATR від EMA)
+                        tp1 = round(current_price - (atr_15m * 2.0), 4)
+                        tp2 = round(tp1 - (atr_15m * 2.0), 4)
+                        tp3 = round(tp2 - (atr_15m * 2.0), 4)
+                    else:
+                        stop_loss = round(max_40_high + (atr_15m * 0.5), 4)
+                        
                         target_support = max(min_40_low, current_price - (atr_15m * 4.0))
                         risk = stop_loss - current_price
                         potential_reward = current_price - target_support
                         
                         if risk > 0 and (potential_reward / risk) >= 1.3:
-                            tp1 = target_support
+                            tp1 = round(target_support + (atr_15m * 1.0), 4)
                         else:
-                            tp1 = current_price - (risk * 1.3)
-
-                    tp2 = tp1 - (atr_15m * 2.0)
-                    tp3 = tp2 - (atr_15m * 2.0)
+                            tp1 = round(current_price - (risk * 1.3), 4)
+                            
+                        tp2 = round(tp1 - (atr_15m * 2.0), 4)
+                        tp3 = round(tp2 - (atr_15m * 2.0), 4)
 
                     if not (stop_loss > current_price > tp1 > tp2 > tp3):
-                        short_reasons.append("SHORT: невірні цілі")
+                        short_reasons.append("SHORT: невірні ціни")
                     else:
                         risk = stop_loss - current_price
                         reward_tp1 = current_price - tp1
@@ -332,8 +341,9 @@ async def analyze_market(symbol):
         return None, is_volume_spike, combined_reason
 
     except Exception as e:
-        await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
+        await log_and_alert("Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
+        
         
 async def count_risk_positions():
     try:
