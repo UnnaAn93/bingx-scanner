@@ -262,13 +262,13 @@ async def analyze_market(symbol):
             if is_flat:
                 # Умова для флету: ціна близько до підтримки
                 if current_price <= (min_40_low + (atr_15m * 1.5)):
-                    stop_loss = round(min_40_low - (atr_15m * 1.0), 4)
-                    tp1 = round(max_40_high - (atr_15m * 1.0), 4)
+                    stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
+                    tp1 = round(max_40_high - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
                     reward = tp1 - current_price
                     if risk > 0 and (reward / risk) >= 1.3:
-                        tp2 = round(tp1 + (atr_15m * 2.0), 4)
-                        tp3 = round(tp2 + (atr_15m * 2.0), 4)
+                        tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                        tp3 = round(tp2 + (atr_15m * 2.0), 6)
                         return {
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
@@ -278,11 +278,11 @@ async def analyze_market(symbol):
             else:
                 # Умова для тренду
                 local_min = min([float(x['low']) for x in klines_15m[-5:]])
-                stop_loss = round(local_min - (atr_15m * 0.5), 4)
+                stop_loss = round(local_min - (atr_15m * 0.5), 6)
                 risk = current_price - stop_loss
-                tp1 = round(current_price + risk + (atr_15m * 1.0), 4)
-                tp2 = round(tp1 + (atr_15m * 2.0), 4)
-                tp3 = round(tp2 + (atr_15m * 2.0), 4)
+                tp1 = round(current_price + risk + (atr_15m * 1.0), 6)
+                tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                tp3 = round(tp2 + (atr_15m * 2.0), 6)
                 reward = tp1 - current_price
                 if risk > 0 and (reward / risk) >= 1.3:
                     return {
@@ -299,13 +299,13 @@ async def analyze_market(symbol):
             if is_flat:
                 # Умова для флету: ціна близько до опору
                 if current_price >= (max_40_high - (atr_15m * 1.5)):
-                    stop_loss = round(max_40_high + (atr_15m * 1.0), 4)
-                    tp1 = round(min_40_low + (atr_15m * 1.0), 4)
+                    stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
+                    tp1 = round(min_40_low + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
                     reward = current_price - tp1
                     if risk > 0 and (reward / risk) >= 1.3:
-                        tp2 = round(tp1 - (atr_15m * 2.0), 4)
-                        tp3 = round(tp2 - (atr_15m * 2.0), 4)
+                        tp2 = round(tp1 - (atr_15m * 2.0), 6)
+                        tp3 = round(tp2 - (atr_15m * 2.0), 6)
                         return {
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
@@ -315,11 +315,11 @@ async def analyze_market(symbol):
             else:
                 # Умова для тренду
                 local_max = max([float(x['high']) for x in klines_15m[-5:]])
-                stop_loss = round(local_max + (atr_15m * 0.5), 4)
+                stop_loss = round(local_max + (atr_15m * 0.5), 6)
                 risk = stop_loss - current_price
-                tp1 = round(current_price - risk - (atr_15m * 1.0), 4)
-                tp2 = round(tp1 - (atr_15m * 2.0), 4)
-                tp3 = round(tp2 - (atr_15m * 2.0), 4)
+                tp1 = round(current_price - risk - (atr_15m * 1.0), 6)
+                tp2 = round(tp1 - (atr_15m * 2.0), 6)
+                tp3 = round(tp2 - (atr_15m * 2.0), 6)
                 reward = current_price - tp1
                 if risk > 0 and (reward / risk) >= 1.3:
                     return {
@@ -380,13 +380,13 @@ async def open_position(setup):
     stop_loss = setup['stop_loss']
     try:
         raw_qty = (MARGIN_USD * LEVERAGE) / setup['entry']
-        total_qty = round(raw_qty, 4)
+        total_qty = round(raw_qty, 6)
         if total_qty <= 0:
             total_qty = 0.001
 
-        qty_50 = round(total_qty * 0.5, 4)
-        qty_25_1 = round(total_qty * 0.25, 4)
-        qty_25_2 = round(total_qty - qty_50 - qty_25_1, 4)
+        qty_50 = round(total_qty * 0.5, 6)
+        qty_25_1 = round(total_qty * 0.25, 6)
+        qty_25_2 = round(total_qty - qty_50 - qty_25_1, 6)
         if qty_50 <= 0: qty_50 = 0.001
         if qty_25_1 <= 0: qty_25_1 = 0.001
         if qty_25_2 <= 0: qty_25_2 = 0.001
