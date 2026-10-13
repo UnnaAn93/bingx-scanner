@@ -397,8 +397,20 @@ async def open_position(setup):
 
         res = await bingx_request('POST', '/openApi/swap/v2/trade/order', order_payload)
         if not res or (isinstance(res, dict) and res.get("code") != 0):
-            err_msg = res.get("msg", "Unknown API error") if isinstance(res, dict) else "Connection failed"
+            err_msg = res.get("msg", "Unknown error") if isinstance(res, dict) else "Connection failed"
             raise Exception(f"Помилка маркет ордеру: {err_msg}")
+
+        # Забираємо реальну кількість, яку підтвердила біржа, щоб уникнути конфліктів округлення
+        data_res = res.get("data", {})
+        if isinstance(data_res, dict):
+            order_info = data_res.get("order", data_res)
+            real_qty = float(order_info.get("executedQty", order_info.get("quantity", total_qty)))
+            if real_qty > 0:
+                total_qty = real_qty
+                # Перераховуємо частини тейків під реальний обсяг біржі
+                qty_50 = round(total_qty * 0.5, 6)
+                qty_25_1 = round(total_qty * 0.25, 6)
+                qty_25_2 = round(total_qty
 
         sl_side = "SELL" if side == "LONG" else "BUY"
 
