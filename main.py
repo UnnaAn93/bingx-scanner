@@ -578,7 +578,8 @@ async def monitor_trades_loop():
 
                 data['entry'] = entry_price
                 atr_val = float(data.get('atr', current_price * 0.01))
-                side_val = data.get('side', 'LONG' if current_pos_data and current_pos_data.get('positionSide') == 'LONG' else 'SHORT')
+                pos_side_raw = current_pos_data.get('positionSide') or current_pos_data.get('side') if current_pos_data else None
+                side_val = str(pos_side_raw).upper() if pos_side_raw else data.get('side', 'SHORT')
                 data['side'] = side_val
 
                 # Напрямковий розрахунок дефолтних цілей
