@@ -227,7 +227,7 @@ async def analyze_market(symbol):
             lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
 
             has_long_lower_wick = c_range > 0 and (lower_wick / c_range) >= 0.30
-            is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.40
+            is_strong_green_body = c_range > 0 and (body_size / c_range) >= 0.25
 
             if not (has_long_lower_wick or is_strong_green_body):
                 long_reasons.append("LONG: слабкий відскок")
