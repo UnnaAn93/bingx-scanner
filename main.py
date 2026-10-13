@@ -233,13 +233,26 @@ async def analyze_market(symbol):
                 long_reasons.append("LONG: слабкий відскок")
             else:
                 is_near_resistance = current_price >= (max_40_high - (atr_15m * 2.0))
-                is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5) # Додано 2.5 ATR для лонгів
+                is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
                 
                 if is_near_resistance:
                     long_reasons.append("LONG: ціна вгорі біля опору, покупки заборонено")
                 else:
                     stop_loss = min_40_low - (atr_15m * 0.4)
-                    tp1 = current_price + (atr_15m * 2.0)
+                    
+                    # Динамічний TP1 для лонгів (до опору або по ATR від EMA)
+                    if is_near_ema_zone:
+                        tp1 = current_price + (atr_15m * 2.6)
+                    else:
+                        target_resistance = min(max_40_high, current_price + (atr_15m * 4.0))
+                        risk = current_price - stop_loss
+                        potential_reward = target_resistance - current_price
+                        
+                        if risk > 0 and (potential_reward / risk) >= 1.3:
+                            tp1 = target_resistance
+                        else:
+                            tp1 = current_price + (risk * 1.3)
+
                     tp2 = tp1 + (atr_15m * 2.0)
                     tp3 = tp2 + (atr_15m * 2.0)
 
@@ -282,12 +295,22 @@ async def analyze_market(symbol):
                 else:
                     signal = "SHORT"
                     is_near_ema_zone = abs(current_price - ema_50) <= (atr_15m * 2.5)
+                    
                     if is_near_ema_zone:
                         stop_loss = ema_50_1h_current + (atr_15m * 0.5)
                         tp1 = current_price - (atr_15m * 2.6)
                     else:
                         stop_loss = max(max_40_high, max_1h_high) + (atr_15m * 0.4)
-                        tp1 = current_price - (atr_15m * 2.0)
+                        
+                        # Динамічний TP1 для шортів (до підтримки або по ATR від EMA)
+                        target_support = max(min_40_low, current_price - (atr_15m * 4.0))
+                        risk = stop_loss - current_price
+                        potential_reward = current_price - target_support
+                        
+                        if risk > 0 and (potential_reward / risk) >= 1.3:
+                            tp1 = target_support
+                        else:
+                            tp1 = current_price - (risk * 1.3)
 
                     tp2 = tp1 - (atr_15m * 2.0)
                     tp3 = tp2 - (atr_15m * 2.0)
@@ -311,7 +334,6 @@ async def analyze_market(symbol):
     except Exception as e:
         await log_and_alert(f"Помилка під час аналізу ринку", str(e), symbol)
         return None, False, f"Помилка: {str(e)}"
-        
         
 async def count_risk_positions():
     try:
