@@ -505,17 +505,18 @@ async def monitor_trades_loop():
             positions = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
             
-            # Відновлюємо моніторинг після перезапуску
+            # Відновлюємо моніторинг позицій після перезапуску бота
             for p in positions:
                 if float(p.get('positionAmt', 0)) != 0:
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         entry_p = float(p.get('entryPrice', 0))
+                        current_qty = abs(float(p.get('positionAmt', 0)))
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
                             'stop_loss': entry_p,
-                            'tp1': 0, 'tp2': 0, 'tp3': 0,
+                            'initial_qty': current_qty,
                             'in_breakeven': False,
                             'tp1_hit': False,
                             'tp2_hit': False,
@@ -524,11 +525,12 @@ async def monitor_trades_loop():
                         }
                         print(f"[INFO] Відновлено моніторинг позиції після перезапуску: {sym}", flush=True)
 
+            # Перевіряємо статус активних угод
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
                 
+                # Якщо позиція повністю зникла з біржі (закрито по стопу або всім тейкам)
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
-                    # Якщо позиція зникла з біржі — перевіряємо, чи всі цілі досягнуті, чи це стоп
                     if data.get('tp3_hit', False):
                         await send_telegram(f"🔥 Всі цілі (TP3) досягнуто! Позиція по {symbol} повністю закрита.")
                     else:
@@ -537,42 +539,36 @@ async def monitor_trades_loop():
                     save_trades_state(active_trade_monitors)
                     continue
 
-                # Отримуємо актуальну ціну
-                ticker_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker', {'symbol': symbol})
-                ticker_data = ticker_res.get('data', {}) if isinstance(ticker_res, dict) else {}
-                current_price = float(ticker_data.get('lastPrice', 0) or ticker_data.get('price', 0))
+                current_qty = abs(float(current_pos_data.get('positionAmt', 0)))
                 
-                if current_price <= 0:
+                # Записуємо початковий об'єм, якщо його ще не було в стані
+                if 'initial_qty' not in data:
+                    data['initial_qty'] = current_qty
+                    save_trades_state(active_trade_monitors)
                     continue
 
-                entry_price = float(data.get('entry', 0))
+                initial_qty = data['initial_qty']
                 side_val = str(data.get('side', 'LONG')).upper()
-                atr_val = float(data.get('atr', current_price * 0.01))
 
-                # Розрахунок дефолтних цілей, якщо вони не збереглися
-                if side_val == "SHORT":
-                    def_tp1 = entry_price - (atr_val * 1.0)
-                    def_tp2 = def_tp1 - (atr_val * 2.0)
-                    def_tp3 = def_tp2 - (atr_val * 2.0)
-                else:
-                    def_tp1 = entry_price + (atr_val * 1.0)
-                    def_tp2 = def_tp1 + (atr_val * 2.0)
-                    def_tp3 = def_tp2 + (atr_val * 2.0)
-
-                tp1_price = float(data.get('tp1')) if data.get('tp1') and float(data.get('tp1')) > 0 else def_tp1
-                tp2_price = float(data.get('tp2')) if data.get('tp2') and float(data.get('tp2')) > 0 else def_tp2
-                tp3_price = float(data.get('tp3')) if data.get('tp3') and float(data.get('tp3')) > 0 else def_tp3
-
-                # 1. Перевірка TP1 та перенесення стопу в безубиток (БУ)
-                if not data.get('tp1_hit', False):
-                    hit_tp1 = (side_val == "LONG" and current_price >= tp1_price) or (side_val == "SHORT" and current_price <= tp1_price)
-                    if hit_tp1:
+                # Якщо об'єм позиції на біржі зменшився — біржа виконала тейк-профіт!
+                if current_qty < initial_qty:
+                    ratio = current_qty / initial_qty
+                    
+                    if ratio <= 0.25 and not data.get('tp3_hit', False):
+                        data['tp3_hit'] = True
+                        save_trades_state(active_trade_monitors)
+                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}.")
+                    elif ratio <= 0.50 and not data.get('tp2_hit', False):
+                        data['tp2_hit'] = True
+                        save_trades_state(active_trade_monitors)
+                        await send_telegram(f"🎯 **TP2 досягнуто!** Монета: {symbol}")
+                    elif ratio <= 0.75 and not data.get('tp1_hit', False):
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         save_trades_state(active_trade_monitors)
                         await send_telegram(f"🎯 TP1 досягнуто! Монета: {symbol}\n🛡 Стоп-лосс успішно перенесено в безубиток (БУ).")
 
-                        # Переносимо стоп у безубиток на біржі
+                        # Переносимо стоп у безубиток на самій біржі
                         try:
                             orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
@@ -585,8 +581,8 @@ async def monitor_trades_loop():
                                     if ord_id:
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
 
+                            entry_price = float(data.get('entry', current_pos_data.get('entryPrice', 0)))
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
-                            current_qty = abs(float(current_pos_data.get('positionAmt', 0)))
                             
                             sl_payload = {
                                 "symbol": symbol,
@@ -600,22 +596,6 @@ async def monitor_trades_loop():
                             await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
                         except Exception as ex:
                             print(f"[ERROR] Помилка перенесення стопа в БУ: {ex}", flush=True)
-
-                # 2. Перевірка TP2
-                if data.get('tp1_hit', False) and not data.get('tp2_hit', False):
-                    hit_tp2 = (side_val == "LONG" and current_price >= tp2_price) or (side_val == "SHORT" and current_price <= tp2_price)
-                    if hit_tp2:
-                        data['tp2_hit'] = True
-                        save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **TP2 досягнуто!** Монета: {symbol}")
-
-                # 3. Перевірка TP3
-                if data.get('tp2_hit', False) and not data.get('tp3_hit', False):
-                    hit_tp3 = (side_val == "LONG" and current_price >= tp3_price) or (side_val == "SHORT" and current_price <= tp3_price)
-                    if hit_tp3:
-                        data['tp3_hit'] = True
-                        save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}.")
 
                 # --- Перевірка зустрічного об'єму ---
                 try:
@@ -650,6 +630,7 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угод: {e}", flush=True)
             
         await asyncio.sleep(60)
+        
 
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
