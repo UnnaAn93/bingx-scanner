@@ -178,29 +178,32 @@ async def analyze_market(symbol):
             'volume': float(k['volume'])
         } for k in raw_15m]
 
-        # 1. СПОЧАТКУ ПЕРЕВІРЯЄМО ОБ'ЄМ (повністю мовчки, якщо немає сплеску)
-        avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-21:-1]]) / 20
-        last_candle = klines_15m[-1]
-        is_volume_spike = last_candle['volume'] >= avg_volume * 2.0
+        # 1. АНАЛІЗУЄМО ОСТАННЮ ЗАВЕРШЕНУ (ЗАКРИТУ) СВІЧКУ [-2], 
+        # а поточну [-1] поки пропускаємо, бо вона ще не закрита!
+        closed_candle = klines_15m[-2]
+
+        # Перевірка об'єму по закритій свічці [-2] відносно попередніх 20 закритих
+        avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-22:-2]]) / 20
+        is_volume_spike = closed_candle['volume'] >= avg_volume * 2.0
 
         if not is_volume_spike:
             return None, False, "Немає сплеску об'єму (< 2.0x)"
 
-        # --- ПОЧАТИ ГЛИБОКИЙ АНАЛІЗ (тільки для монет, де є об'єм) ---
-        print(f"🔥 [{symbol}] Знайдено сплеск об'єму! Аналізуємо решту умов...", flush=True)
+        # --- ПОЧАТИ ГЛИБОКИЙ АНАЛІЗ (по закритій свічці) ---
+        print(f"🔥 [{symbol}] Знайдено сплеск об'єму на закритій свічці! Аналізуємо решту умов...", flush=True)
 
-        atr_15m = calculate_atr(klines_15m, period=14)
-        current_price = klines_15m[-1]['close']
-        ema_50 = sum([x['close'] for x in klines_15m[-50:]]) / 50 if len(klines_15m) >= 50 else current_price
+        atr_15m = calculate_atr(klines_15m[:-1], period=14)  # ATR по закритих
+        current_price = closed_candle['close']
+        ema_50 = sum([x['close'] for x in klines_15m[-51:-1]]) / 50 if len(klines_15m) >= 51 else current_price
 
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
 
-        # Розрахунок тіней свічки для Price Action
-        last_close = float(last_candle.get('close', 0))
-        last_open = float(last_candle.get('open', 0))
-        last_high = float(last_candle.get('high', 0))
-        last_low = float(last_candle.get('low', 0))
+        # Розрахунок тіней закритї свічки [-2] для Price Action
+        last_close = float(closed_candle.get('close', 0))
+        last_open = float(closed_candle.get('open', 0))
+        last_high = float(closed_candle.get('high', 0))
+        last_low = float(closed_candle.get('low', 0))
 
         upper_wick = last_high - max(last_open, last_close)
         lower_wick = min(last_open, last_close) - last_low
@@ -208,16 +211,15 @@ async def analyze_market(symbol):
         # 2. Захисний фільтр EMA
         if abs(current_price - ema_50) > (atr_15m * 4.0):
             reason = "Ціна занадто далеко від EMA 50"
-            print(f"❌ [{symbol}] {reason}", flush=True)
             return None, True, reason
 
-        # 3. Визначення фази ринку (Флет чи Тренд)
-        min_40_low = min([x['low'] for x in klines_15m[-40:]])
-        max_40_high = max([x['high'] for x in klines_15m[-40:]])
+        # 3. Визначення фази ринку (Флет чи Тренд) по закритих свічках
+        min_40_low = min([x['low'] for x in klines_15m[-41:-1]])
+        max_40_high = max([x['high'] for x in klines_15m[-41:-1]])
         recent_range = max_40_high - min_40_low
         is_flat = recent_range < (atr_15m * 2.5)
 
-        # 4. Розрахунок KDJ
+        # 4. Розрахунок KDJ виключно по закритих свічках (без [-1])
         def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
             k_list, d_list, j_list = [], [], []
             for i in range(len(klines)):
@@ -242,7 +244,8 @@ async def analyze_market(symbol):
                 was_oversold = any(val < 10 for val in recent_j_window)
                 was_overbought = any(val > 90 for val in recent_j_window)
 
-                for idx in range(lookback_cross, 0):
+                # Перевіряємо перетин на історії закритих свічок
+                for idx in range(-1, -lookback_cross, -1):
                     if idx-1 >= -len(k_list):
                         if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
                             crossed_bullish = True
@@ -251,12 +254,13 @@ async def analyze_market(symbol):
 
             return crossed_bullish, crossed_bearish
 
-        kdj_bull, kdj_bear = calculate_kdj_cross(klines_15m)
+        # Передаємо зріз без поточної незакрити свічки
+        kdj_bull, kdj_bear = calculate_kdj_cross(klines_15m[:-1])
 
         long_reasons = []
         short_reasons = []
 
-        # --- ЛОГІКА ДЛЯ ЛОНГБ ---
+        # --- ЛОГІКА ДЛЯ ЛОНГУ ---
         if kdj_bull:
             if lower_wick > upper_wick:
                 if is_flat:
@@ -275,7 +279,7 @@ async def analyze_market(symbol):
                     else:
                         long_reasons.append("Ціна не біля підтримки (Flat)")
                 else:
-                    local_min = min([float(x['low']) for x in klines_15m[-20:]])
+                    local_min = min([float(x['low']) for x in klines_15m[-21:-1]])
                     stop_loss = round(local_min - (atr_15m * 0.5), 6)
                     risk = current_price - stop_loss
                     tp1 = round(current_price + risk * 1.0, 6)
@@ -290,7 +294,7 @@ async def analyze_market(symbol):
                     else:
                         long_reasons.append("Малий Risk/Reward (Trend Лонг)")
             else:
-                long_reasons.append(f"Слабкий відкуп (Нижня тідь {lower_wick:.4f} <= Верхня {upper_wick:.4f})")
+                long_reasons.append(f"Слабкий відкуп (Нижня тінь {lower_wick:.4f} <= Верхня {upper_wick:.4f})")
         else:
             long_reasons.append("Немає KDJ перетину знизу")
 
@@ -313,7 +317,7 @@ async def analyze_market(symbol):
                     else:
                         short_reasons.append("Ціна не біля опору (Flat)")
                 else:
-                    local_max = max([float(x['high']) for x in klines_15m[-20:]])
+                    local_max = max([float(x['high']) for x in klines_15m[-21:-1]])
                     stop_loss = round(local_max + (atr_15m * 0.5), 6)
                     risk = stop_loss - current_price
                     tp1 = round(current_price - risk * 1.0, 6)
@@ -328,7 +332,7 @@ async def analyze_market(symbol):
                     else:
                         short_reasons.append("Малий Risk/Reward (Trend Шорт)")
             else:
-                short_reasons.append(f"Слабкий тиск зверху (Верхня тідь {upper_wick:.4f} <= Нижня {lower_wick:.4f})")
+                short_reasons.append(f"Слабкий тиск зверху (Верхня тінь {upper_wick:.4f} <= Нижня {lower_wick:.4f})")
         else:
             short_reasons.append("Немає KDJ перетину вгори")
 
@@ -339,6 +343,8 @@ async def analyze_market(symbol):
         print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
         return None, False, str(ex)
         
+
+  
 async def count_risk_positions():
     try:
         positions = await get_exchange_positions()
