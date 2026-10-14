@@ -178,48 +178,34 @@ async def analyze_market(symbol):
             'volume': float(k['volume'])
         } for k in raw_15m]
 
-        # 1. АНАЛІЗУЄМО ОСТАННЮ ЗАВЕРШЕНУ (ЗАКРИТУ) СВІЧКУ [-2], 
-        # а поточну [-1] поки пропускаємо, бо вона ще не закрита!
-        closed_candle = klines_15m[-2]
-
-        # Перевірка об'єму по закритій свічці [-2] відносно попередніх 20 закритих
-        avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-22:-2]]) / 20
-        is_volume_spike = closed_candle['volume'] >= avg_volume * 2.0
+        # 1. Об'єм перевіряємо на поточній (живій) свічці [-1]
+        last_candle = klines_15m[-1]
+        avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-21:-1]]) / 20
+        is_volume_spike = last_candle['volume'] >= avg_volume * 2.0
 
         if not is_volume_spike:
             return None, False, "Немає сплеску об'єму (< 2.0x)"
 
-        # --- ПОЧАТИ ГЛИБОКИЙ АНАЛІЗ (по закритій свічці) ---
-        print(f"🔥 [{symbol}] Знайдено сплеск об'єму на закритій свічці! Аналізуємо решту умов...", flush=True)
-
-        atr_15m = calculate_atr(klines_15m[:-1], period=14)  # ATR по закритих
-        current_price = closed_candle['close']
-        ema_50 = sum([x['close'] for x in klines_15m[-51:-1]]) / 50 if len(klines_15m) >= 51 else current_price
+        # Для решти аналізу беремо закриті свічки (без поточної [-1])
+        closed_candles = klines_15m[:-1]
+        
+        atr_15m = calculate_atr(closed_candles, period=14)
+        current_price = last_candle['close']
+        ema_50 = sum([x['close'] for x in closed_candles[-50:]]) / 50 if len(closed_candles) >= 50 else current_price
 
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
 
-        # Розрахунок тіней закритї свічки [-2] для Price Action
-        last_close = float(closed_candle.get('close', 0))
-        last_open = float(closed_candle.get('open', 0))
-        last_high = float(closed_candle.get('high', 0))
-        last_low = float(closed_candle.get('low', 0))
-
-        upper_wick = last_high - max(last_open, last_close)
-        lower_wick = min(last_open, last_close) - last_low
-
-        # 2. Захисний фільтр EMA
         if abs(current_price - ema_50) > (atr_15m * 4.0):
-            reason = "Ціна занадто далеко від EMA 50"
-            return None, True, reason
+            return None, True, "Ціна занадто далеко від EMA 50"
 
-        # 3. Визначення фази ринку (Флет чи Тренд) по закритих свічках
-        min_40_low = min([x['low'] for x in klines_15m[-41:-1]])
-        max_40_high = max([x['high'] for x in klines_15m[-41:-1]])
+        min_40_low = min([x['low'] for x in closed_candles[-40:]])
+        max_40_high = max([x['high'] for x in closed_candles[-40:]])
         recent_range = max_40_high - min_40_low
         is_flat = recent_range < (atr_15m * 2.5)
 
-        # 4. Розрахунок KDJ виключно по закритих свічках (без [-1])
+        # 2. Функція перетину KDJ по закритих свічках 
+        # (перекупленість/перепроданість — 10 свічок, перетин — 5 свічок)
         def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
             k_list, d_list, j_list = [], [], []
             for i in range(len(klines)):
@@ -240,13 +226,14 @@ async def analyze_market(symbol):
             crossed_bearish = False
 
             if len(k_list) > lookback_j:
+                # Перекупленість / перепроданість шукаємо на 10 свічок назад
                 recent_j_window = j_list[-lookback_j:]
                 was_oversold = any(val < 10 for val in recent_j_window)
                 was_overbought = any(val > 90 for val in recent_j_window)
 
-                # Перевіряємо перетин на історії закритих свічок
-                for idx in range(-1, -lookback_cross, -1):
-                    if idx-1 >= -len(k_list):
+                # Перетин ліній перевіряємо на 5 свічок назад
+                for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
+                    if idx > 0:
                         if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
                             crossed_bullish = True
                         if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and was_overbought:
@@ -254,15 +241,19 @@ async def analyze_market(symbol):
 
             return crossed_bullish, crossed_bearish
 
-        # Передаємо зріз без поточної незакрити свічки
-        kdj_bull, kdj_bear = calculate_kdj_cross(klines_15m[:-1])
+        kdj_bull, kdj_bear = calculate_kdj_cross(closed_candles)
 
         long_reasons = []
         short_reasons = []
 
+        # Перевірка тіней на глибині останніх 4 закритих свічок
+        recent_closed_wicks = closed_candles[-4:]
+        has_valid_long_wick = any(( (c['high'] - max(c['open'], c['close'])) < (min(c['open'], c['close']) - c['low']) ) for c in recent_closed_wicks)
+        has_valid_short_wick = any(( (min(c['open'], c['close']) - c['low']) < (c['high'] - max(c['open'], c['close'])) ) for c in recent_closed_wicks)
+
         # --- ЛОГІКА ДЛЯ ЛОНГУ ---
         if kdj_bull:
-            if lower_wick > upper_wick:
+            if has_valid_long_wick:
                 if is_flat:
                     if current_price <= (min_40_low + (atr_15m * 1.5)):
                         stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
@@ -279,7 +270,7 @@ async def analyze_market(symbol):
                     else:
                         long_reasons.append("Ціна не біля підтримки (Flat)")
                 else:
-                    local_min = min([float(x['low']) for x in klines_15m[-21:-1]])
+                    local_min = min([float(x['low']) for x in closed_candles[-20:]])
                     stop_loss = round(local_min - (atr_15m * 0.5), 6)
                     risk = current_price - stop_loss
                     tp1 = round(current_price + risk * 1.0, 6)
@@ -294,13 +285,13 @@ async def analyze_market(symbol):
                     else:
                         long_reasons.append("Малий Risk/Reward (Trend Лонг)")
             else:
-                long_reasons.append(f"Слабкий відкуп (Нижня тінь {lower_wick:.4f} <= Верхня {upper_wick:.4f})")
+                long_reasons.append("Слабкий відкуп на закритих свічках (немає переважання нижньої тіні)")
         else:
-            long_reasons.append("Немає KDJ перетину знизу")
+            long_reasons.append("Немає KDJ перетину знизу вгору")
 
         # --- ЛОГІКА ДЛЯ ШОРТУ ---
         if kdj_bear:
-            if upper_wick > lower_wick:
+            if has_valid_short_wick:
                 if is_flat:
                     if current_price >= (max_40_high - (atr_15m * 1.5)):
                         stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
@@ -317,7 +308,7 @@ async def analyze_market(symbol):
                     else:
                         short_reasons.append("Ціна не біля опору (Flat)")
                 else:
-                    local_max = max([float(x['high']) for x in klines_15m[-21:-1]])
+                    local_max = max([float(x['high']) for x in closed_candles[-20:]])
                     stop_loss = round(local_max + (atr_15m * 0.5), 6)
                     risk = stop_loss - current_price
                     tp1 = round(current_price - risk * 1.0, 6)
@@ -332,9 +323,9 @@ async def analyze_market(symbol):
                     else:
                         short_reasons.append("Малий Risk/Reward (Trend Шорт)")
             else:
-                short_reasons.append(f"Слабкий тиск зверху (Верхня тінь {upper_wick:.4f} <= Нижня {lower_wick:.4f})")
+                short_reasons.append("Слабкий тиск зверху на закритих свічках (немає переважання верхньої тіні)")
         else:
-            short_reasons.append("Немає KDJ перетину вгори")
+            short_reasons.append("Немає KDJ перетину зверху вниз")
 
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
         return None, True, combined_reason
@@ -342,9 +333,7 @@ async def analyze_market(symbol):
     except Exception as ex:
         print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
         return None, False, str(ex)
-        
-
-  
+                
 async def count_risk_positions():
     try:
         positions = await get_exchange_positions()
