@@ -165,6 +165,7 @@ async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1h = await get_klines(symbol, "1h", 100)
+        
         if len(raw_15m) < 100 or len(raw_1h) < 100:
             return None, False, "Недостатньо історичних даних"
 
@@ -193,63 +194,81 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, False, "Нульовий АТР"
 
-        # 1. Фільтр об'єму (повинен бути >= 2.0x від середнього)
-        avg_volume = sum([x['volume'] for x in klines_15m[-21:-1]]) / 20
+        # 1. Фільтр об'єму (повинен бути >= 2.0х від середнього)
+        avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-21:-1]]) / 20
         last_candle = klines_15m[-1]
         is_volume_spike = last_candle['volume'] >= avg_volume * 2.0
 
         if not is_volume_spike:
+            reason = f"❌ [{symbol}] Відхилено: Немає сплеску об'єму (Поточний: {last_candle['volume']:.2f} < Середній x2: {avg_volume * 2.0:.2f})"
+            print(reason, flush=True)
+            # За бажанням можете розкоментувати наступний рядок, щоб слати в телеграм кожен відсів по об'єму:
+            # await send_telegram(reason)
             return None, False, "Немає сплеску об'єму (< 2.0x)"
+
+        # 1.1 Додатковий фільтр: перевірка тіла свічки (відсікаємо довгі тіні / пін-бари / хибні виноси)
+        last_close = float(last_candle.get('close', 0))
+        last_open = float(last_candle.get('open', 0))
+        last_high = float(last_candle.get('high', 0))
+        last_low = float(last_candle.get('low', 0))
+        
+        candle_range = last_high - last_low
+        body_size = abs(last_close - last_open)
+        body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
+
+        if body_ratio < 0.5:
+            reason = f"⚠️ [{symbol}] Відхилено: Занадто довгі тіні свічки / невизначеність (Тіло: {body_ratio*100:.1f}% від діапазону)"
+            print(reason, flush=True)
+            await send_telegram(reason)
+            return None, False, "Занадто довгі тіні свічки (відкуп/хвіст)"
 
         # 2. Захисний фільтр EMA (щоб не відкривати позицію на імпульсі занадто далеко від EMA)
         if abs(current_price - ema_50) > (atr_15m * 4.0):
+            reason = f"❌ [{symbol}] Відхилено: Ціна занадто далеко від EMA 50"
+            print(reason, flush=True)
             return None, False, "Ціна занадто далеко від EMA (імпульсний виліт)"
 
-        # 3. Визначення фази ринку (Флет чи Тренд) за останні 40 свічок
+        # 3. Визначення фази ринку (Флет чи Тренд за останні 40 свічок)
         min_40_low = min([x['low'] for x in klines_15m[-40:]])
         max_40_high = max([x['high'] for x in klines_15m[-40:]])
         recent_range = max_40_high - min_40_low
 
         is_flat = recent_range < (atr_15m * 2.5)
 
-        # 4. Розрахунок індикатора KDJ та лінії J (J вище 90 / нижче 10 за 10 свічок, перетин за 5 свічок)
+        # 4. Розрахунок індикатора KDJ
         def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
-            k_list = []
-            d_list = []
-            j_list = []
-            
+            k_list, d_list, j_list = [], [], []
             for i in range(len(klines)):
                 sub = klines[:i+1]
                 low_n = min([float(x.get('low', 0)) for x in sub])
                 high_n = max([float(x.get('high', 0)) for x in sub])
-                rsv = ((float(sub[-1].get('close', 0)) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
-                
+                rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
+
                 k = rsv if not k_list else (2/3 * k_list[-1] + 1/3 * rsv)
                 d = k if not d_list else (2/3 * d_list[-1] + 1/3 * k)
-                j = 3 * k - 2 * d  # Швидка лінія J
+                j = 3 * k - 2 * d
                 
                 k_list.append(k)
                 d_list.append(d)
                 j_list.append(j)
-                
+
             crossed_bullish = False
             crossed_bearish = False
-            
+
             if len(k_list) > lookback_j:
                 recent_j_window = j_list[-lookback_j:]
                 was_oversold = any(val < 10 for val in recent_j_window)
                 was_overbought = any(val > 90 for val in recent_j_window)
-                
+
                 for idx in range(-lookback_cross, 0):
                     if idx-1 >= -len(k_list):
-                        # Лонг: перетин знизу вгору та наявність перепроданості J (< 10) за останні 10 свічок
+                        # Лонг: перетин знизу вгору та наявність перепроданості J (< 10)
                         if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
                             crossed_bullish = True
-                        
-                        # Шорт: перетин зверху вниз та наявність перегріву J (> 90) за останні 10 свічок
+                        # Шорт: перетин зверху вниз та наявність перекупленості J (> 90)
                         if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and was_overbought:
                             crossed_bearish = True
-                            
+
             return crossed_bullish, crossed_bearish
 
         kdj_bull, kdj_bear = calculate_kdj_cross(klines_15m)
@@ -260,7 +279,6 @@ async def analyze_market(symbol):
         # --- ЛОГІКА ДЛЯ ЛОНГГУ ---
         if kdj_bull:
             if is_flat:
-                # Умова для флету: ціна близько до підтримки
                 if current_price <= (min_40_low + (atr_15m * 1.5)):
                     stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
                     tp1 = round(max_40_high - (atr_15m * 1.0), 6)
@@ -273,14 +291,15 @@ async def analyze_market(symbol):
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, is_volume_spike, "OK (Flat Long)"
+                    else:
+                        long_reasons.append("Малий Risk/Reward (Flat Лонг)")
                 else:
-                    long_reasons.append("Флет Лонг: ціна не біля підтримки")
+                    long_reasons.append("Ціна не біля підтримки (Flat)")
             else:
-                # Умова для тренду
                 local_min = min([float(x['low']) for x in klines_15m[-5:]])
                 stop_loss = round(local_min - (atr_15m * 0.5), 6)
                 risk = current_price - stop_loss
-                tp1 = round(current_price + risk + (atr_15m * 1.0), 6)
+                tp1 = round(current_price + risk * 1.0, 6)
                 tp2 = round(tp1 + (atr_15m * 2.0), 6)
                 tp3 = round(tp2 + (atr_15m * 2.0), 6)
                 reward = tp1 - current_price
@@ -290,14 +309,13 @@ async def analyze_market(symbol):
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                     }, is_volume_spike, "OK (Trend Long)"
                 else:
-                    long_reasons.append("Тренд Лонг: малий Risk/Reward")
+                    long_reasons.append("Малий Risk/Reward (Trend Лонг)")
         else:
-            long_reasons.append("Немає KDJ перетину внизу")
+            long_reasons.append("Немає KDJ перетину знизу")
 
         # --- ЛОГІКА ДЛЯ ШОРТУ ---
         if kdj_bear:
             if is_flat:
-                # Умова для флету: ціна близько до опору
                 if current_price >= (max_40_high - (atr_15m * 1.5)):
                     stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
                     tp1 = round(min_40_low + (atr_15m * 1.0), 6)
@@ -310,14 +328,15 @@ async def analyze_market(symbol):
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, is_volume_spike, "OK (Flat Short)"
+                    else:
+                        short_reasons.append("Малий Risk/Reward (Flat Шорт)")
                 else:
-                    short_reasons.append("Флет Шорт: ціна не біля опору")
+                    short_reasons.append("Ціна не біля опору (Flat)")
             else:
-                # Умова для тренду
                 local_max = max([float(x['high']) for x in klines_15m[-5:]])
                 stop_loss = round(local_max + (atr_15m * 0.5), 6)
                 risk = stop_loss - current_price
-                tp1 = round(current_price - risk - (atr_15m * 1.0), 6)
+                tp1 = round(current_price - risk * 1.0, 6)
                 tp2 = round(tp1 - (atr_15m * 2.0), 6)
                 tp3 = round(tp2 - (atr_15m * 2.0), 6)
                 reward = current_price - tp1
@@ -327,17 +346,20 @@ async def analyze_market(symbol):
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                     }, is_volume_spike, "OK (Trend Short)"
                 else:
-                    short_reasons.append("Тренд Шорт: малий Risk/Reward")
+                    short_reasons.append("Малий Risk/Reward (Trend Шорт)")
         else:
-            short_reasons.append("Немає KDJ перетину вгорі")
+            short_reasons.append("Немає KDJ перетину вгори")
 
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
+        
+        # Можете також увімкнути відправку загальної причини в телеграм при відбої:
+        await send_telegram(f"ℹ️ [{symbol}] Угода не пройшла фільтри:\n{combined_reason}")
+        
         return None, is_volume_spike, combined_reason
 
-    except Exception as e:
-        print(f"[LOG ERROR] Помилка під час аналізу ринку: {e}", flush=True)
-        return None, False, str(e)
-        
+    except Exception as ex:
+        print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
+        return None, False, str(ex)
         
 async def count_risk_positions():
     try:
@@ -521,7 +543,9 @@ async def monitor_trades_loop():
                             'tp1_hit': False,
                             'tp2_hit': False,
                             'tp3_hit': False,
-                            'side': pos_side
+                            'side': pos_side,
+                            'opp_volume_count': 0,
+                            'last_opp_alert_time': 0
                         }
                         print(f"[INFO] Відновлено моніторинг позиції після перезапуску: {sym}", flush=True)
 
@@ -619,10 +643,24 @@ async def monitor_trades_loop():
 
                             if is_valid_result:
                                 unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0) or 0)
-                                if pos_side == "SHORT" and last_close > last_open:
-                                    await send_telegram(f"⚠️ Увага! Зустрічний об'єм проти SHORT по {symbol} (PnL: {unreal_pnl:.4f} USD)")
-                                elif pos_side == "LONG" and last_close < last_open:
-                                    await send_telegram(f"⚠️ Увага! Зустрічний об'єм проти LONG по {symbol} (PnL: {unreal_pnl:.4f} USD)")
+                                import time
+                                current_time = time.time()
+                                
+                                if 'opp_volume_count' not in data:
+                                    data['opp_volume_count'] = 0
+                                if 'last_opp_alert_time' not in data:
+                                    data['last_opp_alert_time'] = 0
+
+                                # Не частіше ніж раз на 5 хв (300 сек) і максимум 3 рази
+                                if data['opp_volume_count'] < 3 and (current_time - data['last_opp_alert_time'] >= 300):
+                                    data['opp_volume_count'] += 1
+                                    data['last_opp_alert_time'] = current_time
+                                    save_trades_state(active_trade_monitors)
+
+                                    if pos_side == "SHORT" and last_close > last_open:
+                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм проти SHORT по {symbol} (PnL: {unreal_pnl:.4f} USD)")
+                                    elif pos_side == "LONG" and last_close < last_open:
+                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм проти LONG по {symbol} (PnL: {unreal_pnl:.4f} USD)")
                 except Exception as ex:
                     print(f"Помилка перевірки зустрічного об'єму: {ex}", flush=True)
 
@@ -630,7 +668,6 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угод: {e}", flush=True)
             
         await asyncio.sleep(60)
-        
 
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
