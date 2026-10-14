@@ -184,6 +184,8 @@ async def analyze_market(symbol):
         is_volume_spike = last_candle['volume'] >= avg_volume * 2.0
 
         if not is_volume_spike:
+            return None, False, "Немає сплеску об'єму (< 2.0x)"
+        if not is_volume_spike:
             # Тільки лог у консоль, ніякого спаму в Telegram
             print(f"[{symbol}] Пропущено: немає сплеску об'єму (Поточний: {last_candle['volume']:.2f} < x2: {avg_volume * 2.0:.2f})", flush=True)
             return None, False, "Немає сплеску об'єму (< 2.0x)"
