@@ -165,7 +165,7 @@ async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1h = await get_klines(symbol, "1h", 100)
-        
+
         if len(raw_15m) < 100 or len(raw_1h) < 100:
             return None, False, "Недостатньо історичних даних"
 
@@ -178,19 +178,15 @@ async def analyze_market(symbol):
             'volume': float(k['volume'])
         } for k in raw_15m]
 
-        # 1. СПОЧАТКУ ПЕРЕВІРЯЄМО ОБ'ЄМ (без спаму в телеграм)
+        # 1. СПОЧАТКУ ПЕРЕВІРЯЄМО ОБ'ЄМ (повністю мовчки, якщо немає сплеску)
         avg_volume = sum([float(x.get('volume', 0)) for x in klines_15m[-21:-1]]) / 20
         last_candle = klines_15m[-1]
         is_volume_spike = last_candle['volume'] >= avg_volume * 2.0
 
         if not is_volume_spike:
             return None, False, "Немає сплеску об'єму (< 2.0x)"
-        if not is_volume_spike:
-            # Тільки лог у консоль, ніякого спаму в Telegram
-            print(f"[{symbol}] Пропущено: немає сплеску об'єму (Поточний: {last_candle['volume']:.2f} < x2: {avg_volume * 2.0:.2f})", flush=True)
-            return None, False, "Немає сплеску об'єму (< 2.0x)"
 
-        # --- ПОЧАТИ ГЛИБОКИЙ АНАЛІЗ (тільки для монет, де є об'єм!) ---
+        # --- ПОЧАТИ ГЛИБОКИЙ АНАЛІЗ (тільки для монет, де є об'єм) ---
         print(f"🔥 [{symbol}] Знайдено сплеск об'єму! Аналізуємо решту умов...", flush=True)
 
         atr_15m = calculate_atr(klines_15m, period=14)
@@ -205,16 +201,15 @@ async def analyze_market(symbol):
         last_open = float(last_candle.get('open', 0))
         last_high = float(last_candle.get('high', 0))
         last_low = float(last_candle.get('low', 0))
-        
+
         upper_wick = last_high - max(last_open, last_close)
         lower_wick = min(last_open, last_close) - last_low
 
         # 2. Захисний фільтр EMA
         if abs(current_price - ema_50) > (atr_15m * 4.0):
-            reason = f"❌ [{symbol}] (Об'єм є) Відхилено: Ціна занадто далеко від EMA 50"
-            print(reason, flush=True)
-            await send_telegram(reason)
-            return None, True, "Ціна занадто далеко від EMA"
+            reason = "Ціна занадто далеко від EMA 50"
+            print(f"❌ [{symbol}] {reason}", flush=True)
+            return None, True, reason
 
         # 3. Визначення фази ринку (Флет чи Тренд)
         min_40_low = min([x['low'] for x in klines_15m[-40:]])
@@ -232,9 +227,9 @@ async def analyze_market(symbol):
                 rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
 
                 k = rsv if not k_list else (2/3 * k_list[-1] + 1/3 * rsv)
-                d = k if not d_list else (2/3 * d_list[-1] + 1/3 * k)
+                d = rsv if not d_list else (2/3 * d_list[-1] + 1/3 * d)
                 j = 3 * k - 2 * d
-                
+
                 k_list.append(k)
                 d_list.append(d)
                 j_list.append(j)
@@ -247,7 +242,7 @@ async def analyze_market(symbol):
                 was_oversold = any(val < 10 for val in recent_j_window)
                 was_overbought = any(val > 90 for val in recent_j_window)
 
-                for idx in range(-lookback_cross, 0):
+                for idx in range(lookback_cross, 0):
                     if idx-1 >= -len(k_list):
                         if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
                             crossed_bullish = True
@@ -261,24 +256,22 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
-        # --- ЛОГІКА ДЛЯ ЛОНГУ ---
+        # --- ЛОГІКА ДЛЯ ЛОНГБ ---
         if kdj_bull:
             if lower_wick > upper_wick:
                 if is_flat:
                     if current_price <= (min_40_low + (atr_15m * 1.5)):
                         stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
-                        tp1 = round(max_40_high - (atr_15m * 1.0), 6)
+                        tp1 = round(max_40_high + (atr_15m * 1.0), 6)
                         risk = current_price - stop_loss
+                        tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                        tp3 = round(tp2 + (atr_15m * 2.0), 6)
                         reward = tp1 - current_price
                         if risk > 0 and (reward / risk) >= 1.3:
-                            tp2 = round(tp1 + (atr_15m * 2.0), 6)
-                            tp3 = round(tp2 + (atr_15m * 2.0), 6)
                             return {
                                 "symbol": symbol, "signal": "LONG", "entry": current_price,
                                 "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                            }, True, "OK (Flat Long)"
-                        else:
-                            long_reasons.append("Малий Risk/Reward (Flat Лонг)")
+                            }, True, "OK (Flat long)"
                     else:
                         long_reasons.append("Ціна не біля підтримки (Flat)")
                 else:
@@ -293,11 +286,11 @@ async def analyze_market(symbol):
                         return {
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, True, "OK (Trend Long)"
+                        }, True, "OK (Trend long)"
                     else:
                         long_reasons.append("Малий Risk/Reward (Trend Лонг)")
             else:
-                long_reasons.append(f"Слабкий відкуп (Нижня тінь {lower_wick:.4f} <= Верхня {upper_wick:.4f})")
+                long_reasons.append(f"Слабкий відкуп (Нижня тідь {lower_wick:.4f} <= Верхня {upper_wick:.4f})")
         else:
             long_reasons.append("Немає KDJ перетину знизу")
 
@@ -307,18 +300,16 @@ async def analyze_market(symbol):
                 if is_flat:
                     if current_price >= (max_40_high - (atr_15m * 1.5)):
                         stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
-                        tp1 = round(min_40_low + (atr_15m * 1.0), 6)
+                        tp1 = round(min_40_low - (atr_15m * 1.0), 6)
                         risk = stop_loss - current_price
+                        tp2 = round(tp1 - (atr_15m * 2.0), 6)
+                        tp3 = round(tp2 - (atr_15m * 2.0), 6)
                         reward = current_price - tp1
                         if risk > 0 and (reward / risk) >= 1.3:
-                            tp2 = round(tp1 - (atr_15m * 2.0), 6)
-                            tp3 = round(tp2 - (atr_15m * 2.0), 6)
                             return {
                                 "symbol": symbol, "signal": "SHORT", "entry": current_price,
                                 "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                             }, True, "OK (Flat Short)"
-                        else:
-                            short_reasons.append("Малий Risk/Reward (Flat Шорт)")
                     else:
                         short_reasons.append("Ціна не біля опору (Flat)")
                 else:
@@ -337,23 +328,17 @@ async def analyze_market(symbol):
                     else:
                         short_reasons.append("Малий Risk/Reward (Trend Шорт)")
             else:
-                short_reasons.append(f"Слабкий тиск зверху (Верхня тінь {upper_wick:.4f} <= Нижня {lower_wick:.4f})")
+                short_reasons.append(f"Слабкий тиск зверху (Верхня тідь {upper_wick:.4f} <= Нижня {lower_wick:.4f})")
         else:
             short_reasons.append("Немає KDJ перетину вгори")
 
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
-        
-        # Оскільки об'єм БУВ, але інші фільтри не пройшли — надсилаємо звіт у Telegram
-        report_msg = f"ℹ️ [{symbol}] Є сплеск об'єму, але угоду відхилено:\n{combined_reason}"
-        print(report_msg, flush=True)
-        await send_telegram(report_msg)
-        
         return None, True, combined_reason
 
     except Exception as ex:
         print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
         return None, False, str(ex)
-            
+        
 async def count_risk_positions():
     try:
         positions = await get_exchange_positions()
