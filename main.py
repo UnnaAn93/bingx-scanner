@@ -605,7 +605,7 @@ async def monitor_trades_loop():
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
                                 "stopPrice": float(f"{entry_price:.6f}"),
-                                "quantity": current_qty,
+                                "quantity": data['initial_qty'],
                                 "workingType": "MARK_PRICE"  # Захист від шпильок за маркуванням
                             }
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
