@@ -720,7 +720,7 @@ async def main_scanner():
 
     while True:
         try:
-            print("🔍 Початок нового циклу сканування ринку...", flush=True)
+            print("🔄 Початок нового циклу сканування ринку...", flush=True)
 
             risk_pos_count = await count_risk_positions()
             if risk_pos_count >= MAX_RISK_POSITIONS:
@@ -754,12 +754,12 @@ async def main_scanner():
             scanned_count = 0
             volume_spikes_count = 0
             signals_found = 0
-            skipped_details = []
+            skipped_reasons = {}
 
             for symbol in symbols:
                 if symbol in active_symbols or is_blacklisted(symbol):
                     continue
-            
+
                 vol_24h = ticker_volumes.get(symbol, 0)
                 if vol_24h > 0 and not (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
                     continue
@@ -773,13 +773,15 @@ async def main_scanner():
                     if isinstance(res, tuple) and len(res) == 3:
                         setup, has_spike, reason = res
                     else:
-                        setup, has_spike = res
+                        setup, has_spike = res, False
                         reason = "Невідома причина"
 
                     if has_spike:
                         volume_spikes_count += 1
                         if not setup:
-                            skipped_details.append(f"• {symbol}: {reason}")
+                            if reason not in skipped_reasons:
+                                skipped_reasons[reason] = []
+                            skipped_reasons[reason].append(symbol)
 
                     if setup:
                         signals_found += 1
@@ -789,8 +791,11 @@ async def main_scanner():
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
-            if skipped_details:
-                report_msg = "🔍 **Звіт сканування (Відсіяні монети):**\n\n" + "\n".join(skipped_details[:20])
+            if skipped_reasons:
+                report_msg = "🔍 **Звіт сканування (Відсіяні монети):**\n\n"
+                for reason_text, syms in skipped_reasons.items():
+                    symbols_str = ", ".join([f"`{s}`" for s in syms])
+                    report_msg += f"• **{reason_text}**:\n  {symbols_str}\n\n"
                 await send_telegram(report_msg)
 
         except Exception as e:
@@ -803,3 +808,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
+        
