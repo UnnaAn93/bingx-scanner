@@ -696,6 +696,19 @@ async def self_ping_loop():
                 except Exception as e:
                     print(f"[LOG WARN] Самопінг не вдався: {e}", flush=True)
 
+async def count_risk_positions():
+    """Отримує відкриті позиції з біржі та рахує їх кількість"""
+    try:
+        open_pos = await get_exchange_positions()
+        if isinstance(open_pos, list):
+            active_symbols = [p for p in open_pos if float(p.get('positionAmt', 0)) != 0]
+            return len(active_symbols)
+        return 0
+    except Exception as e:
+        print(f"[LOG ERROR] Помилка підрахунку позицій: {e}", flush=True)
+        return 0
+        
+
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
     asyncio.create_task(monitor_trades_loop())
