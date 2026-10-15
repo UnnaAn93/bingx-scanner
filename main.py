@@ -240,10 +240,15 @@ async def analyze_market(symbol):
 
                 for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
                     if idx > 0:
-                        if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
+                        # Перевіряємо обидва типи перетинів на поточному кроці циклу
+                        is_bull = (k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold)
+                        is_bear = (k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and was_overbought)
+            
+                        # Якщо на цьому кроці знайдено хоч один перетин — зупиняємось, це і є найсвіжіший
+                        if is_bull:
                             crossed_bullish = True
                             break
-                        if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and was_overbought:
+                        if is_bear:
                             crossed_bearish = True
                             break
 
