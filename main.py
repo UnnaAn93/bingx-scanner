@@ -268,9 +268,7 @@ async def analyze_market(symbol):
         if kdj_bull:
             if has_valid_long_wick:
                 if is_1m_bullish_turn:
-                    # Режим контр-тренду (ціна далеко від EMA) або тренду (близько до EMA)
                     if is_counter_trend:
-                        # Логіка для контр-тренду (очікуємо відскок до середньої)
                         local_min = min([float(x['low']) for x in closed_candles[-20:]])
                         stop_loss = round(local_min - (atr_15m * 0.5), 6)
                         risk = current_price - stop_loss
@@ -283,8 +281,9 @@ async def analyze_market(symbol):
                                 "symbol": symbol, "signal": "LONG", "entry": current_price,
                                 "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                             }, True, "OK (Counter-Trend Long)"
+                        else:
+                            long_reasons.append("Малий Risk/Reward (Counter-Trend Лонг)")
                     elif is_trend_mode:
-                        # Логіка за трендом (якщо близько до EMA)
                         if is_flat:
                             if current_price <= (min_40_low + (atr_15m * 1.5)):
                                 stop_loss = round(min_40_low - (atr_15m * 0.5), 6)
@@ -298,6 +297,8 @@ async def analyze_market(symbol):
                                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                                     }, True, "OK (Trend Flat Long)"
+                            else:
+                                long_reasons.append("Ціна не біля підтримки (Flat)")
                         else:
                             local_min = min([float(x['low']) for x in closed_candles[-20:]])
                             stop_loss = round(local_min - (atr_15m * 0.5), 6)
@@ -311,6 +312,8 @@ async def analyze_market(symbol):
                                     "symbol": symbol, "signal": "LONG", "entry": current_price,
                                     "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                                 }, True, "OK (Trend Long)"
+                            else:
+                                long_reasons.append("Малий Risk/Reward (Trend Лонг)")
                 else:
                     long_reasons.append("Очікування розвороту EMA 1м вгору")
             else:
@@ -335,6 +338,8 @@ async def analyze_market(symbol):
                                 "symbol": symbol, "signal": "SHORT", "entry": current_price,
                                 "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                             }, True, "OK (Counter-Trend Short)"
+                        else:
+                            short_reasons.append("Малий Risk/Reward (Counter-Trend Шорт)")
                     elif is_trend_mode:
                         if is_flat:
                             if current_price >= (max_40_high - (atr_15m * 1.5)):
@@ -349,6 +354,8 @@ async def analyze_market(symbol):
                                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                                     }, True, "OK (Trend Flat Short)"
+                            else:
+                                short_reasons.append("Ціна не біля опору (Flat)")
                         else:
                             local_max = max([float(x['high']) for x in closed_candles[-20:]])
                             stop_loss = round(local_max + (atr_15m * 0.5), 6)
@@ -359,9 +366,11 @@ async def analyze_market(symbol):
                             reward = current_price - tp1
                             if risk > 0 and (reward / risk) >= 1.3:
                                 return {
-                                "symbol": symbol, "signal": "SHORT", "entry": current_price,
-                                "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                            }, True, "OK (Trend Short)"
+                                    "symbol": symbol, "signal": "SHORT", "entry": current_price,
+                                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                                }, True, "OK (Trend Short)"
+                            else:
+                                short_reasons.append("Малий Risk/Reward (Trend Шорт)")
                 else:
                     short_reasons.append("Очікування розвороту EMA 1м вниз")
             else:
@@ -375,40 +384,7 @@ async def analyze_market(symbol):
     except Exception as ex:
         print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
         return None, False, str(ex)
-            
-async def count_risk_positions():
-    try:
-        positions = await get_exchange_positions()
-        total_open = 0
-        risk_count = 0
-        for p in positions:
-            if float(p.get('positionAmt', 0)) != 0:
-                total_open += 1
-                symbol = p.get('symbol')
-                if symbol not in active_trade_monitors:
-                    pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
-                    entry_p = float(p.get('entryPrice', 0))
-                    active_trade_monitors[symbol] = {
-                        'entry': entry_p,
-                        'stop_loss': entry_p,
-                        'tp1': entry_p,
-                        'in_breakeven': False,
-                        'tp1_hit': False,
-                        'tp2_hit': False,
-                        'tp3_hit': False,
-                        'side': pos_side
-                    }
-                    risk_count += 1
-                else:
-                    monitor_data = active_trade_monitors[symbol]
-                    is_safe = monitor_data.get('in_breakeven', False) or monitor_data.get('tp1_hit', False)
-                    if not is_safe:
-                        risk_count += 1
-        print(f"[LOG STATUS] Всього відкритих позицій на біржі: {total_open} | Ризикових: {risk_count}", flush=True)
-        return risk_count
-    except Exception as e:
-        await log_and_alert("Помилка підрахунку ризикових позицій", str(e))
-        return MAX_RISK_POSITIONS
+        
 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
