@@ -258,11 +258,11 @@ async def analyze_market(symbol):
         has_valid_short_wick = any(( (min(c['open'], c['close']) - c['low']) < (c['high'] - max(c['open'], c['close'])) ) for c in recent_closed_wicks)
 
         # 3. Фільтр мікро-розвороту EMA на 1хв (ТВХ)
-        ema_1m_prev = sum([x['close'] for x in klines_1m[-10:-1]]) / 9
-        ema_1m_curr = sum([x['close'] for x in klines_1m[-9:]]) / 9
-        
-        is_1m_bullish_turn = ema_1m_curr > ema_1m_prev
-        is_1m_bearish_turn = ema_1m_curr < ema_1m_prev
+        ema_1m_current = sum(x['close'] for x in klines_1m[-10:]) / 10
+
+        is_1m_bullish_turn = klines_1m[-1]['close'] > ema_1m_current
+        is_1m_bearish_turn = klines_1m[-1]['close'] < ema_1m_current
+
 
         # --- ЛОГІКА ДЛЯ ЛОНГУ ---
         if kdj_bull:
