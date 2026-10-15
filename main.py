@@ -569,19 +569,19 @@ async def monitor_trades_loop():
                 if current_qty < initial_qty:
                     ratio = current_qty / initial_qty
 
-                    if ratio <= 0.25 and not data.get('tp3_hit', False):
+                    if ratio <= 0.05 and not data.get('tp3_hit', False):
                         data['tp3_hit'] = True
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}.")
-                    elif ratio <= 0.50 and not data.get('tp2_hit', False):
+                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
+                    elif ratio <= 0.30 and not data.get('tp2_hit', False):
                         data['tp2_hit'] = True
                         save_trades_state(active_trade_monitors)
                         await send_telegram(f"🎯 **TP2 досягнуто!** Монета: {symbol}")
-                    elif ratio <= 0.75 and not data.get('tp1_hit', False):
+                    elif ratio <= 0.55 and not data.get('tp1_hit', False):
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **TP1 досягнуто!** Монета: {symbol}\n🛡 Стоп-лосс успішно перенесено в безубиток.")
+                        await send_telegram(f"🎯 **TP1 досягнуто!** Монета: {symbol}\n Стоп-лосс успішно перенесено в безубиток.")
                         
                         # Переносимо стоп у безубиток на самій біржі з урахуванням MARK_PRICE
                         try:
