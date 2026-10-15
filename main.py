@@ -790,7 +790,7 @@ async def main_scanner():
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
             if skipped_details:
-                report_msg = "🔍 Монети зі сплеском об'єму (відсіяні):\n" + "\n".join(skipped_details)
+                report_msg = "🔍 **Звіт сканування (Відсіяні монети):**\n\n" + "\n".join(skipped_details[:20])
                 await send_telegram(report_msg)
 
         except Exception as e:
