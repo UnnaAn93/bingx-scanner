@@ -475,11 +475,11 @@ async def open_position(setup):
 
         msg = (f"🚀 Відкрито позицію ({setup['signal']}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {setup['symbol']}\n"
-               f"📍 Вхід: {setup['entry']}\n"
-               f"🛑 Стоп: {setup['stop_loss']}\n"
-               f"🎯 TP1 (50%): {setup['tp1']}\n"
-               f"🎯 TP2 (25%): {setup['tp2']}\n"
-               f"🎯 TP3 (25%): {setup['tp3']}")
+               f"📍 Вхід: {setup['entry']:.6f}\n"
+               f"🛑 Стоп: {setup['stop_loss']:.6f}\n"
+               f"🎯 TP1 (50%): {setup['tp1']:.6f}\n"
+               f"🎯 TP2 (25%): {setup['tp2']:.6f}\n"
+               f"🎯 TP3 (25%): {setup['tp3']:.6f}")
         await send_telegram(msg)
         print(f"[SUCCESS] Успішно відкрито ордер по {setup['symbol']}.", flush=True)
 
