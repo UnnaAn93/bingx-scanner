@@ -242,8 +242,10 @@ async def analyze_market(symbol):
                     if idx > 0:
                         if k_list[idx-1] <= d_list[idx-1] and k_list[idx] > d_list[idx] and was_oversold:
                             crossed_bullish = True
+                            break
                         if k_list[idx-1] >= d_list[idx-1] and k_list[idx] < d_list[idx] and was_overbought:
                             crossed_bearish = True
+                            break
 
             return crossed_bullish, crossed_bearish
 
