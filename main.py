@@ -161,6 +161,45 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
+
+def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
+    k_list, d_list, j_list = [], [], []
+    for i in range(len(klines)):
+        sub = klines[:i+1]
+        low_n = min(float(x.get('low', 0)) for x in sub)
+        high_n = max(float(x.get('high', 0)) for x in sub)
+        rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
+
+        k = rsv if not k_list else (2/3 * k_list[-1] + 1/3 * rsv)
+        d = rsv if not d_list else (2/3 * d_list[-1] + 1/3 * rsv)
+        j = 3 * k - 2 * d
+
+        k_list.append(k)
+        d_list.append(d)
+        j_list.append(j)
+
+    crossed_bullish = False
+    crossed_bearish = False
+
+    if len(k_list) > lookback_j:
+        recent_j_window = j_list[-lookback_j:]
+        was_oversold = any(val < 20 for val in recent_j_window)
+        was_overbought = any(val > 80 for val in recent_j_window)
+
+        for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
+            if idx > 0:
+                is_bull = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx]) and was_oversold
+                is_bear = (k_list[idx-1] >= d_list[idx-1]) and (k_list[idx] < d_list[idx]) and was_overbought
+
+                if is_bull:
+                    crossed_bullish = True
+                    break
+                if is_bear:
+                    crossed_bearish = True
+                    break
+
+    return crossed_bullish, crossed_bearish
+
 async def analyze_market(symbol):
     try:
         # Завантажуємо дані для 15м та 1хв таймфреймів
