@@ -200,9 +200,8 @@ def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=6):
 
 async def analyze_market(symbol):
     try:
-        # Завантажуємо дані для 15m та 1m таймфреймів
-        raw_15m = await get_kline_data(symbol, "15m", 100)
-        raw_1m = await get_kline_data(symbol, "1m", 50)
+        raw_15m = await get_klines(symbol, "15m", 100)
+        raw_1m = await get_klines(symbol, "1m", 50)
 
         if len(raw_15m) < 100 or len(raw_1m) < 30:
             return None, False, "Недостатньо історичних даних"
