@@ -369,9 +369,13 @@ async def analyze_market(symbol):
         return None, True, combined_reason
 
     except Exception as ex:
-        print(f"[LOG ERROR] Помилка під час аналізу ринку: {ex}", flush=True)
+        error_msg = f"[LOG ERROR] Помилка під час аналізу ринку ({symbol}): {ex}"
+        print(error_msg, flush=True)
+        try:
+            await send_telegram(error_msg) # або log_and_alert, залежно від того, яка функція використовується у вашому проєкті для сповіщень
+        except:
+            pass
         return None, False, str(ex)
-        
                         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
