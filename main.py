@@ -161,9 +161,12 @@ def calculate_atr(klines, period=14):
     return sum(trs[-period:]) / period
 
 def calculate_kdj_cross_strict(klines, lookback_over=6, lookback_cross=4):
+    # Беремо для розрахунку лише останні 15 свічок, щоб повністю відсікти будь-яку історію з минулого
+    working_klines = klines[-15:] if len(klines) > 15 else klines
+    
     k_list, d_list, j_list = [], [], []
-    for i in range(len(klines)):
-        sub = klines[:i+1]
+    for i in range(len(working_klines)):
+        sub = working_klines[:i+1]
         low_n = min(float(x.get('low', 0)) for x in sub)
         high_n = max(float(x.get('high', 0)) for x in sub)
         rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
