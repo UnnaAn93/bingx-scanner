@@ -160,7 +160,7 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
-def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=6):
+def calculate_kdj_cross_strict(klines, lookback_over=6, lookback_cross=4):
     k_list, d_list, j_list = [], [], []
     for i in range(len(klines)):
         sub = klines[:i+1]
@@ -176,28 +176,30 @@ def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=6):
         d_list.append(d)
         j_list.append(j)
 
-    crossed_bullish = False
+    has_overbought_recent = False
+    has_oversold_recent = False
     crossed_bearish = False
+    crossed_bullish = False
 
-    if len(k_list) > lookback_j:
-        recent_j_window = j_list[-lookback_j:]
-        was_oversold = any(val < 20 for val in recent_j_window)
-        was_overbought = any(val > 80 for val in recent_j_window)
+    if len(j_list) >= lookback_over:
+        recent_j_over = j_list[-lookback_over:]
+        has_overbought_recent = any(val > 90 for val in recent_j_over)
+        has_oversold_recent = any(val < 10 for val in recent_j_over)
 
+    if len(k_list) >= lookback_cross:
         for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
             if idx > 0:
-                is_bull_cross = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx])
                 is_bear_cross = (k_list[idx-1] >= d_list[idx-1]) and (k_list[idx] < d_list[idx])
+                is_bull_cross = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx])
 
-                if is_bull_cross and was_oversold:
-                    crossed_bullish = True
-                    break
-                if is_bear_cross and was_overbought:
+                if is_bear_cross and has_overbought_recent:
                     crossed_bearish = True
-                    break
+                if is_bull_cross and has_oversold_recent:
+                    crossed_bullish = True
 
     return crossed_bullish, crossed_bearish
 
+# --- АНАЛІЗ РИНКУ ---
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -227,7 +229,7 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
-        # Крок 1: Перевірка сплеску об'єму на 1m за останні 10 свічок (x2 від середнього за 20)
+        # Крок 1: Перевірка сплеску об'єму на 1m за останні 10 свічок (x2 від середнього)
         avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-30:-10]) / 20
         has_volume_spike_1m = any(
             float(x.get('volume', 0)) > avg_volume_1m * 2.0
@@ -247,7 +249,6 @@ async def analyze_market(symbol):
 
         # Визначаємо режим за дистанцією від EMA 50 (15m): Тренд чи Контр-тренд
         distance_from_ema = abs(current_price - ema_50)
-        is_counter_trend = distance_from_ema > (atr_15m * 4.0)
         is_trend_mode = distance_from_ema <= (atr_15m * 4.0)
 
         # Визначення флету за 40 свічок та рівнів
@@ -256,28 +257,26 @@ async def analyze_market(symbol):
         recent_range = max_40_high - min_40_low
         is_flat = recent_range <= (atr_15m * 2.5)
 
-        # Крок 2 & 3: Перетин KDJ (перепроданість J < 20, перекупленість J > 90)
-        kdj_bull, kdj_bear = calculate_kdj_cross(closed_candles, lookback_j=10, lookback_cross=6)
+        # Крок 2: Жорстка перевірка KDJ (Шорт: >90 за 6 свічок + перетин за 4 свічки | Лонг: <10 за 6 свічок + перетин за 4 свічки)
+        kdj_bull, kdj_bear = calculate_kdj_cross_strict(closed_candles, lookback_over=6, lookback_cross=4)
 
-        # Крок 3: Перевірка тіней на останніх 3 закритих свічках 15m (захист рівня)
+        # Крок 3: Перевірка тіней на останніх 4 свічках 15m
         has_valid_long_wick = any(
             (min(c['open'], c['close']) - c['low']) > (c['high'] - max(c['open'], c['close']))
-            for c in closed_candles[-3:]
+            for c in closed_candles[-4:]
         )
 
         has_valid_short_wick = any(
             (c['high'] - max(c['open'], c['close'])) > (min(c['open'], c['close']) - c['low'])
-            for c in closed_candles[-3:]
+            for c in closed_candles[-4:]
         )
 
-        # Крок 4: Фільтр тренду на 1m — моніторинг закриття 3 свічок підряд
-        # Лонг: останні 3 свічки 1m закриваються вище першої з них
+        # Крок 4: Фільтр тренду на 1m — закриття 3 свічок поспіль
         is_1m_bullish_trend = (
             klines_1m[-1]['close'] > klines_1m[-3]['close'] and
             klines_1m[-2]['close'] > klines_1m[-3]['close'] and
             klines_1m[-1]['close'] > klines_1m[-2]['close']
         )
-        # Шорт: останні 3 свічки 1m закриваються нижче першої з них
         is_1m_bearish_trend = (
             klines_1m[-1]['close'] < klines_1m[-3]['close'] and
             klines_1m[-2]['close'] < klines_1m[-3]['close'] and
@@ -306,7 +305,6 @@ async def analyze_market(symbol):
                         else:
                             long_reasons.append("Ціна не біля підтримки (Flat)")
                     else:
-                        # Трендовий/Контр-тренд лонг
                         local_min = min(float(x['low']) for x in closed_candles[-20:])
                         stop_loss = round(local_min - (atr_15m * 0.5), 6)
                         risk = current_price - stop_loss
@@ -324,9 +322,9 @@ async def analyze_market(symbol):
                 else:
                     long_reasons.append("Очікування висхідного тренду 1m (3 свічки поспіль)")
             else:
-                long_reasons.append("Слабкий відкуп на свічках (немає більшої нижньої тіні за 3 свічки)")
+                long_reasons.append("Слабкий відкуп на свічках (немає більшої нижньої тіні за 4 свічки)")
         else:
-            long_reasons.append("Немає KDJ перетину знизу вгору (перепроданість J < 20)")
+            long_reasons.append("Немає умов KDJ для Лонгу (перепроданість < 10 за 6 свічок + перетин за 4 свічки)")
 
         # --- ЛОГІКА ДЛЯ ШОРТУ ---
         if kdj_bear:
@@ -350,7 +348,6 @@ async def analyze_market(symbol):
                         else:
                             short_reasons.append("Ціна не біля опору (Flat)")
                     else:
-                        # Трендовий/Контр-тренд шорт
                         local_max = max(float(x['high']) for x in closed_candles[-20:])
                         stop_loss = round(local_max + (atr_15m * 0.5), 6)
                         risk = stop_loss - current_price
@@ -368,9 +365,9 @@ async def analyze_market(symbol):
                 else:
                     short_reasons.append("Очікування низхідного тренду 1m (3 свічки поспіль)")
             else:
-                short_reasons.append("Слабкий тиск зверху на свічках (немає більшої верхньої тіні за 3 свічки)")
+                short_reasons.append("Слабкий тиск зверху на свічках (немає більшої верхньої тіні за 4 свічки)")
         else:
-            short_reasons.append("Немає KDJ перетину зверху вниз (перекупленість J > 90)")
+            short_reasons.append("Немає умов KDJ для Шорту (перекупленість > 90 за 6 свічок + перетин за 4 свічки)")
 
         # Формуємо звіт про причини відсіювання для сповіщень
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
