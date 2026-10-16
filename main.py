@@ -715,6 +715,7 @@ async def main_scanner():
             print("🔄 Початок нового циклу сканування ринку...", flush=True)
 
             risk_pos_count = await count_risk_positions()
+            print(f"[INFO] Кількість відкритих ризикових позицій: {risk_pos_count}", flush=True)
             if risk_pos_count >= MAX_RISK_POSITIONS:
                 await asyncio.sleep(30)
                 continue
