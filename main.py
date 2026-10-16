@@ -171,7 +171,7 @@ def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
         rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
 
         k = rsv if not k_list else (2/3 * k_list[-1] + 1/3 * rsv)
-        d = rsv if not d_list else (2/3 * d_list[-1] + 1/3 * rsv)
+        d = rsv if not d_list else (2/3 * d_list[-1] + 1/3 * d)
         j = 3 * k - 2 * d
 
         k_list.append(k)
@@ -186,15 +186,16 @@ def calculate_kdj_cross(klines, lookback_j=10, lookback_cross=5):
         was_oversold = any(val < 20 for val in recent_j_window)
         was_overbought = any(val > 80 for val in recent_j_window)
 
+        # Шукаємо перетин за останні lookback_cross свічок
         for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
             if idx > 0:
-                is_bull = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx]) and was_oversold
-                is_bear = (k_list[idx-1] >= d_list[idx-1]) and (k_list[idx] < d_list[idx]) and was_overbought
+                is_bull_cross = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx])
+                is_bear_cross = (k_list[idx-1] >= d_list[idx-1]) and (k_list[idx] < d_list[idx])
 
-                if is_bull:
+                if is_bull_cross and was_oversold:
                     crossed_bullish = True
                     break
-                if is_bear:
+                if is_bear_cross and was_overbought:
                     crossed_bearish = True
                     break
 
