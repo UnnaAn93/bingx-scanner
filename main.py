@@ -406,10 +406,15 @@ async def open_position(setup):
         }
 
         res = await bingx_request('POST', '/openApi/swap/v2/trade/order', order_payload)
-        if not res or not isinstance(res, dict) and res.get('code') != 0:
-            err_msg = res.get("msg", "Unknown error") if isinstance(res, dict) else "Connection failed"
-            raise Exception(f"Помилка маркет ордеру: {err_msg}")
-
+        if not res or not isinstance(res, dict) or res.get('code') != 0:
+            err_msg = res.get('msg', 'Unknown error') if isinstance(res, dict) else 'Connection failed'
+            error_text = f"❌ [ПОМИЛКА ВІДКРИТТЯ] {setup['symbol']}: {err_msg}"
+            print(error_text, flush=True)
+            try:
+                await send_telegram(error_text)
+            except:
+                pass
+            raise Exception(error_text)
         data_res = res.get("data", {})
         if isinstance(data_res, dict):
             order_info = data_res.get("order", data_res)
