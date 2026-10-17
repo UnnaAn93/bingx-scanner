@@ -202,7 +202,7 @@ def calculate_kdj_cross_strict(klines, lookback_over=6, lookback_cross=4):
 
     return crossed_bullish, crossed_bearish
 
-# --- АНАЛІЗ РИНКУ ---
+# --- АНАЛІЗ РИНКУ (Чиста структура, об'єми, тіні та рівні) ---
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -245,30 +245,21 @@ async def analyze_market(symbol):
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
         current_price = klines_15m[-1]['close']
-        ema_50 = sum(float(x['close']) for x in closed_candles[-50:]) / 50 if len(closed_candles) >= 50 else current_price
 
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
 
-        # Визначаємо режим за дистанцією від EMA 50 (15m): Тренд чи Контр-тренд
-        distance_from_ema = abs(current_price - ema_50)
-        is_trend_mode = distance_from_ema <= (atr_15m * 4.0)
-
-        # Визначення флету за 40 свічок та рівнів
+        # Визначення діапазону (підтримка/опір) за останні 40 свічок
         min_40_low = min(float(x['low']) for x in closed_candles[-40:])
         max_40_high = max(float(x['high']) for x in closed_candles[-40:])
-        recent_range = max_40_high - min_40_low
-        is_flat = recent_range <= (atr_15m * 2.5)
 
-        # Крок 2: Жорстка перевірка KDJ (Шорт: >90 за 6 свічок + перетин за 4 свічки | Лонг: <10 за 6 свічок + перетин за 4 свічки)
-        kdj_bull, kdj_bear = calculate_kdj_cross_strict(closed_candles, lookback_over=6, lookback_cross=4)
-
-        # Крок 3: Перевірка тіней на останніх 4 свічках 15m
+        # Перевірка тіней на останніх 4 свічках 15m
+        # Для лонгу: нижня тінь має бути більшою за верхню
         has_valid_long_wick = any(
             (min(c['open'], c['close']) - c['low']) > (c['high'] - max(c['open'], c['close']))
             for c in closed_candles[-4:]
         )
-
+        # Для шорту: верхня тінь має бути більшою за нижню
         has_valid_short_wick = any(
             (c['high'] - max(c['open'], c['close'])) > (min(c['open'], c['close']) - c['low'])
             for c in closed_candles[-4:]
@@ -287,90 +278,60 @@ async def analyze_market(symbol):
         )
 
         # --- ЛОГІКА ДЛЯ ЛОНГУ ---
-        if kdj_bull:
+        # Залізна умова: Лонг можливий ТІЛЬКИ якщо ціна біля підтримки (нижня третина діапазону)
+        is_near_support = current_price <= (min_40_low + (max_40_high - min_40_low) * 0.35)
+
+        if is_near_support:
             if has_valid_long_wick:
                 if is_1m_bullish_trend:
-                    if is_flat:
-                        if current_price <= (min_40_low + (atr_15m * 1.5)):
-                            stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
-                            risk = current_price - stop_loss
-                            tp1 = round(max_40_high - (atr_15m * 1.0), 6)
-                            tp2 = round(tp1 + (atr_15m * 2.0), 6)
-                            tp3 = round(tp2 + (atr_15m * 2.0), 6)
-                            reward = tp1 - current_price
-                            if risk > 0 and (reward / risk) >= 1.3:
-                                return ({
-                                    "symbol": symbol, "signal": "LONG", "entry": current_price,
-                                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                                }, True, "OK (Flat Long)")
-                            else:
-                                long_reasons.append("Малий Risk/Reward (Flat Лонг)")
-                        else:
-                            long_reasons.append("Ціна не біля підтримки (Flat)")
+                    stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
+                    risk = current_price - stop_loss
+                    tp1 = round(max_40_high - (atr_15m * 1.0), 6)
+                    tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                    tp3 = round(tp2 + (atr_15m * 2.0), 6)
+                    reward = tp1 - current_price
+
+                    if risk > 0 and (reward / risk) >= 1.3:
+                        return ({
+                            "symbol": symbol, "signal": "LONG", "entry": current_price,
+                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                        }, True, "OK (Structure Long)")
                     else:
-                        local_min = min(float(x['low']) for x in closed_candles[-20:])
-                        stop_loss = round(local_min - (atr_15m * 0.5), 6)
-                        risk = current_price - stop_loss
-                        tp1 = round(current_price + (risk * 1.0), 6)
-                        tp2 = round(tp1 + (atr_15m * 2.0), 6)
-                        tp3 = round(tp2 + (atr_15m * 2.0), 6)
-                        reward = tp1 - current_price
-                        if risk > 0 and (reward / risk) >= 1.3:
-                            return ({
-                                "symbol": symbol, "signal": "LONG", "entry": current_price,
-                                "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                            }, True, "OK (Trend Long)")
-                        else:
-                            long_reasons.append("Малий Risk/Reward (Trend Лонг)")
+                        long_reasons.append("Малий Risk/Reward для Лонгу")
                 else:
                     long_reasons.append("Очікування висхідного тренду 1m (3 свічки поспіль)")
             else:
-                long_reasons.append("Слабкий відкуп на свічках (немає більшої нижньої тіні за 4 свічки)")
+                long_reasons.append("Слабкий відкуп (немає більшої нижньої тіні за 4 свічки)")
         else:
-            long_reasons.append("Немає умов KDJ для Лонгу (перепроданість < 10 за 6 свічок + перетин за 4 свічки)")
+            long_reasons.append("Ціна не біля підтримки (немає умов для Лонгу)")
 
         # --- ЛОГІКА ДЛЯ ШОРТУ ---
-        if kdj_bear:
+        # Залізна умова: Шорт можливий ТІЛЬКИ якщо ціна біля опору (верхня третина діапазону)
+        is_near_resistance = current_price >= (max_40_high - (max_40_high - min_40_low) * 0.35)
+
+        if is_near_resistance:
             if has_valid_short_wick:
                 if is_1m_bearish_trend:
-                    if is_flat:
-                        if current_price >= (max_40_high - (atr_15m * 1.5)):
-                            stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
-                            risk = stop_loss - current_price
-                            tp1 = round(min_40_low + (atr_15m * 1.0), 6)
-                            tp2 = round(tp1 - (atr_15m * 2.0), 6)
-                            tp3 = round(tp2 - (atr_15m * 2.0), 6)
-                            reward = current_price - tp1
-                            if risk > 0 and (reward / risk) >= 1.3:
-                                return ({
-                                    "symbol": symbol, "signal": "SHORT", "entry": current_price,
-                                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                                }, True, "OK (Flat Short)")
-                            else:
-                                short_reasons.append("Малий Risk/Reward (Flat Шорт)")
-                        else:
-                            short_reasons.append("Ціна не біля опору (Flat)")
+                    stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
+                    risk = stop_loss - current_price
+                    tp1 = round(min_40_low + (atr_15m * 1.0), 6)
+                    tp2 = round(tp1 - (atr_15m * 2.0), 6)
+                    tp3 = round(tp2 - (atr_15m * 2.0), 6)
+                    reward = current_price - tp1
+
+                    if risk > 0 and (reward / risk) >= 1.3:
+                        return ({
+                            "symbol": symbol, "signal": "SHORT", "entry": current_price,
+                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                        }, True, "OK (Structure Short)")
                     else:
-                        local_max = max(float(x['high']) for x in closed_candles[-20:])
-                        stop_loss = round(local_max + (atr_15m * 0.5), 6)
-                        risk = stop_loss - current_price
-                        tp1 = round(current_price - (risk * 1.0), 6)
-                        tp2 = round(tp1 - (atr_15m * 2.0), 6)
-                        tp3 = round(tp2 - (atr_15m * 2.0), 6)
-                        reward = current_price - tp1
-                        if risk > 0 and (reward / risk) >= 1.3:
-                            return ({
-                                "symbol": symbol, "signal": "SHORT", "entry": current_price,
-                                "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                            }, True, "OK (Trend Short)")
-                        else:
-                            short_reasons.append("Малий Risk/Reward (Trend Шорт)")
+                        short_reasons.append("Малий Risk/Reward для Шорту")
                 else:
                     short_reasons.append("Очікування низхідного тренду 1m (3 свічки поспіль)")
             else:
-                short_reasons.append("Слабкий тиск зверху на свічках (немає більшої верхньої тіні за 4 свічки)")
+                short_reasons.append("Слабкий тиск зверху (немає більшої верхньої тіні за 4 свічки)")
         else:
-            short_reasons.append("Немає умов KDJ для Шорту (перекупленість > 90 за 6 свічок + перетин за 4 свічки)")
+            short_reasons.append("Ціна не біля опору (немає умов для Шорту)")
 
         # Формуємо звіт про причини відсіювання для сповіщень
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
