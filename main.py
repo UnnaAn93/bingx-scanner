@@ -278,7 +278,7 @@ async def analyze_market(symbol):
                     risk = current_price - stop_loss
                     fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
                     target_by_resistance = fractal_resistance - current_price
-                    tp1_distance = max(target_by_resistance, atr_15m * 2.0)
+                    tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
                     
                     tp1 = round(current_price + tp1_distance, 6)
                     tp2 = round(tp1 + (atr_15m * 2.0), 6)
@@ -299,7 +299,7 @@ async def analyze_market(symbol):
                     risk = stop_loss - current_price
                     fractal_support = find_last_fractal(closed_candles, fractal_type="low")
                     target_by_support = current_price - fractal_support
-                    tp1_distance = max(target_by_support, atr_15m * 2.0)
+                    tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
                     
                     tp1 = round(current_price - tp1_distance, 6)
                     tp2 = round(tp1 - (atr_15m * 2.0), 6)
