@@ -202,7 +202,7 @@ def calculate_kdj_cross_strict(klines, lookback_over=6, lookback_cross=4):
 
     return crossed_bullish, crossed_bearish
 
-# --- АНАЛІЗ РИНКУ (Чиста структура, об'єми, тіні та рівні) ---
+# --- ПОВНИЙ АНАЛІЗ РИНКУ (Структура, об'єми, проторговка, тіні та безпечні TP) ---
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -249,23 +249,39 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
 
-        # Визначення діапазону (підтримка/опір) за останні 40 свічок
+        # Визначення діапазону за останні 40 свічок
         min_40_low = min(float(x['low']) for x in closed_candles[-40:])
         max_40_high = max(float(x['high']) for x in closed_candles[-40:])
 
-        # Перевірка тіней на останніх 4 свічках 15m
-        # Для лонгу: нижня тінь має бути більшою за верхню
+        # --- ТІНІ СВІЧОК ---
         has_valid_long_wick = any(
             (min(c['open'], c['close']) - c['low']) > (c['high'] - max(c['open'], c['close']))
             for c in closed_candles[-4:]
         )
-        # Для шорту: верхня тінь має бути більшою за нижню
         has_valid_short_wick = any(
             (c['high'] - max(c['open'], c['close'])) > (min(c['open'], c['close']) - c['low'])
             for c in closed_candles[-4:]
         )
 
-        # Крок 4: Фільтр тренду на 1m — закриття 3 свічок поспіль
+        # Обов'язкова тінь на САМІЙ ОСТАННІЙ закритій свічці
+        last_candle = closed_candles[-1]
+        last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
+        last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
+        
+        last_has_long_wick = last_lower_wick > last_upper_wick
+        last_has_short_wick = last_upper_wick > last_lower_wick
+
+        # --- ФІЛЬТР ПРОТОРГОВКИ (Консолідація / Затухання волатильності біля рівня) ---
+        recent_candles = closed_candles[-3:]
+        recent_spreads = [c['high'] - c['low'] for c in recent_candles]
+        avg_recent_spread = sum(recent_spreads) / len(recent_spreads)
+        
+        all_spreads = [c['high'] - c['low'] for c in closed_candles[-20:]]
+        avg_history_spread = sum(all_spreads) / len(all_spreads)
+
+        is_consolidating = avg_recent_spread <= (avg_history_spread * 1.2)
+
+        # --- ТРЕНД НА 1m ---
         is_1m_bullish_trend = (
             klines_1m[-1]['close'] > klines_1m[-3]['close'] and
             klines_1m[-2]['close'] > klines_1m[-3]['close'] and
@@ -277,16 +293,22 @@ async def analyze_market(symbol):
             klines_1m[-1]['close'] < klines_1m[-2]['close']
         )
 
-        # --- ЛОГІКА ДЛЯ ЛОНГУ ---
-        # Залізна умова: Лонг можливий ТІЛЬКИ якщо ціна біля підтримки (нижня третина діапазону)
+        # ==================== ЛОГІКА ДЛЯ ЛОНГУ ====================
         is_near_support = current_price <= (min_40_low + (max_40_high - min_40_low) * 0.35)
 
         if is_near_support:
-            if has_valid_long_wick:
+            if has_valid_long_wick and last_has_long_wick and is_consolidating:
                 if is_1m_bullish_trend:
                     stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
-                    tp1 = round(max_40_high - (atr_15m * 1.0), 6)
+                    
+                    # Близький опір, але TP1 не менше ніж 2 * ATR
+                    local_resistance = max(float(x['high']) for x in closed_candles[-15:])
+                    target_by_resistance = local_resistance - current_price
+                    min_tp1_distance = atr_15m * 2.0
+                    tp1_distance = max(target_by_resistance, min_tp1_distance)
+                    
+                    tp1 = round(current_price + tp1_distance, 6)
                     tp2 = round(tp1 + (atr_15m * 2.0), 6)
                     tp3 = round(tp2 + (atr_15m * 2.0), 6)
                     reward = tp1 - current_price
@@ -301,20 +323,26 @@ async def analyze_market(symbol):
                 else:
                     long_reasons.append("Очікування висхідного тренду 1m (3 свічки поспіль)")
             else:
-                long_reasons.append("Слабкий відкуп (немає більшої нижньої тіні за 4 свічки)")
+                long_reasons.append("Немає тіні на останній свічці або відсутня проторговка біля підтримки")
         else:
-            long_reasons.append("Ціна не біля підтримки (немає умов для Лонгу)")
+            long_reasons.append("Ціна не біля підтримки")
 
-        # --- ЛОГІКА ДЛЯ ШОРТУ ---
-        # Залізна умова: Шорт можливий ТІЛЬКИ якщо ціна біля опору (верхня третина діапазону)
+        # ==================== ЛОГІКА ДЛЯ ШОРТУ ====================
         is_near_resistance = current_price >= (max_40_high - (max_40_high - min_40_low) * 0.35)
 
         if is_near_resistance:
-            if has_valid_short_wick:
+            if has_valid_short_wick and last_has_short_wick and is_consolidating:
                 if is_1m_bearish_trend:
                     stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
-                    tp1 = round(min_40_low + (atr_15m * 1.0), 6)
+                    
+                    # Близька підтримка, але TP1 не менше ніж 2 * ATR
+                    local_support = min(float(x['low']) for x in closed_candles[-15:])
+                    target_by_support = current_price - local_support
+                    min_tp1_distance = atr_15m * 2.0
+                    tp1_distance = max(target_by_support, min_tp1_distance)
+                    
+                    tp1 = round(current_price - tp1_distance, 6)
                     tp2 = round(tp1 - (atr_15m * 2.0), 6)
                     tp3 = round(tp2 - (atr_15m * 2.0), 6)
                     reward = current_price - tp1
@@ -329,11 +357,11 @@ async def analyze_market(symbol):
                 else:
                     short_reasons.append("Очікування низхідного тренду 1m (3 свічки поспіль)")
             else:
-                short_reasons.append("Слабкий тиск зверху (немає більшої верхньої тіні за 4 свічки)")
+                short_reasons.append("Немає верхньої тіні на останній свічці або відсутня проторговка біля опору")
         else:
-            short_reasons.append("Ціна не біля опору (немає умов для Шорту)")
+            short_reasons.append("Ціна не біля опору")
 
-        # Формуємо звіт про причини відсіювання для сповіщень
+        # Формуємо звіт про причини відсіювання
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
         return None, True, combined_reason
 
