@@ -206,6 +206,27 @@ def find_last_fractal(candles, fractal_type="high"):
     else:
         return min(c['low'] for c in candles[-15:])
 
+def find_last_two_fractals(candles, fractal_type='high'):
+    found = []
+    for i in range(len(candles) - 3, 2, -1):
+        if fractal_type == 'high':
+            if (candles[i]['high'] > candles[i-1]['high'] and 
+                candles[i]['high'] > candles[i-2]['high'] and 
+                candles[i]['high'] > candles[i+1]['high'] and 
+                candles[i]['high'] > candles[i+2]['high']):
+                found.append(candles[i]['high'])
+                if len(found) == 2:
+                    return found
+        elif fractal_type == 'low':
+            if (candles[i]['low'] < candles[i-1]['low'] and 
+                candles[i]['low'] < candles[i-2]['low'] and 
+                candles[i]['low'] < candles[i+1]['low'] and 
+                candles[i]['low'] < candles[i+2]['low']):
+                found.append(candles[i]['low'])
+                if len(found) == 2:
+                    return found
+    return []
+    
 
 def count_recent_tests(candles_last_15, level_price, threshold, test_type="resistance"):
     tests = 0
@@ -271,15 +292,18 @@ async def analyze_market(symbol):
         if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
             
             # Висхідний тренд (тільки ЛОНГ біля EMA та фрактала підтримки)
-            fractal_support = find_last_fractal(closed_candles, fractal_type="low")
-            if current_price > ema_50 and last_candle['open'] > last_candle['close']:
+            fractal_support = find_last_fractal(closed_candles, fractal_type='low')
+            highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
+            is_bullish_structure = (highs_struct[1] > highs_struct[0]) if len(highs_struct) == 2 else True
+
+            if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure:
                 if abs(current_price - fractal_support) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_support - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
-                    fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
+                    fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
                     target_by_resistance = fractal_resistance - current_price
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
-                    
+
                     tp1 = round(current_price + tp1_distance, 6)
                     tp2 = round(tp1 + (atr_15m * 2.0), 6)
                     tp3 = round(tp2 + (atr_15m * 2.0), 6)
@@ -292,15 +316,18 @@ async def analyze_market(symbol):
                         }, True, "OK (15m Trend Bullish Fractal Support Long)")
 
             # Низхідний тренд (тільки ШОРТ біля EMA та фрактала опору)
-            fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
-            if current_price < ema_50 and last_candle['open'] < last_candle['close']:
+            fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
+            lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
+            is_bearish_structure = (lows_struct[1] < lows_struct[0]) if len(lows_struct) == 2 else True
+
+            if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure:
                 if abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_resistance + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
-                    fractal_support = find_last_fractal(closed_candles, fractal_type="low")
+                    fractal_support = find_last_fractal(closed_candles, fractal_type='low')
                     target_by_support = current_price - fractal_support
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
-                    
+
                     tp1 = round(current_price - tp1_distance, 6)
                     tp2 = round(tp1 - (atr_15m * 2.0), 6)
                     tp3 = round(tp2 - (atr_15m * 2.0), 6)
