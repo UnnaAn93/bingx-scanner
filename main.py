@@ -160,49 +160,33 @@ def calculate_atr(klines, period=14):
         trs.append(tr)
     return sum(trs[-period:]) / period
 
-def calculate_kdj_cross_strict(klines, lookback_over=6, lookback_cross=4):
-    # Беремо для розрахунку лише останні 15 свічок, щоб повністю відсікти будь-яку історію з минулого
-    working_klines = klines[-15:] if len(klines) > 15 else klines
-    
-    k_list, d_list, j_list = [], [], []
-    for i in range(len(working_klines)):
-        sub = working_klines[:i+1]
-        low_n = min(float(x.get('low', 0)) for x in sub)
-        high_n = max(float(x.get('high', 0)) for x in sub)
-        rsv = ((sub[-1].get('close', 0) - low_n) / (high_n - low_n) * 100) if high_n != low_n else 50
+# --- ДОПОМІЖНА ФУНКЦІЯ ПОШУКУ ФРАКТАЛІВ ---
+def find_last_fractal(candles, fractal_type="high"):
+    """
+    Шукає останній підтверджений фрактал (пошук з кінця масиву закритих свічок).
+    fractal_type: "high" для опору (пік), "low" для підтримки (западина).
+    """
+    for i in range(len(candles) - 3, 2, -1):
+        if fractal_type == "high":
+            if (candles[i]['high'] > candles[i-1]['high'] and 
+                candles[i]['high'] > candles[i-2]['high'] and 
+                candles[i]['high'] > candles[i+1]['high'] and 
+                candles[i]['high'] > candles[i+2]['high']):
+                return candles[i]['high']
+        elif fractal_type == "low":
+            if (candles[i]['low'] < candles[i-1]['low'] and 
+                candles[i]['low'] < candles[i-2]['low'] and 
+                candles[i]['low'] < candles[i+1]['low'] and 
+                candles[i]['low'] < candles[i+2]['low']):
+                return candles[i]['low']
+                
+    if fractal_type == "high":
+        return max(c['high'] for c in candles[-15:])
+    else:
+        return min(c['low'] for c in candles[-15:])
 
-        k = rsv if not k_list else (2/3 * k_list[-1] + 1/3 * rsv)
-        d = rsv if not d_list else (2/3 * d_list[-1] + 1/3 * d)
-        j = 3 * k - 2 * d
 
-        k_list.append(k)
-        d_list.append(d)
-        j_list.append(j)
-
-    has_overbought_recent = False
-    has_oversold_recent = False
-    crossed_bearish = False
-    crossed_bullish = False
-
-    if len(j_list) >= lookback_over:
-        recent_j_over = j_list[-lookback_over:]
-        has_overbought_recent = any(val > 90 for val in recent_j_over)
-        has_oversold_recent = any(val < 10 for val in recent_j_over)
-
-    if len(k_list) >= lookback_cross:
-        for idx in range(len(k_list) - 1, max(0, len(k_list) - lookback_cross), -1):
-            if idx > 0:
-                is_bear_cross = (k_list[idx-1] >= d_list[idx-1]) and (k_list[idx] < d_list[idx])
-                is_bull_cross = (k_list[idx-1] <= d_list[idx-1]) and (k_list[idx] > d_list[idx])
-
-                if is_bear_cross and has_overbought_recent:
-                    crossed_bearish = True
-                if is_bull_cross and has_oversold_recent:
-                    crossed_bullish = True
-
-    return crossed_bullish, crossed_bearish
-
-# --- ПОВНИЙ АНАЛІЗ РИНКУ (Структура, об'єми, проторговка, тіні та безпечні TP) ---
+# --- ПОВНИЙ АНАЛІЗ РИНКУ (Структура, об'єми, проторговка, тіні, фрактали та безпечні TP) ---
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -232,7 +216,7 @@ async def analyze_market(symbol):
         long_reasons = []
         short_reasons = []
 
-        # Крок 1: Перевірка сплеску об'єму на 1m за останні 10 свічок (x2 від середнього)
+        # Перевірка сплеску об'єму на 1m
         avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-30:-10]) / 20
         has_volume_spike_1m = any(
             float(x.get('volume', 0)) > avg_volume_1m * 2.0
@@ -249,11 +233,10 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
 
-        # Визначення діапазону за останні 40 свічок
         min_40_low = min(float(x['low']) for x in closed_candles[-40:])
         max_40_high = max(float(x['high']) for x in closed_candles[-40:])
 
-        # --- ТІНІ СВІЧОК ---
+        # Тіні свічок
         has_valid_long_wick = any(
             (min(c['open'], c['close']) - c['low']) > (c['high'] - max(c['open'], c['close']))
             for c in closed_candles[-4:]
@@ -263,7 +246,6 @@ async def analyze_market(symbol):
             for c in closed_candles[-4:]
         )
 
-        # Обов'язкова тінь на САМІЙ ОСТАННІЙ закритій свічці
         last_candle = closed_candles[-1]
         last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
         last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
@@ -271,7 +253,7 @@ async def analyze_market(symbol):
         last_has_long_wick = last_lower_wick > last_upper_wick
         last_has_short_wick = last_upper_wick > last_lower_wick
 
-        # --- ФІЛЬТР ПРОТОРГОВКИ (Консолідація / Затухання волатильності біля рівня) ---
+        # Фільтр проторговки
         recent_candles = closed_candles[-3:]
         recent_spreads = [c['high'] - c['low'] for c in recent_candles]
         avg_recent_spread = sum(recent_spreads) / len(recent_spreads)
@@ -281,7 +263,7 @@ async def analyze_market(symbol):
 
         is_consolidating = avg_recent_spread <= (avg_history_spread * 1.2)
 
-        # --- ТРЕНД НА 1m ---
+        # Тренд на 1m
         is_1m_bullish_trend = (
             klines_1m[-1]['close'] > klines_1m[-3]['close'] and
             klines_1m[-2]['close'] > klines_1m[-3]['close'] and
@@ -293,7 +275,7 @@ async def analyze_market(symbol):
             klines_1m[-1]['close'] < klines_1m[-2]['close']
         )
 
-        # ==================== ЛОГІКА ДЛЯ ЛОНГУ ====================
+        # ЛОГІКА ДЛЯ ЛОНГУ
         is_near_support = current_price <= (min_40_low + (max_40_high - min_40_low) * 0.35)
 
         if is_near_support:
@@ -302,9 +284,8 @@ async def analyze_market(symbol):
                     stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
                     
-                    # Близький опір, але TP1 не менше ніж 2 * ATR
-                    local_resistance = max(float(x['high']) for x in closed_candles[-15:])
-                    target_by_resistance = local_resistance - current_price
+                    fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
+                    target_by_resistance = fractal_resistance - current_price
                     min_tp1_distance = atr_15m * 2.0
                     tp1_distance = max(target_by_resistance, min_tp1_distance)
                     
@@ -317,7 +298,7 @@ async def analyze_market(symbol):
                         return ({
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, True, "OK (Structure Long)")
+                        }, True, "OK (Fractal Structure Long)")
                     else:
                         long_reasons.append("Малий Risk/Reward для Лонгу")
                 else:
@@ -327,7 +308,7 @@ async def analyze_market(symbol):
         else:
             long_reasons.append("Ціна не біля підтримки")
 
-        # ==================== ЛОГІКА ДЛЯ ШОРТУ ====================
+        # ЛОГІКА ДЛЯ ШОРТУ
         is_near_resistance = current_price >= (max_40_high - (max_40_high - min_40_low) * 0.35)
 
         if is_near_resistance:
@@ -336,9 +317,8 @@ async def analyze_market(symbol):
                     stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
                     
-                    # Близька підтримка, але TP1 не менше ніж 2 * ATR
-                    local_support = min(float(x['low']) for x in closed_candles[-15:])
-                    target_by_support = current_price - local_support
+                    fractal_support = find_last_fractal(closed_candles, fractal_type="low")
+                    target_by_support = current_price - fractal_support
                     min_tp1_distance = atr_15m * 2.0
                     tp1_distance = max(target_by_support, min_tp1_distance)
                     
@@ -351,7 +331,7 @@ async def analyze_market(symbol):
                         return ({
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, True, "OK (Structure Short)")
+                        }, True, "OK (Fractal Structure Short)")
                     else:
                         short_reasons.append("Малий Risk/Reward для Шорту")
                 else:
@@ -361,7 +341,6 @@ async def analyze_market(symbol):
         else:
             short_reasons.append("Ціна не біля опору")
 
-        # Формуємо звіт про причини відсіювання
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
         return None, True, combined_reason
 
