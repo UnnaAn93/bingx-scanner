@@ -294,8 +294,12 @@ async def analyze_market(symbol):
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
             highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
-            is_bullish_structure = (highs_struct[1] > highs_struct[0]) if len(highs_struct) == 2 else True
-
+            lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
+            
+            is_bullish_structure = (
+                (highs_struct[1] > highs_struct[0] if len(highs_struct) == 2 else True) and
+                (lows_struct[1] > lows_struct[0] if len(lows_struct) == 2 else True)
+            )
             # Фільтр: перевіряємо, чи є вільний простір до верхнього опору (не купуємо в опір)
             space_to_resistance = fractal_resistance - current_price
             has_room_for_long = space_to_resistance >= (atr_15m * 1.0)
@@ -323,7 +327,11 @@ async def analyze_market(symbol):
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
-            is_bearish_structure = (lows_struct[1] < lows_struct[0]) if len(lows_struct) == 2 else True
+            highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
+            is_bearish_structure = (
+                (lows_struct[1] < lows_struct[0] if len(lows_struct) == 2 else True) and
+                (highs_struct[1] < highs_struct[0] if len(highs_struct) == 2 else True)
+            )
 
             # Фільтр: перевіряємо, чи є вільний простір до нижньої підтримки (не шортимо в підтримку)
             space_to_support = current_price - fractal_support
