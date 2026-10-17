@@ -220,17 +220,15 @@ def count_recent_tests(candles_last_10, level_price, threshold, test_type="resis
     tests = 0
     for c in candles_last_10:
         if test_type == "resistance":
-            # Ціна торкнулася зони опору, але не закрилася вище неї
             if abs(float(c['high']) - level_price) <= threshold and float(c['close']) <= level_price:
                 tests += 1
         else:
-            # Ціна торкнулася зони підтримки, але не закрилася нижче неї
             if abs(float(c['low']) - level_price) <= threshold and float(c['close']) >= level_price:
                 tests += 1
     return tests
 
 
-# --- ПОВНИЙ АНАЛІЗ РИНКУ ---
+# --- ОСНОВНА ФУНКЦІЯ АНАЛІЗУ РИНКУ ---
 async def analyze_market(symbol):
     try:
         raw_15m = await get_klines(symbol, "15m", 100)
@@ -274,7 +272,7 @@ async def analyze_market(symbol):
         # Розподіл на 50 свічок: перші 40 для визначення рівня, останні 10 для перевірки тестів
         base_50_candles = closed_candles[-50:]
         level_base_40 = base_50_candles[:40]     # 40 свічок для пошуку рівнів
-        recent_10_candles = base_50_candles[-10:] # 10 свічок для перевірки торкань і відсутності пробиття
+        recent_10_candles = base_50_candles[-10:] # 10 свічок для перевірки торкань
 
         max_40_high = max(float(x['high']) for x in level_base_40)
         min_40_low = min(float(x['low']) for x in level_base_40)
@@ -337,16 +335,19 @@ async def analyze_market(symbol):
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                     }, True, "OK (Trend from EMA Short)")
 
-        # ==================== 2. ФЛЕТ / РІВЕНЬ (40 свічок база + 10 свічок перевірка тестів і ТВХ) ====================
+        # ==================== 2. ФЛЕТ / РІВЕНЬ (З перевіркою об'ємів) ====================
         zone_threshold = atr_15m * 0.35
+
+        volumes_20 = [float(c['volume']) for c in closed_candles[-20:]]
+        avg_volume_20 = sum(volumes_20) / len(volumes_20)
+        recent_volume = float(closed_candles[-1]['volume'])
+        has_flat_volume = recent_volume >= (avg_volume_20 * 0.5)
 
         # --- ШОРТ БІЛЯ ОПОРУ ---
         is_near_resistance = current_price >= (max_40_high - zone_threshold)
-        if is_near_resistance and current_price >= (ema_50 - atr_15m * 1.0):
-            # Рахуємо тести за останні 10 свічок (має бути >= 2 тести без пробиття рівня)
+        if is_near_resistance and current_price >= (ema_50 - atr_15m * 1.0) and has_flat_volume:
             recent_tests = count_recent_tests(recent_10_candles, max_40_high, zone_threshold, test_type="resistance")
             
-            # Перевірка: на останніх 10 свічках було від 2 тестів, немає закриття вище рівня, і зараз є верхня тінь
             if recent_tests >= 2 and last_upper_wick > last_lower_wick:
                 stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
                 risk = stop_loss - current_price
@@ -367,15 +368,13 @@ async def analyze_market(symbol):
             else:
                 short_reasons.append(f"Флет шорт: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні")
         else:
-            short_reasons.append("Ціна не тестує опір або нижче EMA")
+            short_reasons.append("Ціна не тестує опір, нижче EMA або занадто малий об'єм для флету")
 
         # --- ЛОНГ БІЛЯ ПІДТРИМКИ ---
         is_near_support = current_price <= (min_40_low + zone_threshold)
-        if is_near_support and current_price >= ema_50:
-            # Рахуємо тести за останні 10 свічок (має бути >= 2 тести без пробиття рівня вниз)
+        if is_near_support and current_price >= ema_50 and has_flat_volume:
             recent_tests = count_recent_tests(recent_10_candles, min_40_low, zone_threshold, test_type="support")
             
-            # Перевірка: на останніх 10 свічках було від 2 тестів, немає закриття нижче рівня, і зараз є нижня тінь
             if recent_tests >= 2 and last_lower_wick > last_upper_wick:
                 stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
                 risk = current_price - stop_loss
@@ -396,7 +395,7 @@ async def analyze_market(symbol):
             else:
                 long_reasons.append(f"Флет лонг: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні")
         else:
-            long_reasons.append("Ціна не тестує підтримку або знаходиться нижче EMA")
+            long_reasons.append("Ціна не тестує підтримку, нижче EMA або занадто малий об'єм для флету")
 
         combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
         return None, True, combined_reason
@@ -409,6 +408,7 @@ async def analyze_market(symbol):
         except:
             pass
         return None, False, str(ex)
+        
  
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
