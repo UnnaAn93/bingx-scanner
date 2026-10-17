@@ -299,8 +299,9 @@ async def analyze_market(symbol):
             # Фільтр: перевіряємо, чи є вільний простір до верхнього опору (не купуємо в опір)
             space_to_resistance = fractal_resistance - current_price
             has_room_for_long = space_to_resistance >= (atr_15m * 1.0)
+            has_not_broken_support = last_candle['close'] >= fractal_support
 
-            if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long:
+            if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long and has_not_broken_support:
                 if abs(current_price - fractal_support) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_support - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
@@ -327,8 +328,9 @@ async def analyze_market(symbol):
             # Фільтр: перевіряємо, чи є вільний простір до нижньої підтримки (не шортимо в підтримку)
             space_to_support = current_price - fractal_support
             has_room_for_short = space_to_support >= (atr_15m * 1.0)
+            has_not_broken_resistance = last_candle['close'] <= fractal_resistance
 
-            if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short:
+            if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short and has_not_broken_resistance:
                 if abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_resistance + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
