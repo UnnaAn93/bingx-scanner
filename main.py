@@ -557,7 +557,7 @@ async def monitor_trades_loop():
                             'entry': entry_p,
                             'stop_loss': entry_p,
                             'initial_qty': current_qty,
-                            'in_breakeven': False,
+                            'in_breakeven': True,
                             'tp1_hit': False,
                             'tp2_hit': False,
                             'tp3_hit': False,
