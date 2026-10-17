@@ -724,16 +724,16 @@ async def self_ping_loop():
                     print(f"[LOG WARN] Самопінг не вдався: {e}", flush=True)
 
 async def count_risk_positions():
-    """Рахує кількість активних позицій, які ЩЕ НЕ перенесені в безубиток (у яких є ризик)"""
+    """Рахує кількість активних позицій, які ЦЕ НЕ перенесені в безубиток (у яких є ризик)"""
     try:
         risk_count = 0
         for symbol, data in active_trade_monitors.items():
-            # Якщо позиція активна, але ще НЕ в безубитку — вона вважається ризиковою
+            # Рахуємо тільки ті позиції, які ще НЕ в безубитку
             if not data.get('in_breakeven', False):
                 risk_count += 1
         return risk_count
     except Exception as e:
-        print(f"[LOG ERROR] Помилка підрахунку ризикових позицій: {e}", flush=True)
+        print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
         return 0
         
 
