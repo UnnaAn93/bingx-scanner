@@ -556,7 +556,7 @@ async def monitor_trades_loop():
             positions = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
 
-            # Відновлюємо моніторинг позицій після перезапуску бота
+            # Відновлюємо моніторинг позицій після перезапуску бота[span_0](start_span)[span_0](end_span)
             for p in positions:
                 if float(p.get('positionAmt', 0)) != 0:
                     sym = p['symbol']
@@ -578,14 +578,14 @@ async def monitor_trades_loop():
                         }
                         print(f"[INFO] Відновлено моніторинг позиції після перезапуску: {sym}", flush=True)
 
-            # Перевіряємо статус активних угод
+            # Перевіряємо статус активних угод[span_1](start_span)[span_1](end_span)
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
 
-                # Якщо позиція повністю зникла з біржі (закрито по стопу або всім тейкам)
+                # Якщо позиція повністю зникла з біржі (закрито по стопу або всім тейкам)[span_2](start_span)[span_2](end_span)
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
                     if data.get('tp3_hit', False):
-                        await send_telegram(f"🏁 **Всі цілі (TP3) досягнуто!** Позиція по {symbol} повністю закрита.")
+                        await send_telegram(f"🔥 **Всі цілі (ТР3) досягнуто!** Позиція по {symbol} повністю закрита.")
                     else:
                         await send_telegram(f"🛑 **Стоп по позиції!** Позицію по {symbol} закрито за стоп-лоссом.")
                     del active_trade_monitors[symbol]
@@ -594,7 +594,7 @@ async def monitor_trades_loop():
 
                 current_qty = abs(float(current_pos_data.get('positionAmt', 0)))
 
-                # Записуємо початковий об'єм, якщо його ще не було в стані
+                # Записуємо початковий об'єм, якщо його ще не було в стані[span_3](start_span)[span_3](end_span)
                 if 'initial_qty' not in data:
                     data['initial_qty'] = current_qty
                     save_trades_state(active_trade_monitors)
@@ -603,25 +603,28 @@ async def monitor_trades_loop():
                 initial_qty = data['initial_qty']
                 side_val = str(data.get('side', 'LONG')).upper()
 
-                # Якщо об'єм позиції на біржі зменшився — біржа виконала тейк-профіт!
+                # Якщо об'єми позиції на біржі зменшилися – біржа виконала тейк-профіт[span_4](start_span)[span_4](end_span)!
                 if current_qty < initial_qty:
                     ratio = current_qty / initial_qty
 
                     if ratio <= 0.05 and not data.get('tp3_hit', False):
                         data['tp3_hit'] = True
+                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
+                        await send_telegram(f"🔥 **ТР3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
                     elif ratio <= 0.30 and not data.get('tp2_hit', False):
                         data['tp2_hit'] = True
+                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **TP2 досягнуто!** Монета: {symbol}")
+                        await send_telegram(f"🔴 **ТР2 досягнуто!** Монета: {symbol}")
                     elif ratio <= 0.55 and not data.get('tp1_hit', False):
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
+                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **TP1 досягнуто!** Монета: {symbol}\n Стоп-лосс успішно перенесено в безубиток.")
-                        
-                        # Переносимо стоп у безубиток на самій біржі з урахуванням MARK_PRICE
+                        await send_telegram(f"🔴 **TP1 досягнуто!** Стоп-лосс успішно перенесено в безубиток...")
+
+                        # Переносимо стоп у безубиток на самій біржі (виконується одноразово при TP1)
                         try:
                             orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
@@ -643,18 +646,16 @@ async def monitor_trades_loop():
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
                                 "stopPrice": float(f"{entry_price:.6f}"),
-                                "quantity": current_qty,
-                                "workingType": "MARK_PRICE"  # Захист від шпильок за маркуванням
+                                "quantity": float(current_qty),
+                                "workingType": "MARK_PRICE"
                             }
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
-                            
-                            if isinstance(res, dict) and res.get('code', 0) != 0:
+                            if isinstance(res, dict) and res.get('code') != 0:
                                 err_msg = f"❌ [ПОМИЛКА БІРЖІ] Не вдалося поставити стоп у БУ для {symbol}: {res}"
                                 print(err_msg, flush=True)
                                 await send_telegram(err_msg)
-
                         except Exception as ex:
-                            err_msg = f"❌ [КРИТИЧНА ПОМИЛКА] Помилка перенесення стопа в БУ для {symbol}: {ex}"
+                            err_msg = f"❌ [КРИТИЧНА ПОМИЛКА] Помилка перенесення стопа в БУ для {symbol}: {str(ex)}"
                             print(err_msg, flush=True)
                             await send_telegram(err_msg)
 
@@ -664,7 +665,7 @@ async def monitor_trades_loop():
                     klines_check = await get_klines(symbol, "15m", 25)
                     if len(klines_check) >= 20:
                         last_c = klines_check[-1]
-                        avg_vol = sum([float(x.get('volume', 0)) for x in klines_check[-21:-1]]) / 20
+                        avg_vol = sum(float(x.get('volume', 0)) for x in klines_check[-21:-1]) / 20
                         is_opp_spike = float(last_c.get('volume', 0)) > avg_vol * 2.5
 
                         if is_opp_spike:
@@ -672,14 +673,13 @@ async def monitor_trades_loop():
                             last_open = float(last_c.get('open', 0))
                             last_high = float(last_c.get('high', 0))
                             last_low = float(last_c.get('low', 0))
-                            
+
                             candle_range = last_high - last_low
                             body_size = abs(last_close - last_open)
                             body_ratio = (body_size / candle_range) if candle_range > 0 else 0.0
                             is_valid_result = body_ratio >= 0.5
 
                             if is_valid_result:
-                                unreal_pnl = float(current_pos_data.get('unrealizedProfit', 0) or 0)
                                 import time
                                 current_time = time.time()
 
@@ -688,21 +688,21 @@ async def monitor_trades_loop():
                                 if 'last_opp_alert_time' not in data:
                                     data['last_opp_alert_time'] = 0
 
-                                if data['opp_volume_count'] < 3 and (current_time - data['last_opp_alert_time'] >= 300):
+                                if data['opp_volume_count'] < 3 and (current_time - data['last_opp_alert_time']) >= 300:
                                     data['opp_volume_count'] += 1
                                     data['last_opp_alert_time'] = current_time
                                     save_trades_state(active_trade_monitors)
 
                                     if pos_side == "SHORT" and last_close > last_open:
-                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм у лонг по {symbol}")
+                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм у лонг для {symbol}")
                                     elif pos_side == "LONG" and last_close < last_open:
-                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм у шорт по {symbol}")
+                                        await send_telegram(f"⚠️ Увага ({data['opp_volume_count']}/3)! Зустрічний об'єм у шорт для {symbol}")
                 except Exception as ex:
                     print(f"Помилка перевірки зустрічного об'єму: {ex}", flush=True)
 
-        except Exception as e:
-            print(f"[LOG ERROR] Помилка в моніторингу угод: {e}", flush=True)
-            await send_telegram(f"❌ [КРИТИЧНА ПОМИЛКА] В циклі моніторингу: {e}")
+        except Exception as ex:
+            print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
+            await send_telegram("❌ [КРИТИЧНА ПОМИЛКА] В циклі моніторингу")
 
         await asyncio.sleep(60)
         
