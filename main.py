@@ -580,7 +580,7 @@ async def monitor_trades_loop():
 
                 # Записуємо початковий об'єм, якщо його ще не було в стані
                 if 'initial_qty' not in data:
-                    "quantity": current_qty,
+                    "quantity": current_qty
                     save_trades_state(active_trade_monitors)
                     continue
 
