@@ -244,52 +244,56 @@ async def analyze_market(symbol):
     try:
         # Запитуємо виключно 15-хвилинні свічки
         raw_15m = await get_klines(symbol, "15m", 120)
-
+        
         if len(raw_15m) < 100:
             return None, False, "Недостатньо історичних даних на 15м"
-
+            
         klines_15m = [{
             'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
             'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])
         } for k in raw_15m]
-
+        
         long_reasons = []
         short_reasons = []
-
+        
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
         current_price = klines_15m[-1]['close']
-
+        
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
-
+            
         ema_50 = calculate_ema(closed_candles, period=50)
         if ema_50 is None:
-            return None, False, "Недостатньо даних для ЕМА 50"
-
+            return None, False, "Недостатньо даних для EMA 50"
+            
         base_100_candles = closed_candles[-100:]
         level_base_85 = base_100_candles[-85:]
         recent_15_candles = base_100_candles[-15:]
-
+        
         max_85_high = max(float(x['high']) for x in level_base_85)
         min_85_low = min(float(x['low']) for x in level_base_85)
-
+        
         last_candle = closed_candles[-1]
         last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
         last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
-
+        candle_range = float(last_candle['high']) - float(last_candle['low'])
+        
+        has_lower_wick = (last_lower_wick >= (candle_range * 0.35)) if candle_range > 0 else False
+        has_upper_wick = (last_upper_wick >= (candle_range * 0.35)) if candle_range > 0 else False
+        
         volumes_20 = [float(c['volume']) for c in closed_candles[-20:]]
         avg_volume_20 = sum(volumes_20) / len(volumes_20)
         recent_volume = float(last_candle['volume'])
-
-        # =============== 1. ТРЕНДОВА ЛОГІКА (15м) ===============
+        
+        # ============= 1. ТРЕНДОВА ЛОГІКА (15м) ==============
         distance_to_ema = abs(current_price - ema_50)
         has_stable_volume = recent_volume >= (avg_volume_20 * 0.8)
         candle_body = abs(last_candle['close'] - last_candle['open'])
         has_movement = candle_body >= (atr_15m * 0.1)
-
+        
         if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
-
+            
             # Висхідний тренд (тільки ЛОНГ біля EMA та фрактала підтримки)
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
@@ -300,23 +304,23 @@ async def analyze_market(symbol):
                 (highs_struct[1] > highs_struct[0] if len(highs_struct) == 2 else True) and
                 (lows_struct[1] > lows_struct[0] if len(lows_struct) == 2 else True)
             )
-            # Фільтр: перевіряємо, чи є вільний простір до верхнього опору (не купуємо в опір)
+            
             space_to_resistance = fractal_resistance - current_price
             has_room_for_long = space_to_resistance >= (atr_15m * 1.0)
             has_not_broken_support = last_candle['close'] >= fractal_support
 
-            if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long and has_not_broken_support:
+            if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long and has_not_broken_support and has_lower_wick:
                 if abs(current_price - fractal_support) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_support - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
                     target_by_resistance = fractal_resistance - current_price
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
-
+                    
                     tp1 = round(current_price + tp1_distance, 6)
                     tp2 = round(tp1 + (atr_15m * 2.0), 6)
                     tp3 = round(tp2 + (atr_15m * 2.0), 6)
                     reward = tp1 - current_price
-
+                    
                     if risk > 0 and (reward / risk) >= 1.3:
                         return ({
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
@@ -328,60 +332,59 @@ async def analyze_market(symbol):
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
             highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
+            
             is_bearish_structure = (
                 (lows_struct[1] < lows_struct[0] if len(lows_struct) == 2 else True) and
                 (highs_struct[1] < highs_struct[0] if len(highs_struct) == 2 else True)
             )
-
-            # Фільтр: перевіряємо, чи є вільний простір до нижньої підтримки (не шортимо в підтримку)
+            
             space_to_support = current_price - fractal_support
             has_room_for_short = space_to_support >= (atr_15m * 1.0)
             has_not_broken_resistance = last_candle['close'] <= fractal_resistance
 
-            if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short and has_not_broken_resistance:
+            if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short and has_not_broken_resistance and has_upper_wick:
                 if abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
                     stop_loss = round(fractal_resistance + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
                     target_by_support = current_price - fractal_support
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
-
+                    
                     tp1 = round(current_price - tp1_distance, 6)
                     tp2 = round(tp1 - (atr_15m * 2.0), 6)
                     tp3 = round(tp2 - (atr_15m * 2.0), 6)
-                    reward = current_price - tp1
-
+                    reward = tp1 - current_price
+                    
                     if risk > 0 and (reward / risk) >= 1.3:
                         return ({
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, True, "OK (15m Trend Bearish Fractal Resistance Short)")
 
-        # =============== 2. ФЛЕТ / ДІАПАЗОН (15м біля EMA) ===============
+        # ============= 2. ФЛЕТ / ДІАПАЗОН (15м біля EMA) ==============
         is_market_ranging = distance_to_ema <= (atr_15m * 2.5)
-
+        
         if is_market_ranging:
             zone_threshold = atr_15m * 0.35
             has_spike_volume = recent_volume >= (avg_volume_20 * 1.2)
-            candle_range = float(last_candle['high']) - float(last_candle['low'])
-
+            
             # Шорт у флеті біля опору
             is_near_resistance = current_price >= (max_85_high - zone_threshold)
             if is_near_resistance and has_spike_volume:
                 recent_tests = count_recent_tests(recent_15_candles, max_85_high, zone_threshold, test_type="resistance")
-                has_upper_wick = last_upper_wick >= (candle_range * 0.4) if candle_range > 0 else False
-
-                if recent_tests >= 2 and has_upper_wick:
+                has_upper_wick_range = last_upper_wick >= (candle_range * 0.4) if candle_range > 0 else False
+                
+                if recent_tests >= 2 and has_upper_wick_range:
                     stop_loss = round(max_85_high + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
                     fractal_support = find_last_fractal(closed_candles, fractal_type='low')
                     target_by_support = current_price - fractal_support
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 2.0)
-
+                    
                     tp1 = round(current_price - tp1_distance, 6)
                     tp2 = round(tp1 - (atr_15m * 2.0), 6)
                     tp3 = round(tp2 - (atr_15m * 2.0), 6)
-                    reward = current_price - tp1
-
+                    reward = tp1 - current_price
+                    
                     if risk > 0 and (reward / risk) >= 1.3:
                         return ({
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
@@ -392,20 +395,20 @@ async def analyze_market(symbol):
             is_near_support = current_price <= (min_85_low + zone_threshold)
             if is_near_support and has_spike_volume:
                 recent_tests = count_recent_tests(recent_15_candles, min_85_low, zone_threshold, test_type="support")
-                has_lower_wick = last_lower_wick >= (candle_range * 0.4) if candle_range > 0 else False
-
-                if recent_tests >= 2 and has_lower_wick:
+                has_lower_wick_range = last_lower_wick >= (candle_range * 0.4) if candle_range > 0 else False
+                
+                if recent_tests >= 2 and has_lower_wick_range:
                     stop_loss = round(min_85_low - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
                     fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
                     target_by_resistance = fractal_resistance - current_price
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 2.0)
-
+                    
                     tp1 = round(current_price + tp1_distance, 6)
                     tp2 = round(tp1 + (atr_15m * 2.0), 6)
                     tp3 = round(tp2 + (atr_15m * 2.0), 6)
                     reward = tp1 - current_price
-
+                    
                     if risk > 0 and (reward / risk) >= 1.3:
                         return ({
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
@@ -413,7 +416,7 @@ async def analyze_market(symbol):
                         }, True, "OK (15m Range Support Long)")
 
         return None, False, "Немає підходящих умов"
-
+        
     except Exception as e:
         return None, False, f"Помилка аналізу: {str(e)}"
         
