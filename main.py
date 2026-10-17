@@ -189,10 +189,6 @@ def calculate_ema(candles, period=50):
 
 
 def find_last_fractal(candles, fractal_type="high"):
-    """
-    Шукає останній підтверджений фрактал (пошук з кінця масиву закритих свічок).
-    fractal_type: "high" для опору (пік), "low" для підтримки (западина).
-    """
     for i in range(len(candles) - 3, 2, -1):
         if fractal_type == "high":
             if (candles[i]['high'] > candles[i-1]['high'] and 
@@ -213,12 +209,9 @@ def find_last_fractal(candles, fractal_type="high"):
         return min(c['low'] for c in candles[-15:])
 
 
-def count_recent_tests(candles_last_10, level_price, threshold, test_type="resistance"):
-    """
-    Рахує кількість тестів (торкань) рівня на останніх 10 свічках без їх пробиття.
-    """
+def count_recent_tests(candles_last_15, level_price, threshold, test_type="resistance"):
     tests = 0
-    for c in candles_last_10:
+    for c in candles_last_15:
         if test_type == "resistance":
             if abs(float(c['high']) - level_price) <= threshold and float(c['close']) <= level_price:
                 tests += 1
@@ -228,13 +221,13 @@ def count_recent_tests(candles_last_10, level_price, threshold, test_type="resis
     return tests
 
 
-# --- ОСНОВНА ФУНКЦІЯ АНАЛІЗУ РИНКУ ---
+# --- ПОВНИЙ АНАЛІЗ РИНКУ ---
 async def analyze_market(symbol):
     try:
-        raw_15m = await get_klines(symbol, "15m", 100)
+        raw_15m = await get_klines(symbol, "15m", 120)
         raw_1m = await get_klines(symbol, "1m", 50)
 
-        if len(raw_15m) < 60 or len(raw_1m) < 30:
+        if len(raw_15m) < 100 or len(raw_1m) < 30:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{
@@ -269,87 +262,88 @@ async def analyze_market(symbol):
         if ema_50 is None:
             return None, False, "Недостатньо даних для EMA 50"
 
-        # Розподіл на 50 свічок: перші 40 для визначення рівня, останні 10 для перевірки тестів
-        base_50_candles = closed_candles[-50:]
-        level_base_40 = base_50_candles[:40]     # 40 свічок для пошуку рівнів
-        recent_10_candles = base_50_candles[-10:] # 10 свічок для перевірки торкань
+        base_100_candles = closed_candles[-100:]
+        level_base_85 = base_100_candles[:85]
+        recent_15_candles = base_100_candles[-15:]
 
-        max_40_high = max(float(x['high']) for x in level_base_40)
-        min_40_low = min(float(x['low']) for x in level_base_40)
+        max_85_high = max(float(x['high']) for x in level_base_85)
+        min_85_low = min(float(x['low']) for x in level_base_85)
 
-        # Тіні останньої свічки
         last_candle = closed_candles[-1]
         last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
         last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
 
-        # Тренд на 1m для додаткового підтвердження
-        is_1m_bullish_trend = (
-            klines_1m[-1]['close'] > klines_1m[-3]['close'] and
-            klines_1m[-2]['close'] > klines_1m[-3]['close'] and
-            klines_1m[-1]['close'] > klines_1m[-2]['close']
-        )
-        is_1m_bearish_trend = (
-            klines_1m[-1]['close'] < klines_1m[-3]['close'] and
-            klines_1m[-2]['close'] < klines_1m[-3]['close'] and
-            klines_1m[-1]['close'] < klines_1m[-2]['close']
-        )
-
-        # ==================== 1. ТОРГІВЛЯ ЗА ТРЕНДОМ ВІД EMA (до 4 * ATR) ====================
-        distance_to_ema = abs(current_price - ema_50)
-        if distance_to_ema <= (atr_15m * 4.0):
-            # Висхідний тренд від EMA
-            if current_price > ema_50 and is_1m_bullish_trend:
-                stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
-                risk = current_price - stop_loss
-                fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
-                target_by_resistance = fractal_resistance - current_price
-                tp1_distance = max(target_by_resistance, atr_15m * 2.0)
-                
-                tp1 = round(current_price + tp1_distance, 6)
-                tp2 = round(tp1 + (atr_15m * 2.0), 6)
-                tp3 = round(tp2 + (atr_15m * 2.0), 6)
-                reward = tp1 - current_price
-
-                if risk > 0 and (reward / risk) >= 1.3:
-                    return ({
-                        "symbol": symbol, "signal": "LONG", "entry": current_price,
-                        "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                    }, True, "OK (Trend from EMA Long)")
-
-            # Низхідний тренд від EMA
-            if current_price < ema_50 and is_1m_bearish_trend:
-                stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
-                risk = stop_loss - current_price
-                fractal_support = find_last_fractal(closed_candles, fractal_type="low")
-                target_by_support = current_price - fractal_support
-                tp1_distance = max(target_by_support, atr_15m * 2.0)
-                
-                tp1 = round(current_price - tp1_distance, 6)
-                tp2 = round(tp1 - (atr_15m * 2.0), 6)
-                tp3 = round(tp2 - (atr_15m * 2.0), 6)
-                reward = current_price - tp1
-
-                if risk > 0 and (reward / risk) >= 1.3:
-                    return ({
-                        "symbol": symbol, "signal": "SHORT", "entry": current_price,
-                        "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                    }, True, "OK (Trend from EMA Short)")
-
-        # ==================== 2. ФЛЕТ / РІВЕНЬ (З перевіркою об'ємів) ====================
-        zone_threshold = atr_15m * 0.35
-
         volumes_20 = [float(c['volume']) for c in closed_candles[-20:]]
         avg_volume_20 = sum(volumes_20) / len(volumes_20)
-        recent_volume = float(closed_candles[-1]['volume'])
-        has_flat_volume = recent_volume >= (avg_volume_20 * 0.5)
+        recent_volume = float(last_candle['volume'])
 
-        # --- ШОРТ БІЛЯ ОПОРУ ---
-        is_near_resistance = current_price >= (max_40_high - zone_threshold)
-        if is_near_resistance and current_price >= (ema_50 - atr_15m * 1.0) and has_flat_volume:
-            recent_tests = count_recent_tests(recent_10_candles, max_40_high, zone_threshold, test_type="resistance")
+        # 1m імпульсне підтвердження
+        is_1m_bullish = klines_1m[-1]['close'] > klines_1m[-3]['close']
+        is_1m_bearish = klines_1m[-1]['close'] < klines_1m[-3]['close']
+
+        # ==================== 1. ТРЕНДОВА ЛОГІКАТОРГІВЛЯ ====================
+        distance_to_ema = abs(current_price - ema_50)
+        has_stable_volume = recent_volume >= (avg_volume_20 * 0.8)
+        candle_body = abs(last_candle['close'] - last_candle['open'])
+        has_movement = candle_body >= (atr_15m * 0.1)
+
+        if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
             
-            if recent_tests >= 2 and last_upper_wick > last_lower_wick:
-                stop_loss = round(max_40_high + (atr_15m * 1.0), 6)
+            # ВИСХІДНИЙ ТРЕНД (тільки ЛОНГ біля EMA та попереднього фрактала підтримки)
+            fractal_support = find_last_fractal(closed_candles, fractal_type="low")
+            if current_price > ema_50 and is_1m_bullish and last_candle['open'] > last_candle['close']:
+                if abs(current_price - fractal_support) <= (atr_15m * 1.5):
+                    stop_loss = round(fractal_support - (atr_15m * 1.0), 6)
+                    risk = current_price - stop_loss
+                    fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
+                    target_by_resistance = fractal_resistance - current_price
+                    tp1_distance = max(target_by_resistance, atr_15m * 2.0)
+                    
+                    tp1 = round(current_price + tp1_distance, 6)
+                    tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                    tp3 = round(tp2 + (atr_15m * 2.0), 6)
+                    reward = tp1 - current_price
+
+                    if risk > 0 and (reward / risk) >= 1.3:
+                        return ({
+                            "symbol": symbol, "signal": "LONG", "entry": current_price,
+                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                        }, True, "OK (Trend Bullish Fractal Support Long)")
+
+            # НИЗХІДНИЙ ТРЕНД (тільки ШОРТ біля EMA та попереднього фрактала опору)
+            fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
+            if current_price < ema_50 and is_1m_bearish and last_candle['open'] < last_candle['close']:
+                if abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
+                    stop_loss = round(fractal_resistance + (atr_15m * 1.0), 6)
+                    risk = stop_loss - current_price
+                    fractal_support = find_last_fractal(closed_candles, fractal_type="low")
+                    target_by_support = current_price - fractal_support
+                    tp1_distance = max(target_by_support, atr_15m * 2.0)
+                    
+                    tp1 = round(current_price - tp1_distance, 6)
+                    tp2 = round(tp1 - (atr_15m * 2.0), 6)
+                    tp3 = round(tp2 - (atr_15m * 2.0), 6)
+                    reward = current_price - tp1
+
+                    if risk > 0 and (reward / risk) >= 1.3:
+                        return ({
+                            "symbol": symbol, "signal": "SHORT", "entry": current_price,
+                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
+                        }, True, "OK (Trend Bearish Fractal Resistance Short)")
+
+        # ==================== 2. ОКРЕМІ ДІАПЗОНИ / ФЛЕТ ====================
+        zone_threshold = atr_15m * 0.35
+        has_spike_volume = recent_volume >= (avg_volume_20 * 1.2)
+        candle_range = float(last_candle['high']) - float(last_candle['low'])
+
+        # Шорт біля опору у флеті
+        is_near_resistance = current_price >= (max_85_high - zone_threshold)
+        if is_near_resistance and has_spike_volume:
+            recent_tests = count_recent_tests(recent_15_candles, max_85_high, zone_threshold, test_type="resistance")
+            has_upper_wick = last_upper_wick > (candle_range * 0.4) if candle_range > 0 else False
+
+            if recent_tests >= 2 and has_upper_wick:
+                stop_loss = round(max_85_high + (atr_15m * 1.0), 6)
                 risk = stop_loss - current_price
                 fractal_support = find_last_fractal(closed_candles, fractal_type="low")
                 target_by_support = current_price - fractal_support
@@ -364,19 +358,16 @@ async def analyze_market(symbol):
                     return ({
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                    }, True, "OK (Flat Resistance Tests Short)")
-            else:
-                short_reasons.append(f"Флет шорт: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні")
-        else:
-            short_reasons.append("Ціна не тестує опір, нижче EMA або занадто малий об'єм для флету")
+                    }, True, "OK (Flat Resistance Volume Short)")
 
-        # --- ЛОНГ БІЛЯ ПІДТРИМКИ ---
-        is_near_support = current_price <= (min_40_low + zone_threshold)
-        if is_near_support and current_price >= ema_50 and has_flat_volume:
-            recent_tests = count_recent_tests(recent_10_candles, min_40_low, zone_threshold, test_type="support")
-            
-            if recent_tests >= 2 and last_lower_wick > last_upper_wick:
-                stop_loss = round(min_40_low - (atr_15m * 1.0), 6)
+        # Лонг біля підтримки у флеті
+        is_near_support = current_price <= (min_85_low + zone_threshold)
+        if is_near_support and has_spike_volume:
+            recent_tests = count_recent_tests(recent_15_candles, min_85_low, zone_threshold, test_type="support")
+            has_lower_wick = last_lower_wick > (candle_range * 0.4) if candle_range > 0 else False
+
+            if recent_tests >= 2 and has_lower_wick:
+                stop_loss = round(min_85_low - (atr_15m * 1.0), 6)
                 risk = current_price - stop_loss
                 fractal_resistance = find_last_fractal(closed_candles, fractal_type="high")
                 target_by_resistance = fractal_resistance - current_price
@@ -391,14 +382,9 @@ async def analyze_market(symbol):
                     return ({
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                    }, True, "OK (Flat Support Tests Long)")
-            else:
-                long_reasons.append(f"Флет лонг: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні")
-        else:
-            long_reasons.append("Ціна не тестує підтримку, нижче EMA або занадто малий об'єм для флету")
+                    }, True, "OK (Flat Support Volume Long)")
 
-        combined_reason = f"Long: {', '.join(long_reasons)} | Short: {', '.join(short_reasons)}"
-        return None, True, combined_reason
+        return None, True, "Ціна в безпечній зоні / немає чіткого тренду чи якісного флету"
 
     except Exception as ex:
         error_msg = f"[LOG ERROR] Помилка під час аналізу ринку ({symbol}): {ex}"
@@ -409,7 +395,6 @@ async def analyze_market(symbol):
             pass
         return None, False, str(ex)
         
- 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
     try:
