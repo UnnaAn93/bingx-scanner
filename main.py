@@ -756,6 +756,7 @@ async def main_scanner():
             active_symbols = [p['symbol'] for p in open_pos if float(p.get('positionAmt', 0)) != 0]
 
             skipped_reasons = {}
+            scanned_count = 0
 
             for symbol in symbols:
                 if symbol in active_symbols or is_blacklisted(symbol):
@@ -788,6 +789,11 @@ async def main_scanner():
                 except Exception as e:
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+
+                scanned_count += 1  # Збільшуємо лічильник для кожної монети
+
+            # Виводимо загальну кількість у логи Render
+            print(f"📊 [INFO] Сканування завершено. Перевірено монет: {scanned_count}", flush=True)
 
             # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
