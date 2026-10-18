@@ -289,12 +289,6 @@ async def analyze_market(symbol):
         min_85_low = min(float(x['low']) for x in level_base_85)
         
         last_candle = closed_candles[-1]
-        last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
-        last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
-        candle_range = float(last_candle['high']) - float(last_candle['low'])
-        
-        has_lower_wick = (last_lower_wick >= (candle_range * 0.35)) if candle_range > 0 else False
-        has_upper_wick = (last_upper_wick >= (candle_range * 0.35)) if candle_range > 0 else False
         
         volumes_20 = [float(c['volume']) for c in closed_candles[-20:]]
         avg_volume_20 = sum(volumes_20) / len(volumes_20)
@@ -303,7 +297,7 @@ async def analyze_market(symbol):
         distance_to_ema = abs(current_price - ema_50)
         has_movement = last_candle['close'] != last_candle['open']
         
-        # ============= 1. ТРЕНДОВА ЛОГІКА (15м) - БЕЗ ОБ'ЄМУ ТА ЧЕРВОНИХ СВІЧОК =============
+        # ============= 1. ТРЕНДОВА ЛОГІКА (15м) =============
         if distance_to_ema <= (atr_15m * 4.0):
             if not has_movement:
                 return None, "Свічка без руху (open == close)"
@@ -330,8 +324,19 @@ async def analyze_market(symbol):
                 if last_candle['close'] < fractal_support:
                     return None, "Тренд лонг: пробито підтримку вниз"
                 
-                if not has_lower_wick:
-                    return None, "Тренд лонг: немає нижньої тіні свічки (>=35%)"
+                # Перевірка нижньої тіні на останніх 4 свічках
+                recent_4_candles = closed_candles[-4:]
+                has_valid_lower_wick = False
+                for c in recent_4_candles:
+                    c_range = float(c['high']) - float(c['low'])
+                    if c_range > 0:
+                        c_lower_wick = min(c['open'], c['close']) - c['low']
+                        if (c_lower_wick / c_range) >= 0.35:
+                            has_valid_lower_wick = True
+                            break
+                            
+                if not has_valid_lower_wick:
+                    return None, "Тренд лонг: немає нижньої тіні (>=35%) на останніх 4 свічках"
                 
                 if abs(current_price - fractal_support) > (atr_15m * 1.5):
                     return None, "Тренд лонг: далеко від підтримки (> 1.5 ATR)"
@@ -370,8 +375,19 @@ async def analyze_market(symbol):
                 if last_candle['close'] > fractal_resistance:
                     return None, "Тренд шорт: пробито опір вгору"
                 
-                if not has_upper_wick:
-                    return None, "Тренд шорт: немає верхньої тіні свічки (>=35%)"
+                # Перевірка верхньої тіні на останніх 4 свічках
+                recent_4_candles = closed_candles[-4:]
+                has_valid_upper_wick = False
+                for c in recent_4_candles:
+                    c_range = float(c['high']) - float(c['low'])
+                    if c_range > 0:
+                        c_upper_wick = c['high'] - max(c['open'], c['close'])
+                        if (c_upper_wick / c_range) >= 0.35:
+                            has_valid_upper_wick = True
+                            break
+                            
+                if not has_valid_upper_wick:
+                    return None, "Тренд шорт: немає верхньої тіні (>=35%) на останніх 4 свічках"
                 
                 if abs(current_price - fractal_resistance) > (atr_15m * 1.5):
                     return None, "Тренд шорт: далеко від опору (> 1.5 ATR)"
@@ -400,6 +416,9 @@ async def analyze_market(symbol):
         if is_market_ranging:
             zone_threshold = atr_15m * 0.35
             has_spike_volume = recent_volume >= (avg_volume_20 * 1.2)
+            candle_range = float(last_candle['high']) - float(last_candle['low'])
+            last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
+            last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
             
             # Шорт у флеті біля опору (ТІЛЬКИ З ОБ'ЄМОМ)
             is_near_resistance = current_price >= (max_85_high - zone_threshold)
@@ -465,6 +484,7 @@ async def analyze_market(symbol):
         
     except Exception as e:
         return None, f"Помилка аналізу: {str(e)}"
+        
         
 
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
