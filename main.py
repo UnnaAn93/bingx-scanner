@@ -579,6 +579,9 @@ async def monitor_trades_loop():
 
                             entry_price = float(data.get('entry', current_pos_data.get('entryPrice', 0)))
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
+                            exact_qty = float(current_pos_data.get('positionAmt', current_qty))
+                            if exact_qty < 0:
+                                exact_qty = abs(exact_qty)
 
                             sl_payload = {
                                 "symbol": symbol,
@@ -586,7 +589,7 @@ async def monitor_trades_loop():
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
                                 "stopPrice": float(f"{entry_price:.6f}"),
-                                "quantity": float(current_qty),
+                                "quantity": float(f"{exact_qty:.6f}"),
                                 "workingType": "MARK_PRICE"
                             }
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
