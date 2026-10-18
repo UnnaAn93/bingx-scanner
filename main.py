@@ -283,13 +283,12 @@ async def analyze_market(symbol):
         recent_volume = float(last_candle['volume'])
         
         distance_to_ema = abs(current_price - ema_50)
-        candle_body = abs(last_candle['close'] - last_candle['open'])
-        has_movement = candle_body >= (atr_15m * 0.1)
+        has_movement = last_candle['close'] != last_candle['open']
         
         # ============= 1. ТРЕНДОВА ЛОГІКА (15м) - БЕЗ ОБ'ЄМУ ТА ЧЕРВОНИХ СВІЧОК =============
         if distance_to_ema <= (atr_15m * 4.0):
             if not has_movement:
-                return None, "Тренд: занадто слабкий рух тіла свічки (<0.1 ATR)"
+                return None, "Свічка без руху (open == close)"
             
             # Висхідний тренд (ЛОНГ)
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
