@@ -666,15 +666,44 @@ async def count_risk_positions():
         risk_count = 0
         positions = await get_exchange_positions()
         open_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
-        
-        for symbol in open_symbols:
-            if symbol in active_trade_monitors:
-                # Якщо позиція є в мониторингу і ще НЕ перенесена в безубиток
-                if not active_trade_monitors[symbol].get('in_breakeven', False):
-                    risk_count += 1
-            else:
-                # Якщо позиція відкрита, але чомусь відсутня в локальному стані — вважаємо її ризиковою
-                risk_count += 1
+
+        for p in positions:
+            qty = float(p.get('positionAmt', 0))
+            if qty != 0:
+                symbol = p['symbol']
+                pos_side = p.get('positionSide') or ('LONG' if qty > 0 else 'SHORT')
+                entry_p = float(p.get('entryPrice', 0))
+
+                # Якщо позиція є в активному моніторингу і вона вже в БУ/плюсі — не рахуємо як ризик
+                if symbol in active_trade_monitors:
+                    if active_trade_monitors[symbol].get('in_breakeven', False):
+                        continue  # Захищена, пропускаємо
+                    else:
+                        risk_count += 1  # Ще ризикова
+                else:
+                    # Якщо чомусь немає в моніторингу, перевіряємо стоп на біржі прямо тут
+                    is_protected = False
+                    try:
+                        orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
+                        orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
+                        if isinstance(orders_list, dict):
+                            orders_list = orders_list.get('orders', [])
+                        
+                        for ord_item in orders_list:
+                            if ord_item.get('type') == 'STOP_MARKET':
+                                stop_price = float(ord_item.get('stopPrice', 0))
+                                if pos_side == 'LONG' and stop_price <= entry_p:
+                                    is_protected = True
+                                    break
+                                elif pos_side == 'SHORT' and stop_price >= entry_p:
+                                    is_protected = True
+                                    break
+                    except Exception:
+                        pass
+
+                    if not is_protected:
+                        risk_count += 1
+
         return risk_count
     except Exception as e:
         print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
