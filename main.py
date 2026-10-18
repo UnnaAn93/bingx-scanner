@@ -831,10 +831,14 @@ async def main_scanner():
                     symbols_str = ", ".join([f"{s}" for s in syms])
                     report_msg += f"▪️ **{reason_text}**:\n {symbols_str}\n\n"
                 
-                await send_telegram(report_msg)
-                print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
+                try:
+                    print("[INFO] Надсилаємо звіт у Telegram...", flush=True)
+                    await send_telegram(report_msg)
+                    print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
+                except Exception as e:
+                    print(f"[ERROR] Помилка надсилання звіту в Telegram: {e}", flush=True)
             else:
-                print("[WARN] Словник skipped_reasons виявився порожнім наприкінці циклу.", flush=True)
+                print("[INFO] Словник skipped_reasons порожній.", flush=True)
 
 
         except Exception as e:
