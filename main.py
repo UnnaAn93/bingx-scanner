@@ -509,19 +509,27 @@ async def monitor_trades_loop():
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         entry_p = float(p.get('entryPrice', 0))
                         current_qty = abs(float(p.get('positionAmt', 0)))
+                        
+                        # Перевіряємо, чи стоп на біржі вже на рівні входу (значить TP1 вже був пройдений)
+                        # Або якщо позиція вже відновлюється, залишаємо попередній стан з файлу, якщо він там був
+                        saved_state = load_trades_state()
+                        is_be = saved_state.get(sym, {}).get('in_breakeven', False)
+                        tp1_done = saved_state.get(sym, {}).get('tp1_hit', False)
+
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
-                            'stop_loss': entry_p,
+                            'stop_loss': entry_p if is_be else float(p.get('entryPrice', 0)),
                             'initial_qty': current_qty,
-                            'in_breakeven': False,
-                            'tp1_hit': False,
-                            'tp2_hit': False,
-                            'tp3_hit': False,
+                            'in_breakeven': is_be,
+                            'tp1_hit': tp1_done,
+                            'tp2_hit': saved_state.get(sym, {}).get('tp2_hit', False),
+                            'tp3_hit': saved_state.get(sym, {}).get('tp3_hit', False),
                             'side': pos_side,
                             'opp_volume_count': 0,
                             'last_opp_alert_time': 0
                         }
-                        print(f"[INFO] Відновлено моніторинг позиції після перезапуску: {sym}", flush=True)
+                        print(f"[INFO] Відновлено моніторинг позиції після перезапуску: {sym} (Безубиток: {is_be})", flush=True)
+
 
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
