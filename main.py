@@ -637,13 +637,22 @@ async def self_ping_loop():
 async def count_risk_positions():
     try:
         risk_count = 0
-        for symbol, data in active_trade_monitors.items():
-            if not data.get('in_breakeven', False):
+        positions = await get_exchange_positions()
+        open_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
+        
+        for symbol in open_symbols:
+            if symbol in active_trade_monitors:
+                # Якщо позиція є в мониторингу і ще НЕ перенесена в безубиток
+                if not active_trade_monitors[symbol].get('in_breakeven', False):
+                    risk_count += 1
+            else:
+                # Якщо позиція відкрита, але чомусь відсутня в локальному стані — вважаємо її ризиковою
                 risk_count += 1
         return risk_count
     except Exception as e:
         print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
         return 0
+        
 
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
