@@ -290,7 +290,7 @@ async def analyze_market(symbol):
 
             if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long and has_not_broken_support and has_lower_wick:
                 if fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5):
-                    stop_loss = round(fractal_support - (atr_15m * 1.0), 6)
+                    stop_loss = round(min(fractal_support, last_candle['low']) - stop_offset, 6)
                     risk = current_price - stop_loss
                     target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
@@ -321,7 +321,7 @@ async def analyze_market(symbol):
 
             if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short and has_not_broken_resistance and has_upper_wick:
                 if fractal_resistance and abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
-                    stop_loss = round(fractal_resistance + (atr_15m * 1.0), 6)
+                    stop_loss = round(max(fractal_resistance, last_candle['high']) + stop_offset, 6)
                     risk = stop_loss - current_price
                     target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
@@ -351,7 +351,7 @@ async def analyze_market(symbol):
                 has_upper_wick_range = last_upper_wick >= (candle_range * 0.4) if candle_range > 0 else False
                 
                 if recent_tests >= 2 and has_upper_wick_range:
-                    stop_loss = round(max_85_high + (atr_15m * 1.0), 6)
+                    stop_loss = round(max(max_85_high, last_candle['high']) + stop_offset, 6)
                     risk = stop_loss - current_price
                     fractal_support = find_last_fractal(closed_candles, fractal_type='low')
                     target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3
@@ -375,7 +375,7 @@ async def analyze_market(symbol):
                 has_lower_wick_range = last_lower_wick >= (candle_range * 0.4) if candle_range > 0 else False
                 
                 if recent_tests >= 2 and has_lower_wick_range:
-                    stop_loss = round(min_85_low - (atr_15m * 1.0), 6)
+                    stop_loss = round(min(min_85_low, last_candle['low']) - stop_offset, 6)
                     risk = current_price - stop_loss
                     fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
                     target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3
