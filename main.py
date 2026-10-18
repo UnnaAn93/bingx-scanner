@@ -823,36 +823,44 @@ async def main_scanner():
             # Виводимо розширену статистику в логи Render
             print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count} | Зібрано причин: {len(skipped_reasons)}", flush=True)
 
-            # Звіт по відсіяних монетах відправляється після перевірки всього списку
+            # Звіт по відсіяних монетах (фільтруємо масовий об'єм і залишаємо лише деталі по інших умовах)
             if skipped_reasons:
-                print(f"[INFO] Словник skipped_reasons містить {len(skipped_reasons)} категорій причин.", flush=True)
-                full_report = "📊 Звіт сканування (Відсіяні монети):\n\n"
-                
-                for reason_text, syms in skipped_reasons.items():
-                    symbols_str = ", ".join(syms)
-                    full_report += f"▪️ {reason_text} ({len(syms)} шт.):\n {symbols_str}\n\n"
-                
-                # Розбиваємо повідомлення на частини, якщо воно довшим за 3500 символів
-                MAX_LEN = 3500
-                chunks = []
-                while len(full_report) > MAX_LEN:
-                    # Шукаємо останній перенос рядка в межах ліміту, щоб не розривати текст посередині
-                    split_idx = full_report.rfind('\n\n', 0, MAX_LEN)
-                    if split_idx == -1:
-                        split_idx = MAX_LEN
-                    chunks.append(full_report[:split_idx])
-                    full_report = full_report[split_idx:].lstrip()
-                if full_report:
-                    chunks.append(full_report)
+                # Виключаємо категорію відсутності хвилинного об'єму звітів
+                filtered_reasons = {
+                    reason: syms for reason, syms in skipped_reasons.items() 
+                    if "Немає сплеску об'єму на 1m" not in reason
+                }
 
-                try:
-                    print(f"[INFO] Надсилаємо звіт у Telegram (частин: {len(chunks)})...", flush=True)
-                    for chunk in chunks:
-                        await send_telegram(chunk)
-                        await asyncio.sleep(0.5)  # Невелика пауза між частинами
-                    print("[INFO] Усі частини звіту успішно надіслано в Telegram!", flush=True)
-                except Exception as e:
-                    print(f"[ERROR] Помилка надсилання звіту в Telegram: {e}", flush=True)
+                if filtered_reasons:
+                    print(f"[INFO] Сформовано детальний звіт (категорій: {len(filtered_reasons)}).", flush=True)
+                    full_report = "📊 Детальний звіт сканування (Фільтри умов):\n\n"
+                    
+                    for reason_text, syms in filtered_reasons.items():
+                        symbols_str = ", ".join(syms)
+                        full_report += f"▪️ {reason_text} ({len(syms)} шт.):\n {symbols_str}\n\n"
+                    
+                    # Розбиваємо на частини при потребі
+                    MAX_LEN = 3500
+                    chunks = []
+                    while len(full_report) > MAX_LEN:
+                        split_idx = full_report.rfind('\n\n', 0, MAX_LEN)
+                        if split_idx == -1:
+                            split_idx = MAX_LEN
+                        chunks.append(full_report[:split_idx])
+                        full_report = full_report[split_idx:].lstrip()
+                    if full_report:
+                        chunks.append(full_report)
+
+                    try:
+                        print(f"[INFO] Надсилаємо детальний звіт у Telegram (частин: {len(chunks)})...", flush=True)
+                        for chunk in chunks:
+                            await send_telegram(chunk)
+                            await asyncio.sleep(0.5)
+                        print("[INFO] Детальний звіт успішно надіслано в Telegram!", flush=True)
+                    except Exception as e:
+                        print(f"[ERROR] Помилка надсилання звіту в Telegram: {e}", flush=True)
+                else:
+                    print("[INFO] Окрім об'єму інших відсіювань немає, звіт пропущено.", flush=True)
             else:
                 print("[INFO] Словник skipped_reasons порожній.", flush=True)
 
