@@ -257,7 +257,7 @@ def count_recent_tests(candles_last_15, level_price, threshold, test_type="resis
                 tests += 1
     return tests
 
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Суворо за вашими оновленими правилами) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Повна фінальна логіка) ---
 async def analyze_market(symbol):
     try:
         # Завантажуємо 15м дані для основного аналізу
@@ -312,7 +312,7 @@ async def analyze_market(symbol):
         if is_flat_market:
             zone_threshold = atr_15m * 0.35
             
-            # 1. Аналіз об'єму: за 15 свічок на 1 хвилині сплеск об'ємів має бути х2
+            # Аналіз об'єму: за 15 свічок на 1 хвилині сплеск об'ємів має бути х2
             has_double_volume = avg_volume_1m > 0 and recent_1m_volume >= (avg_volume_1m * 2.0)
             if not has_double_volume:
                 return None, "Флет: немає сплеску об'єму х2 за 15 свічок на 1хв"
@@ -448,20 +448,23 @@ async def analyze_market(symbol):
 
         # 2.3 НИЗХІДНИЙ ТРЕНД
         if current_price < ema_50:
-            is_bearish_fractals = (
-                (lows_struct[1] < lows_struct[0] if len(lows_struct) == 2 else True) and
-                (highs_struct[1] < highs_struct[0] if len(highs_struct) == 2 else True)
+            is_bearish_structure = (
+                (lows_struct[1] < lows_struct[0] if len(lows_struct) == 2 else True) or
+                (last_candle['close'] < min([float(c['low']) for c in closed_candles[-10:-1]]))
             )
-            if not is_bearish_fractals:
-                return None, "Тренд шорт: фрактали не оновлюють мінімуми тілом свічки"
+            if not is_bearish_structure:
+                return None, "Тренд шорт: немає оновлення мінімумів"
+
+            if last_candle['close'] > ema_50:
+                return None, "Тренд шорт: пробиття та закріплення над EMA (перехід на висхідний тренд)"
 
             base_level = fractal_resistance if fractal_resistance else ema_50
+            zone_threshold = atr_15m * 0.5
             
-            if last_candle['close'] > base_level:
-                if last_candle['close'] > ema_50:
-                    return None, "Тренд шорт: пробиття та закріплення над EMA (перехід на висхідний тренд)"
-
-            entry_price = base_level - atr_15m
+            # Шукаємо вхід в шорт ЗВЕРХУ (біля зони опору / максимуму фрактала)
+            is_near_resistance_zone = current_price >= (base_level - zone_threshold)
+            if not is_near_resistance_zone:
+                return None, "Тренд шорт: ціна не біля зони опору/максумуму для ТВХ зверху"
 
             stop_loss = round(base_level + (atr_15m * 1.0), 6)
             risk = stop_loss - current_price
@@ -482,8 +485,6 @@ async def analyze_market(symbol):
         
     except Exception as e:
         return None, f"Помилка аналізу: {str(e)}"
-        
-            
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
