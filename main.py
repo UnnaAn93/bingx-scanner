@@ -239,9 +239,6 @@ async def analyze_market(symbol):
             'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])
         } for k in raw_15m]
         
-        long_reasons = []
-        short_reasons = []
-        
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
         current_price = klines_15m[-1]['close']
@@ -312,17 +309,6 @@ async def analyze_market(symbol):
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, True, "OK (15m Trend Bullish Fractal Support Long)")
-                    else:
-                        long_reasons.append("Трендовий лонг: співвідношення Р/Р < 1.3")
-                else:
-                    long_reasons.append("Трендовий лонг: занадто далеко від підтримки")
-            else:
-                if current_price <= ema_50: long_reasons.append("Трендовий лонг: ціна нижче EMA50")
-                if not (last_candle['open'] > last_candle['close']): long_reasons.append("Трендовий лонг: свічка не зелена")
-                if not is_bullish_structure: long_reasons.append("Трендовий лонг: структура не підтверджена")
-                if not has_room_for_long: long_reasons.append("Трендовий лонг: замало простору до опору")
-                if not has_not_broken_support: long_reasons.append("Трендовий лонг: пробито підтримку")
-                if not has_lower_wick: long_reasons.append("Трендовий лонг: немає нижньої тіні")
 
             # Низхідний тренд (тільки ШОРТ біля EMA та фрактала опору)
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
@@ -356,20 +342,6 @@ async def analyze_market(symbol):
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, True, "OK (15m Trend Bearish Fractal Resistance Short)")
-                    else:
-                        short_reasons.append("Трендовий шорт: співвідношення Р/Р < 1.3")
-                else:
-                    short_reasons.append("Трендовий шорт: занадто далеко від опору")
-            else:
-                if current_price >= ema_50: short_reasons.append("Трендовий шорт: ціна вище EMA50")
-                if not (last_candle['open'] < last_candle['close']): short_reasons.append("Трендовий шорт: свічка не червона")
-                if not is_bearish_structure: short_reasons.append("Трендовий шорт: структура не підтверджена")
-                if not has_room_for_short: short_reasons.append("Трендовий шорт: замало простору до підтримки")
-                if not has_not_broken_resistance: short_reasons.append("Трендовий шорт: пробито опір")
-                if not has_upper_wick: short_reasons.append("Трендовий шорт: немає верхньої тіні")
-        else:
-            long_reasons.append("Умови тренду не виконані (дистанція до EMA / об'єм / рух)")
-            short_reasons.append("Умови тренду не виконані (дистанція до EMA / об'єм / рух)")
 
         # ============= 2. ФЛЕТ / ДІАПАЗОН (15м біля EMA) ==============
         is_market_ranging = distance_to_ema <= (atr_15m * 2.5)
@@ -402,14 +374,10 @@ async def analyze_market(symbol):
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, True, "OK (15m Range Resistance Short)")
                     else:
-                        short_reasons.append("Флет шорт: Р/Р < 1.3")
+                        return None, True, "Флет шорт: співвідношення Р/Р < 1.3"
                 else:
-                    if recent_tests < 2: short_reasons.append(f"Флет шорт: тести рівня = {recent_tests} (потрібно >=2)")
-                    if not has_upper_wick_range: short_reasons.append("Флет шорт: немає верхньої тіні")
-            else:
-                if not is_near_resistance: short_reasons.append("Флет шорт: не біля опору")
-                if not has_spike_volume: short_reasons.append("Флет шорт: низький об'єм")
-
+                    return None, True, f"Флет шорт: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні"
+            
             # Лонг у флеті біля підтримки
             is_near_support = current_price <= (min_85_low + zone_threshold)
             if is_near_support and has_spike_volume:
@@ -434,23 +402,16 @@ async def analyze_market(symbol):
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                         }, True, "OK (15m Range Support Long)")
                     else:
-                        long_reasons.append("Флет лонг: Р/Р < 1.3")
+                        return None, True, "Флет лонг: співвідношення Р/Р < 1.3"
                 else:
-                    if recent_tests < 2: long_reasons.append(f"Флет лонг: тести рівня = {recent_tests} (потрібно >=2)")
-                    if not has_lower_wick_range: long_reasons.append("Флет лонг: немає нижньої тіні")
-            else:
-                if not is_near_support: long_reasons.append("Флет лонг: не біля підтримки")
-                if not has_spike_volume: long_reasons.append("Флет лонг: низький об'єм")
-        else:
-            long_reasons.append("Ринок поза умовами тренду/флету")
-            short_reasons.append("Ринок поза умовами тренду/флету")
+                    return None, True, f"Флет лонг: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні"
 
-        combined_reason = f"Long: {'; '.join(long_reasons)} | Short: {'; '.join(short_reasons)}"
-        return None, True, combined_reason
+        return None, True, "15m поза умовами тренду/флету"
         
     except Exception as e:
         return None, False, f"Помилка аналізу: {str(e)}"
-
+        
+        
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
     try:
@@ -496,6 +457,7 @@ async def open_position(setup):
 
         sl_side = "SELL" if setup['signal'] == "LONG" else "BUY"
 
+        # Стоп-лосс по маркуванню (MARK_PRICE)
         sl_payload = {
             "symbol": setup['symbol'],
             "side": sl_side,
@@ -511,6 +473,7 @@ async def open_position(setup):
             err_msg = sl_res.get("msg", "Unknown error") if isinstance(sl_res, dict) else "No response"
             await log_and_alert(f"ПОМИЛКА СТОП-ЛОСУ", f"Не вдалося виставити стоп: {err_msg}", setup['symbol'])
 
+        # Тейк-профіти по останній ціні (CONTRACT_PRICE)
         for i, (tp_price, tp_qty) in enumerate(zip((setup['tp1'], setup['tp2'], setup['tp3']), (qty_50, qty_25_1, qty_25_2)), 1):
             tp_payload = {
                 "symbol": setup['symbol'],
@@ -547,7 +510,6 @@ async def open_position(setup):
     except Exception as e:
         await log_and_alert("Помилка відкриття позиції", str(e), setup['symbol'])
         raise e
-        
 
 async def start_websocket_monitor():
     while True:
@@ -576,8 +538,7 @@ async def start_websocket_monitor():
         except Exception as e:
             print(f"[WS Помилка] Обрив з'єднання: {e}. Перепідключення через 5 сек...", flush=True)
             await asyncio.sleep(5)
-
-
+            
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
@@ -664,14 +625,13 @@ async def monitor_trades_loop():
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
 
                             sl_payload = {
-                                "symbol": symbol,
-                                "side": sl_side,
-                                "positionSide": side_val,
+                                "symbol": str(symbol),
+                                "side": str(sl_side),
+                                "positionSide": str(side_val),
                                 "type": "STOP_MARKET",
-                                "stopPrice": float(f"{entry_price:.6f}"),
-                                "quantity": float(current_qty),
+                                "stopPrice": str(round(entry_price, 6)),
+                                "quantity": str(round(current_qty, 6)),
                                 "workingType": "MARK_PRICE"
-        
                             }
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
                             if isinstance(res, dict) and res.get('code') != 0:
@@ -760,17 +720,11 @@ async def self_ping_loop():
                     print(f"[LOG WARN] Самопінг не вдався: {e}", flush=True)
 
 async def count_risk_positions():
-    """Рахує кількість активних позицій на біржі, у яких ціна ще не пройшла в безубиток (TP1 не спрацював)"""
+    """Рахує кількість активних позицій, які ЦЕ НЕ перенесені в безубиток (у яких є ризик)"""
     try:
-        positions = await get_exchange_positions()
-        open_positions = [p for p in positions if float(p.get('positionAmt', 0)) != 0]
-        
         risk_count = 0
-        for p in open_positions:
-            sym = p.get('symbol')
-            # Перевіряємо в локальному стані, чи спрацював tp1_hit
-            trade_data = active_trade_monitors.get(sym, {})
-            if not trade_data.get('tp1_hit', False):
+        for symbol, data in active_trade_monitors.items():
+            if not data.get('in_breakeven', False):
                 risk_count += 1
         return risk_count
     except Exception as e:
@@ -794,7 +748,6 @@ async def main_scanner():
             risk_pos_count = await count_risk_positions()
             print(f"[INFO] Кількість відкритих ризикових позицій: {risk_pos_count}", flush=True)
             if risk_pos_count >= MAX_RISK_POSITIONS:
-                print(f"[INFO] Ліміт ризикових позицій досягнуто ({risk_pos_count}/{MAX_RISK_POSITIONS}). Сканування призупинено.", flush=True)
                 await asyncio.sleep(30)
                 continue
 
@@ -822,15 +775,12 @@ async def main_scanner():
             open_pos = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in open_pos if float(p.get('positionAmt', 0)) != 0]
 
+            scanned_count = 0
+            volume_spikes_count = 0
+            signals_found = 0
             skipped_reasons = {}
 
             for symbol in symbols:
-                # Перевіряємо ліміт ризикових позицій прямо під час сканування
-                current_risk_count = await count_risk_positions()
-                if current_risk_count >= MAX_RISK_POSITIONS:
-                    print(f"[INFO] Ліміт ризикових позицій досягнуто під час сканування. Зупиняємо цикл.", flush=True)
-                    break
-
                 if symbol in active_symbols or is_blacklisted(symbol):
                     continue
 
@@ -841,6 +791,7 @@ async def main_scanner():
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
                     continue
 
+                scanned_count += 1
                 try:
                     res = await analyze_market(symbol)
                     if isinstance(res, tuple) and len(res) == 3:
@@ -849,17 +800,23 @@ async def main_scanner():
                         setup, has_spike = res, False
                         reason = "Невідома причина"
 
-                    if setup:
-                        await open_position(setup)
-                        break
-                    else:
-                        if reason:
+                    if has_spike:
+                        volume_spikes_count += 1
+                        if not setup:
                             if reason not in skipped_reasons:
                                 skipped_reasons[reason] = []
                             skipped_reasons[reason].append(symbol)
+
+                    if setup:
+                        signals_found += 1
+                        await open_position(setup)
+                        break  # Відкриваємо лише 1 позицію за цикл і виходимо
                 except Exception as e:
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
+
+            # Виводимо в логи кількість реально просканованих монет за цикл
+            print(f"[INFO] Цикл завершено. Проскановано монет: {scanned_count}", flush=True)
 
             if skipped_reasons:
                 report_msg = "🔍 **Звіт сканування (Відсіяні монети):**\n\n"
