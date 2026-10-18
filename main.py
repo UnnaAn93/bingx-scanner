@@ -826,10 +826,10 @@ async def main_scanner():
             # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
                 print(f"[INFO] Словник skipped_reasons містить {len(skipped_reasons)} категорій причин.", flush=True)
-                report_msg = "📊 **Звіт сканування (Відсіяні монети):**\n\n"
+                report_msg = "📊 Звіт сканування (Відсіяні монети):\n\n"
                 for reason_text, syms in skipped_reasons.items():
                     symbols_str = ", ".join([f"{s}" for s in syms])
-                    report_msg += f"▪️ **{reason_text}**:\n {symbols_str}\n\n"
+                    report_msg += f"▪️ {reason_text}:\n {symbols_str}\n\n"
                 
                 try:
                     print("[INFO] Надсилаємо звіт у Telegram...", flush=True)
@@ -839,7 +839,6 @@ async def main_scanner():
                     print(f"[ERROR] Помилка надсилання звіту в Telegram: {e}", flush=True)
             else:
                 print("[INFO] Словник skipped_reasons порожній.", flush=True)
-
 
         except Exception as e:
             log_and_alert("Помилка в головному циклі сканування", str(e))
