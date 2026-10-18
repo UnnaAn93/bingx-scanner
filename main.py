@@ -225,20 +225,44 @@ def count_recent_tests(candles_last_15, level_price, threshold, test_type="resis
 # --- ОСНОВНИЙ АНАЛІЗ РИНКУ ---
 async def analyze_market(symbol):
     try:
-        raw_15m = await get_klines(symbol, "15m", 120)
-        
-        if len(raw_15m) < 100:
-            return None, False, "Недостатньо історичних даних на 15м"
-            
+        raw_15m = await get_klines(symbol, "15m", 100)
+        raw_1m = await get_klines(symbol, "1m", 50)
+
+        if len(raw_15m) < 100 or len(raw_1m) < 30:
+            return None, False, "Недостатньо історичних даних"
+
         klines_15m = [{
-            'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
-            'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])
+            'time': k['time'],
+            'open': float(k['open']),
+            'high': float(k['high']),
+            'low': float(k['low']),
+            'close': float(k['close']),
+            'volume': float(k['volume'])
         } for k in raw_15m]
-        
+
+        klines_1m = [{
+            'time': k['time'],
+            'open': float(k['open']),
+            'high': float(k['high']),
+            'low': float(k['low']),
+            'close': float(k['close']),
+            'volume': float(k['volume'])
+        } for k in raw_1m]
+
+        # Крок 1: Перевірка сплеску об'єму на 1m за останні 10 свічок (x2 від середнього)
+        avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-30:-10]) / 20
+        has_volume_spike_1m = any(
+            float(x.get('volume', 0)) > avg_volume_1m * 2.0
+            for x in klines_1m[-10:]
+        )
+
+        if not has_volume_spike_1m:
+            return None, False, "Немає сплеску об'єму на 1m (< 2.0x за останні 10 свічок)"
+
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
         current_price = klines_15m[-1]['close']
-        
+
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
             
