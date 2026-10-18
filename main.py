@@ -257,7 +257,7 @@ def count_recent_tests(candles_last_15, level_price, threshold, test_type="resis
                 tests += 1
     return tests
 
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Повна фінальна логіка) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Виправлена робоча версія) ---
 async def analyze_market(symbol):
     try:
         # Завантажуємо 15м дані для основного аналізу
@@ -312,7 +312,6 @@ async def analyze_market(symbol):
         if is_flat_market:
             zone_threshold = atr_15m * 0.35
             
-            # Аналіз об'єму: за 15 свічок на 1 хвилині сплеск об'ємів має бути х2
             has_double_volume = avg_volume_1m > 0 and recent_1m_volume >= (avg_volume_1m * 2.0)
             if not has_double_volume:
                 return None, "Флет: немає сплеску об'єму х2 за 15 свічок на 1хв"
@@ -325,9 +324,8 @@ async def analyze_market(symbol):
                     return None, f"Флет шорт: тести зони = {recent_tests} (має бути > 2)"
                 
                 if last_candle['close'] > max_100_high:
-                    pass # Пробиття -> аналізуємо далі як висхідний тренд
+                    pass 
                 else:
-                    # Тіні тільки у флеті (зверху значно більше ніж знизу за останні 4 свічки)
                     upper_wicks_ok = True
                     for c in recent_4_candles:
                         c_rng = float(c['high']) - float(c['low'])
@@ -366,9 +364,8 @@ async def analyze_market(symbol):
                     return None, f"Флет лонг: тести зони = {recent_tests} (має бути > 2)"
                 
                 if last_candle['close'] < min_100_low:
-                    pass # Пробиття -> аналізуємо далі як низхідний тренд
+                    pass 
                 else:
-                    # Тіні тільки у флеті (знизу значно більше ніж зверху за останні 4 свічки)
                     lower_wicks_ok = True
                     for c in recent_4_candles:
                         c_rng = float(c['high']) - float(c['low'])
@@ -409,27 +406,22 @@ async def analyze_market(symbol):
         if not has_movement:
             return None, "Тренд: ціна відкриття дорівнює ціні закриття (open == close)"
 
-        fractal_support = find_last_fractal(closed_candles, fractal_type='low')
         fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
         highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
         lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
 
         # 2.2 ВИСХІДНИЙ ТРЕНД
         if current_price > ema_50:
-            is_bullish_fractals = (
-                (highs_struct[1] > highs_struct[0] if len(highs_struct) == 2 else True) and
-                (lows_struct[1] > lows_struct[0] if len(lows_struct) == 2 else True)
-            )
-            if not is_bullish_fractals:
-                return None, "Тренд лонг: фрактали не оновлюють максимуми тілом свічки"
+            is_bullish_structure = True
+            if len(highs_struct) >= 2 and highs_struct[1] < highs_struct[0]:
+                is_bullish_structure = False
 
-            base_level = fractal_support if fractal_support else ema_50
-            
-            if last_candle['close'] < base_level:
-                if last_candle['close'] < ema_50:
-                    return None, "Тренд лонг: пробиття та закріплення під EMA (перехід на низхідний тренд)"
+            if not is_bullish_structure:
+                return None, "Тренд лонг: фрактали не оновлюють максимуми висхідно"
 
-            entry_price = base_level + atr_15m
+            base_level = find_last_fractal(closed_candles, fractal_type='low') or ema_50
+            if last_candle['close'] < ema_50:
+                return None, "Тренд лонг: пробиття та закріплення під EMA (перехід на шорт)"
 
             stop_loss = round(base_level - (atr_15m * 1.0), 6)
             risk = current_price - stop_loss
@@ -448,23 +440,27 @@ async def analyze_market(symbol):
 
         # 2.3 НИЗХІДНИЙ ТРЕНД
         if current_price < ema_50:
-            is_bearish_structure = (
-                (lows_struct[1] < lows_struct[0] if len(lows_struct) == 2 else True) or
-                (last_candle['close'] < min([float(c['low']) for c in closed_candles[-10:-1]]))
-            )
+            # Перевірка оновлення мінімумів
+            recent_lows = [float(c['low']) for c in closed_candles[-10:]]
+            recent_closes = [float(c['close']) for c in closed_candles[-10:]]
+            is_bearish_structure = recent_closes[-1] <= min(recent_closes[:-1]) or recent_lows[-1] <= min(recent_lows[:-1])
+            
             if not is_bearish_structure:
                 return None, "Тренд шорт: немає оновлення мінімумів"
 
+            # Перевірка закріплення над EMA (перехід у лонг)
             if last_candle['close'] > ema_50:
                 return None, "Тренд шорт: пробиття та закріплення над EMA (перехід на висхідний тренд)"
 
+            # Базова зона для входу ЗВЕРХУ (опір фрактала або EMA)
             base_level = fractal_resistance if fractal_resistance else ema_50
-            zone_threshold = atr_15m * 0.5
+            zone_threshold = atr_15m * 0.7  # Допуск зони відкату до опору
+
+            # Перевірка: чи ціна робить відкат і знаходиться БІЛЯ зони опору/EMA зверху
+            is_near_resistance_zone = abs(current_price - base_level) <= zone_threshold or current_price >= (base_level - zone_threshold)
             
-            # Шукаємо вхід в шорт ЗВЕРХУ (біля зони опору / максимуму фрактала)
-            is_near_resistance_zone = current_price >= (base_level - zone_threshold)
             if not is_near_resistance_zone:
-                return None, "Тренд шорт: ціна не біля зони опору/максумуму для ТВХ зверху"
+                return None, "Тренд шорт: ціна не біля зони опору для ТВХ зверху (чекаємо відкат)"
 
             stop_loss = round(base_level + (atr_15m * 1.0), 6)
             risk = stop_loss - current_price
@@ -485,6 +481,7 @@ async def analyze_market(symbol):
         
     except Exception as e:
         return None, f"Помилка аналізу: {str(e)}"
+        
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
