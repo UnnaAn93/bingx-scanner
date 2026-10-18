@@ -269,15 +269,14 @@ async def analyze_market(symbol):
         avg_volume_20 = sum(volumes_20) / len(volumes_20)
         recent_volume = float(last_candle['volume'])
         
-        # ============= 1. ТРЕНДОВА ЛОГІКА (15м) ==============
         distance_to_ema = abs(current_price - ema_50)
-        has_stable_volume = recent_volume >= (avg_volume_20 * 0.8)
         candle_body = abs(last_candle['close'] - last_candle['open'])
         has_movement = candle_body >= (atr_15m * 0.1)
         
-        if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
+        # ============= 1. ТРЕНДОВА ЛОГІКА (15м) - Без жорстких вимог до сплесків об'єму =============
+        if distance_to_ema <= (atr_15m * 4.0) and has_movement:
             
-            # Висхідний тренд (тільки ЛОНГ біля EMA та фрактала підтримки)
+            # Висхідний тренд (ЛОНГ)
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
             highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
@@ -308,9 +307,9 @@ async def analyze_market(symbol):
                         return ({
                             "symbol": symbol, "signal": "LONG", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, True, "OK (15m Trend Bullish Fractal Support Long)")
+                        }, True, "OK (15m Trend Bullish Support Long)")
 
-            # Низхідний тренд (тільки ШОРТ біля EMA та фрактала опору)
+            # Низхідний тренд (ШОРТ)
             fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
             lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
@@ -341,9 +340,9 @@ async def analyze_market(symbol):
                         return ({
                             "symbol": symbol, "signal": "SHORT", "entry": current_price,
                             "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
-                        }, True, "OK (15m Trend Bearish Fractal Resistance Short)")
+                        }, True, "OK (15m Trend Bearish Resistance Short)")
 
-        # ============= 2. ФЛЕТ / ДІАПАЗОН (15м біля EMA) ==============
+        # ============= 2. ФЛЕТ / ДІАПАЗОН (15м біля EMA) =============
         is_market_ranging = distance_to_ema <= (atr_15m * 2.5)
         
         if is_market_ranging:
@@ -376,7 +375,7 @@ async def analyze_market(symbol):
                     else:
                         return None, True, "Флет шорт: співвідношення Р/Р < 1.3"
                 else:
-                    return None, True, f"Флет шорт: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні"
+                    return None, True, f"Флет шорт: тести = {recent_tests} (потрібно >=2), або немає тіні"
             
             # Лонг у флеті біля підтримки
             is_near_support = current_price <= (min_85_low + zone_threshold)
@@ -404,13 +403,12 @@ async def analyze_market(symbol):
                     else:
                         return None, True, "Флет лонг: співвідношення Р/Р < 1.3"
                 else:
-                    return None, True, f"Флет лонг: тести за 10 свічок = {recent_tests} (потрібно >=2), або немає тіні"
+                    return None, True, f"Флет лонг: тести = {recent_tests} (потрібно >=2), або немає тіні"
 
         return None, True, "15m поза умовами тренду/флету"
         
     except Exception as e:
         return None, False, f"Помилка аналізу: {str(e)}"
-        
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
