@@ -257,7 +257,7 @@ def count_recent_tests(candles_last_15, level_price, threshold, test_type="resis
                 tests += 1
     return tests
 
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Повна логіка за вашими умовами) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (Повна фінальна логіка за вашими ТЗ) ---
 async def analyze_market(symbol):
     try:
         # 1. Завантажуємо 15м дані для основного аналізу
@@ -327,9 +327,8 @@ async def analyze_market(symbol):
                 
                 # Якщо є пробиття рівня — аналізуємо далі як висхідний тренд
                 if last_candle['close'] > max_100_high:
-                    pass # Переходить нижче до трендового блоку лонг
+                    pass 
                 else:
-                    # Тінь зверху має бути значно більшою ніж знизу за останні 4 свічки
                     upper_wicks_ok = True
                     for c in recent_4_candles:
                         c_rng = float(c['high']) - float(c['low'])
@@ -340,7 +339,7 @@ async def analyze_market(symbol):
                                 upper_wicks_ok = False
                                 break
                     if not upper_wicks_ok:
-                        return None, "Флет шорт: верхня тінь недостатньо більша за нижню за останні 4 свічки"
+                        return None, "Флет шорт: зверху немає значно більшої тіні ніж знизу за останні 4 свічки"
                     
                     stop_loss = round(max_100_high + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
@@ -369,7 +368,7 @@ async def analyze_market(symbol):
                 
                 # Якщо є пробиття рівня — аналізуємо далі як низхідний тренд
                 if last_candle['close'] < min_100_low:
-                    pass # Переходить нижче до трендового блоку шорт
+                    pass 
                 else:
                     lower_wicks_ok = True
                     for c in recent_4_candles:
@@ -381,7 +380,7 @@ async def analyze_market(symbol):
                                 lower_wicks_ok = False
                                 break
                     if not lower_wicks_ok:
-                        return None, "Флет лонг: нижня тінь недостатньо більша за верхню за останні 4 свічки"
+                        return None, "Флет лонг: знизу немає значно більшої тіні ніж зверху за останні 4 свічки"
                     
                     stop_loss = round(min_100_low - (atr_15m * 1.0), 6)
                     risk = current_price - stop_loss
@@ -424,20 +423,26 @@ async def analyze_market(symbol):
             if not is_bullish_fractals:
                 return None, "Тренд лонг: фрактали не оновлюють висхідні максимуми тілом"
 
+            if last_candle['close'] < ema_50:
+                return None, "Тренд лонг: зафіксовано пробиття та закріплення під EMA (перехід у шорт)"
+
             base_level = fractal_support if fractal_support else ema_50
+            zone_threshold = atr_15m * 0.35
             
-            # Перевірка тіней (знизу тінь значно більша ніж зверху)
-            lower_wick_strong = True
-            for c in recent_4_candles:
-                c_rng = float(c['high']) - float(c['low'])
-                if c_rng > 0:
-                    u_w = c['high'] - max(c['open'], c['close'])
-                    l_w = min(c['open'], c['close']) - c['low']
-                    if l_w < (u_w * 1.5):
-                        lower_wick_strong = False
-                        break
-            if not lower_wick_strong:
-                return None, "Тренд лонг: знизу немає значно більшої тіні ніж зверху"
+            is_near_support_zone = abs(current_price - base_level) <= zone_threshold or current_price <= (base_level + zone_threshold)
+            
+            if is_near_support_zone:
+                lower_wick_strong = True
+                for c in recent_4_candles:
+                    c_rng = float(c['high']) - float(c['low'])
+                    if c_rng > 0:
+                        u_w = c['high'] - max(c['open'], c['close'])
+                        l_w = min(c['open'], c['close']) - c['low']
+                        if l_w < (u_w * 1.5):
+                            lower_wick_strong = False
+                            break
+                if not lower_wick_strong:
+                    return None, "Тренд лонг біля підтримки: знизу немає значно більшої тіні ніж зверху"
 
             stop_loss = round(base_level - (atr_15m * 1.0), 6)
             risk = current_price - stop_loss
@@ -463,20 +468,26 @@ async def analyze_market(symbol):
             if not is_bearish_fractals:
                 return None, "Тренд шорт: фрактали не оновлюють низхідні мінімуми тілом"
 
+            if last_candle['close'] > ema_50:
+                return None, "Тренд шорт: зафіксовано пробиття та закріплення над EMA (перехід у лонг)"
+
             base_level = fractal_resistance if fractal_resistance else ema_50
+            zone_threshold = atr_15m * 0.35
             
-            # Перевірка тіней (зверху тінь значно більша ніж знизу)
-            upper_wick_strong = True
-            for c in recent_4_candles:
-                c_rng = float(c['high']) - float(c['low'])
-                if c_rng > 0:
-                    u_w = c['high'] - max(c['open'], c['close'])
-                    l_w = min(c['open'], c['close']) - c['low']
-                    if u_w < (l_w * 1.5):
-                        upper_wick_strong = False
-                        break
-            if not upper_wick_strong:
-                return None, "Тренд шорт: зверху немає значно більшої тіні ніж знизу"
+            is_near_resistance_zone = abs(current_price - base_level) <= zone_threshold or current_price >= (base_level - zone_threshold)
+            
+            if is_near_resistance_zone:
+                upper_wick_strong = True
+                for c in recent_4_candles:
+                    c_rng = float(c['high']) - float(c['low'])
+                    if c_rng > 0:
+                        u_w = c['high'] - max(c['open'], c['close'])
+                        l_w = min(c['open'], c['close']) - c['low']
+                        if u_w < (l_w * 1.5):
+                            upper_wick_strong = False
+                            break
+                if not upper_wick_strong:
+                    return None, "Тренд шорт біля опору: зверху немає значно більшої тіні ніж знизу"
 
             stop_loss = round(base_level + (atr_15m * 1.0), 6)
             risk = stop_loss - current_price
@@ -497,7 +508,7 @@ async def analyze_market(symbol):
         
     except Exception as e:
         return None, f"Помилка аналізу: {str(e)}"
-        
+            
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ТА ВИСТАВЛЕННЯ 3 TP (50/25/25) ТА SL ---
 async def open_position(setup):
