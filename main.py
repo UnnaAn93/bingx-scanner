@@ -821,15 +821,21 @@ async def main_scanner():
                 scanned_count += 1
 
             # Виводимо розширену статистику в логи Render
-            print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count}", flush=True)
+            print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count} | Зібрано причин: {len(skipped_reasons)}", flush=True)
 
             # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
+                print(f"[INFO] Словник skipped_reasons містить {len(skipped_reasons)} категорій причин.", flush=True)
                 report_msg = "📊 **Звіт сканування (Відсіяні монети):**\n\n"
                 for reason_text, syms in skipped_reasons.items():
                     symbols_str = ", ".join([f"{s}" for s in syms])
                     report_msg += f"▪️ **{reason_text}**:\n {symbols_str}\n\n"
+                
                 await send_telegram(report_msg)
+                print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
+            else:
+                print("[WARN] Словник skipped_reasons виявився порожнім наприкінці циклу.", flush=True)
+
 
         except Exception as e:
             log_and_alert("Помилка в головному циклі сканування", str(e))
