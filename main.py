@@ -79,19 +79,8 @@ async def send_telegram(text):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Якщо повідомлення занадто велике, безпечно відправляємо його частинами, але це єдиний виклик звіту
-    if len(text) > 4000:
-        chunks = [text[i:i+3900] for i in range(0, len(text), 3900)]
-        for chunk in chunks:
-            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"}
-            async with aiohttp.ClientSession() as session:
-                try:
-                    async with session.post(url, json=payload, timeout=10) as resp:
-                        pass
-                except Exception as e:
-                    print(f"[LOG ERROR] Помилка відправки в Telegram: {e}", flush=True)
-            await asyncio.sleep(0.5)
-    else:
+    # Якщо текст вкладається в 4000 символів — відправляємо одразу
+    if len(text) <= 4000:
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
         async with aiohttp.ClientSession() as session:
             try:
@@ -99,6 +88,35 @@ async def send_telegram(text):
                     pass
             except Exception as e:
                 print(f"[LOG ERROR] Помилка відправки в Telegram: {e}", flush=True)
+        return
+
+    # Якщо текст занадто великий, акуратно ділимо його ПО РЯДКАХ (\n), щоб не ламати фразу
+    lines = text.split('\n')
+    current_chunk = ""
+    
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > 3900:
+            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": current_chunk, "parse_mode": "Markdown"}
+            async with aiohttp.ClientSession() as session:
+                try:
+                    async with session.post(url, json=payload, timeout=10) as resp:
+                        pass
+                except Exception as e:
+                    print(f"[LOG ERROR] Помилка відправки в Telegram: {e}", flush=True)
+            await asyncio.sleep(0.5)
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    if current_chunk.strip():
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": current_chunk, "parse_mode": "Markdown"}
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, json=payload, timeout=10) as resp:
+                    pass
+            except Exception as e:
+                print(f"[LOG ERROR] Помилка відправки в Telegram: {e}", flush=True)
+                
 
 async def log_and_alert(error_title, error_message, symbol=None):
     full_text = f"❌ *{error_title}*"
