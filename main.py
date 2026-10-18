@@ -720,10 +720,12 @@ async def main_scanner():
 
     while True:
         try:
-            print("🔄 Початок нового циклу сканування ринку...", flush=True)
-
+            print(f"🔄 Початок нового циклу сканування ринку...", flush=True)
+            
             risk_pos_count = await count_risk_positions()
             print(f"[INFO] Кількість відкритих ризикових позицій: {risk_pos_count}", flush=True)
+            
+            # Якщо ризикових позицій 2 або більше — чекаємо 1 хвилину і перевіряємо знову
             if risk_pos_count >= 2:
                 print(f"[INFO] Ліміт ризикових позицій вичерпано ({risk_pos_count}/2). Пауза 1 хвилина...", flush=True)
                 await asyncio.sleep(60)
@@ -787,15 +789,16 @@ async def main_scanner():
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
+            # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
-                report_msg = "🔍 **Звіт сканування (Відсіяні монети):**\n\n"
+                report_msg = "📊 **Звіт сканування (Відсіяні монети):**\n\n"
                 for reason_text, syms in skipped_reasons.items():
                     symbols_str = ", ".join([f"`{s}`" for s in syms])
-                    report_msg += f"• **{reason_text}**:\n  {symbols_str}\n\n"
+                    report_msg += f"• **{reason_text}**: \n {symbols_str}\n\n"
                 await send_telegram(report_msg)
 
         except Exception as e:
-            await log_and_alert("Помилка в головному циклі сканування", str(e))
+            log_and_alert("Помилка в головному циклі сканування", str(e))
 
         await asyncio.sleep(60)
 
@@ -804,3 +807,4 @@ if __name__ == "__main__":
         asyncio.run(main_scanner())
     except KeyboardInterrupt:
         print("[INFO] Бот зупинений користувачем.", flush=True)
+        
