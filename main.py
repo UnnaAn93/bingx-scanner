@@ -826,15 +826,31 @@ async def main_scanner():
             # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
                 print(f"[INFO] Словник skipped_reasons містить {len(skipped_reasons)} категорій причин.", flush=True)
-                report_msg = "📊 Звіт сканування (Відсіяні монети):\n\n"
-                for reason_text, syms in skipped_reasons.items():
-                    symbols_str = ", ".join([f"{s}" for s in syms])
-                    report_msg += f"▪️ {reason_text}:\n {symbols_str}\n\n"
+                full_report = "📊 Звіт сканування (Відсіяні монети):\n\n"
                 
+                for reason_text, syms in skipped_reasons.items():
+                    symbols_str = ", ".join(syms)
+                    full_report += f"▪️ {reason_text} ({len(syms)} шт.):\n {symbols_str}\n\n"
+                
+                # Розбиваємо повідомлення на частини, якщо воно довшим за 3500 символів
+                MAX_LEN = 3500
+                chunks = []
+                while len(full_report) > MAX_LEN:
+                    # Шукаємо останній перенос рядка в межах ліміту, щоб не розривати текст посередині
+                    split_idx = full_report.rfind('\n\n', 0, MAX_LEN)
+                    if split_idx == -1:
+                        split_idx = MAX_LEN
+                    chunks.append(full_report[:split_idx])
+                    full_report = full_report[split_idx:].lstrip()
+                if full_report:
+                    chunks.append(full_report)
+
                 try:
-                    print("[INFO] Надсилаємо звіт у Telegram...", flush=True)
-                    await send_telegram(report_msg)
-                    print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
+                    print(f"[INFO] Надсилаємо звіт у Telegram (частин: {len(chunks)})...", flush=True)
+                    for chunk in chunks:
+                        await send_telegram(chunk)
+                        await asyncio.sleep(0.5)  # Невелика пауза між частинами
+                    print("[INFO] Усі частини звіту успішно надіслано в Telegram!", flush=True)
                 except Exception as e:
                     print(f"[ERROR] Помилка надсилання звіту в Telegram: {e}", flush=True)
             else:
