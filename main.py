@@ -523,10 +523,10 @@ async def monitor_trades_loop():
                                     stop_price = float(ord_item.get('stopPrice', 0))
                                     
                                     # Перевірка для Лонга та Шорта (безубиток або плюс)
-                                    if pos_side == 'LONG' and stop_price >= entry_p:
+                                    if pos_side == 'LONG' and stop_price <= entry_p:
                                         is_be = True
                                         break
-                                    elif pos_side == 'SHORT' and stop_price <= entry_p:
+                                    elif pos_side == 'SHORT' and stop_price >= entry_p:
                                         is_be = True
                                         break
                         except Exception as ex:
