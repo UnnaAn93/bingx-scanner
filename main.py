@@ -733,7 +733,6 @@ async def count_risk_positions():
         print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
         return 0
         
-
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
     asyncio.create_task(monitor_trades_loop())
@@ -744,12 +743,12 @@ async def main_scanner():
 
     while True:
         try:
-            print(f"🔄 Початок нового циклу сканування ринку...", flush=True)
-            
+            print("Початок нового циклу сканування ринку...", flush=True)
+
             risk_pos_count = await count_risk_positions()
             print(f"[INFO] Кількість відкритих ризикових позицій: {risk_pos_count}", flush=True)
-            
-            # Якщо ризикових позицій 2 або більше — чекаємо 1 хвилину і перевіряємо знову
+
+            # Якщо ризикових позицій 2 або більше - чекаємо 1 хвилину і перевіряємо знову
             if risk_pos_count >= 2:
                 print(f"[INFO] Ліміт ризикових позицій вичерпано ({risk_pos_count}/2). Пауза 1 хвилина...", flush=True)
                 await asyncio.sleep(60)
@@ -781,6 +780,7 @@ async def main_scanner():
 
             skipped_reasons = {}
             scanned_count = 0
+            volume_passed_count = 0
 
             for symbol in symbols:
                 if symbol in active_symbols or is_blacklisted(symbol):
@@ -798,39 +798,44 @@ async def main_scanner():
                     if isinstance(res, tuple) and len(res) == 3:
                         setup, has_spike, reason = res
                     else:
-                        setup, has_spike = res, False
-                        reason = "Невідома причина"
+                        setup, has_spike, res_text = res, False, "Невідома примітка"
+                        reason = res_text
 
-                    if has_spike:
-                        if not setup:
-                            if reason not in skipped_reasons:
-                                skipped_reasons[reason] = []
-                            skipped_reasons[reason].append(symbol)
+                    # Якщо примітка НЕ пов'язана з відсутністю 1m об'єму, значить монета пройшла цей фільтр
+                    if "Немає сплеску об'єму на 1m" not in reason:
+                        volume_passed_count += 1
 
                     if setup:
                         await open_position(setup)
                         break
+                    else:
+                        if reason:
+                            if reason not in skipped_reasons:
+                                skipped_reasons[reason] = []
+                            skipped_reasons[reason].append(symbol)
+
                 except Exception as e:
                     coin_cooldowns[symbol] = time.time() + 300
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
-                scanned_count += 1  # Збільшуємо лічильник для кожної монети
+                scanned_count += 1
 
-            # Виводимо загальну кількість у логи Render
-            print(f"📊 [INFO] Сканування завершено. Перевірено монет: {scanned_count}", flush=True)
+            # Виводимо розширену статистику в логи Render
+            print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count}", flush=True)
 
             # Звіт по відсіяних монетах відправляється після перевірки всього списку
             if skipped_reasons:
                 report_msg = "📊 **Звіт сканування (Відсіяні монети):**\n\n"
                 for reason_text, syms in skipped_reasons.items():
-                    symbols_str = ", ".join([f"`{s}`" for s in syms])
-                    report_msg += f"• **{reason_text}**: \n {symbols_str}\n\n"
+                    symbols_str = ", ".join([f"{s}" for s in syms])
+                    report_msg += f"▪️ **{reason_text}**:\n {symbols_str}\n\n"
                 await send_telegram(report_msg)
 
         except Exception as e:
             log_and_alert("Помилка в головному циклі сканування", str(e))
 
         await asyncio.sleep(60)
+        
 
 if __name__ == "__main__":
     try:
