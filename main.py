@@ -724,8 +724,9 @@ async def main_scanner():
 
             risk_pos_count = await count_risk_positions()
             print(f"[INFO] Кількість відкритих ризикових позицій: {risk_pos_count}", flush=True)
-            if risk_pos_count >= MAX_RISK_POSITIONS:
-                await asyncio.sleep(30)
+            if risk_pos_count >= 2:
+                print(f"[INFO] Ліміт ризикових позицій вичерпано ({risk_pos_count}/2). Пауза 1 хвилина...", flush=True)
+                await asyncio.sleep(60)
                 continue
 
             tickers_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker')
