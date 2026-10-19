@@ -283,10 +283,16 @@ async def analyze_market(symbol):
         min_85_low = min(float(x['low']) for x in level_base_85)
 
         last_candle = closed_candles[-1]
-        last_lower_wick = min(last_candle['open'], last_candle['close']) - last_candle['low']
-        last_upper_wick = last_candle['high'] - max(last_candle['open'], last_candle['close'])
-        candle_range = float(last_candle['high']) - float(last_candle['low'])
-
+        # Беремо останні 4 свічки для перевірки ґнотів
+        last_4_candles = closed_candles[-4:]
+        has_required_lower_wick = any(
+            (min(c['open'], c['close']) - float(c['low'])) >= ((float(c['high']) - float(c['low'])) * 0.3)
+            for c in last_4_candles if (float(c['high']) - float(c['low'])) > 0
+        )
+        has_required_upper_wick = any(
+            (float(c['high']) - max(c['open'], c['close'])) >= ((float(c['high']) - float(c['low'])) * 0.3)
+            for c in last_4_candles if (float(c['high']) - float(c['low'])) > 0
+        )
         volumes_20 = [float(c['volume']) for c in closed_candles[-20:]]
         avg_volume_20 = sum(volumes_20) / len(volumes_20) if volumes_20 else 0
         recent_volume = float(last_candle['volume'])
@@ -313,8 +319,7 @@ async def analyze_market(symbol):
                 has_room_for_long = space_to_resistance >= (atr_15m * 1.0)
                 has_not_broken_support = last_candle['close'] >= fractal_support if fractal_support else True
 
-                has_lower_wick = last_lower_wick >= (candle_range * 0.3) if candle_range > 0 else False
-                if has_lower_wick and is_bullish_structure and has_room_for_long and has_not_broken_support:
+                if has_required_lower_wick and is_bullish_structure and has_room_for_long and has_not_broken_support:
                     is_near_support = fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5)
 
                     if is_near_support:
@@ -360,8 +365,7 @@ async def analyze_market(symbol):
                 has_room_for_short = space_to_support >= (atr_15m * 1.0)
                 has_not_broken_resistance = last_candle['close'] <= fractal_resistance if fractal_resistance else True
 
-                has_upper_wick = last_upper_wick >= (candle_range * 0.3) if candle_range > 0 else False
-                if has_upper_wick and is_bearish_structure and has_room_for_short and has_not_broken_resistance:
+                if has_required_upper_wick and is_bearish_structure and has_room_for_short and has_not_broken_resistance:
                     is_near_resistance = fractal_resistance and abs(current_price - fractal_resistance) <= (atr_15m * 1.5)
 
                     if is_near_resistance:
@@ -405,8 +409,10 @@ async def analyze_market(symbol):
             is_near_resistance = current_price >= (max_85_high - zone_threshold)
             if is_near_resistance and has_spike_volume:
                 recent_tests = count_recent_tests(recent_15_candles, max_85_high, zone_threshold, test_type="resistance")
-                has_upper_wick_range = last_upper_wick >= (candle_range * 0.4) if candle_range > 0 else False
-
+                has_upper_wick_range = any(
+                    (float(c['high']) - max(c['open'], c['close'])) >= ((float(c['high']) - float(c['low'])) * 0.4)
+                    for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
+                )
                 if recent_tests >= 2 and has_upper_wick_range:
                     entry_type = "Флет від опору"
                     stop_loss = round(max(max_85_high, last_candle['high']) + (atr_15m * 0.2), 6)
