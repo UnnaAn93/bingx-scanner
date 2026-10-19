@@ -624,11 +624,24 @@ async def monitor_trades_loop():
                                     if ord_id:
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
 
-                            entry_price = float(data.get('entry', current_pos_data.get('entryPrice', 0)))
-                            sl_side = "SELL" if side_val == "LONG" else "BUY"
-                            exact_qty = float(current_pos_data.get('positionAmt', current_qty))
-                            if exact_qty < 0:
-                                exact_qty = abs(exact_qty)
+                            
+                            # Отримуємо свіжі дані по позиції прямо з біржі перед перенесенням стопу
+                            pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
+                            pos_data_list = pos_res.get('data', []) if isinstance(pos_res, dict) else []
+        
+                            # Знаходимо точний залишок і ціну входу
+                            exact_qty = 0.0
+                            entry_price = float(data.get('entry', 0))
+        
+                            for p in pos_data_list:
+                                if float(p.get('positionAmt', 0)) != 0:
+                                    exact_qty = abs(float(p.get('positionAmt', 0)))
+                                    entry_price = float(p.get('entryPrice', entry_price))
+                                    break
+        
+                            if exact_qty == 0:
+                                exact_qty = abs(float(current_qty))  тощо, якщо біржа не віддала напряму
+
 
                             sl_payload = {
                                 "symbol": symbol,
