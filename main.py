@@ -521,7 +521,8 @@ async def open_position(setup):
             "in_breakeven": False, "tp1_hit": False, "tp2_hit": False, "tp3_hit": False, "atr": setup['atr']
         }
         save_trades_state(active_trade_monitors)
-
+        
+        entry_type_str = setup.get('entry_type', 'Стандартний')
         msg = (f"🚀 Відкрито позицію ({setup['signal']}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {setup['symbol']}\n"
                f"📌 Тип входу: {entry_type_str}\n"
