@@ -640,7 +640,7 @@ async def monitor_trades_loop():
                                     break
         
                             if exact_qty == 0:
-                                exact_qty = abs(float(current_qty))  тощо, якщо біржа не віддала напряму
+                                exact_qty = abs(float(current_qty))
 
 
                             sl_payload = {
