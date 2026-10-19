@@ -302,8 +302,8 @@ async def analyze_market(symbol):
         if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
 
             # Висхідний тренд (тільки ЛОНГ біля ЕМА та фрактала підтримки)
-            fractal_support = find_last_two_fractals(closed_candles, fractal_type='low')
-            fractal_resistance = find_last_two_fractals(closed_candles, fractal_type='high')
+            fractal_support = find_last_fractal(closed_candles, fractal_type='low')
+            fractal_resistance = find_last_fractal(closed_candles, fractal_type='high')
             highs_struct = find_last_two_fractals(closed_candles, fractal_type='high')
             lows_struct = find_last_two_fractals(closed_candles, fractal_type='low')
 
@@ -319,6 +319,8 @@ async def analyze_market(symbol):
             if current_price > ema_50 and last_candle['open'] > last_candle['close'] and is_bullish_structure and has_room_for_long and has_not_broken_support:
                 if fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5):
                     stop_loss = round(min(fractal_support, last_candle['low']) - stop_offset, 6)
+                else:
+                    stop_loss = round(ema_50 - (atr_15m * 1.5), 6)
                     risk = current_price - stop_loss
                     target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
@@ -356,6 +358,8 @@ async def analyze_market(symbol):
             if current_price < ema_50 and last_candle['open'] < last_candle['close'] and is_bearish_structure and has_room_for_short and has_not_broken_resistance:
                 if fractal_resistance and abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
                     stop_loss = round(max(fractal_resistance, last_candle['high']) + stop_offset, 6)
+                else:
+                    stop_loss = round(ema_50 + (atr_15m * 1.5), 6)
                     risk = stop_loss - current_price
                     target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
