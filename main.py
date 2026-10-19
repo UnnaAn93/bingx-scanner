@@ -274,7 +274,7 @@ async def analyze_market(symbol):
                         if not has_long_shadow_dominance(last_candle):
                             return None, False, "Тренд немає тіні"
                 
-                # Розрахунок SL, TP та RR за шаблоном з попереднього скрипта[span_2](start_span)[span_2](end_span)
+                # Розрахунок SL, TP та RR за шаблоном з попереднього скрипта
                 stop_loss = round(ema_50 - (atr_15m * 1.5), 6)
                 if fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5):
                     stop_loss = round(min(fractal_support, last_candle['low']) - 0.00001, 6)
