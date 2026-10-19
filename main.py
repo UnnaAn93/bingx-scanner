@@ -661,8 +661,8 @@ async def monitor_trades_loop():
         
                             if exact_qty == 0:
                                 exact_qty = abs(float(current_qty))
-
-
+                             # Визначаємо сторона стоп-ордера (для LONG це SELL, для SHORT це BUY)
+                            sl_side = "SELL" if side_val == "LONG" else "BUY"
                             sl_payload = {
                                 "symbol": symbol,
                                 "side": sl_side,
