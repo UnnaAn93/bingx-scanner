@@ -399,8 +399,8 @@ async def analyze_market(symbol):
                 return None, False, "Флет лонг: R:R < 1.3"
         else:
             # Ціна посередині флету — повертаємо None, щоб монета не захаращувала звіт
-            return None, False, None
-
+            return None, False, ""
+            
     except Exception as e:
         return None, False, f"Помилка аналізу: {str(e)}"
         
