@@ -524,6 +524,7 @@ async def open_position(setup):
 
         msg = (f"🚀 Відкрито позицію ({setup['signal']}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {setup['symbol']}\n"
+               f"📌 Тип входу: {entry_type_str}\n"
                f"📍 Вхід: {setup['entry']:.6f}\n"
                f"🛑 Стоп: {setup['stop_loss']:.6f}\n"
                f"🎯 TP1 (50%): {setup['tp1']:.6f}\n"
