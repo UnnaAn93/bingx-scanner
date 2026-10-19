@@ -258,7 +258,7 @@ async def analyze_market(symbol):
         vol_1m_recent = df_1m['volume'].iloc[-10:]
         avg_vol_1m = vol_1m_recent.mean()
         current_vol_1m = df_1m['volume'].iloc[-1]
-        has_trend_volume = current_vol_1m >= (avg_vol_1m * 1.1)
+        has_trend_volume = current_vol_1m >= (avg_vol_1m * 1.5)
 
         if has_trend_volume:
             fractal_support = find_last_fractal(raw_15m, fractal_type='low')
