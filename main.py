@@ -806,7 +806,7 @@ async def main_scanner():
                         await open_position(setup)
                         break
                     else:
-                        if reason:
+                        if reason and isinstance(reason, str) and reason.strip():
                             if reason not in skipped_reasons:
                                 skipped_reasons[reason] = []
                             skipped_reasons[reason].append(symbol)
