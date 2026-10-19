@@ -324,7 +324,7 @@ async def analyze_market(symbol):
 
                     if is_near_support:
                         entry_type = "Від підтримки"
-                        stop_loss = round(min(last_candle['low'], fractal_support) - (atr_15m * 0.3), 6)
+                        stop_loss = round(min(last_candle['low'], fractal_support) - (atr_15m * 1.0), 6)
                         target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3.0
                         tp1_distance = target_by_resistance * 0.8 if fractal_resistance else atr_15m * 2.0
                         tp1 = round(current_price + tp1_distance, 6)
@@ -370,7 +370,7 @@ async def analyze_market(symbol):
 
                     if is_near_resistance:
                         entry_type = "Від опору"
-                        stop_loss = round(max(last_candle['high'], fractal_resistance) + (atr_15m * 0.3), 6)
+                        stop_loss = round(max(last_candle['high'], fractal_resistance) + (atr_15m * 1.0), 6)
                         target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3.0
                         tp1_distance = target_by_support * 0.8 if fractal_support else atr_15m * 2.0
                         tp1 = round(current_price - tp1_distance, 6)
@@ -415,7 +415,7 @@ async def analyze_market(symbol):
                 )
                 if recent_tests >= 2 and has_upper_wick_range:
                     entry_type = "Флет від опору"
-                    stop_loss = round(max(max_85_high, last_candle['high']) + (atr_15m * 0.2), 6)
+                    stop_loss = round(max(max_85_high, last_candle['high']) + (atr_15m * 1.0), 6)
                     risk = stop_loss - current_price
 
                     fractal_support_list = find_last_two_fractals(closed_candles, fractal_type='low')
