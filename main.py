@@ -860,7 +860,7 @@ async def main_scanner():
                 # Виключаємо категорію відсутності хвилинного об'єму звітів
                 filtered_reasons = {
                     reason: syms for reason, syms in skipped_reasons.items() 
-                    if "Немає сплеску об'єму на 1m" not in reason
+                    if "об'єм" not in reason.lower()
                 }
 
                 if filtered_reasons:
