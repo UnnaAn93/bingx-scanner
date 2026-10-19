@@ -406,6 +406,7 @@ async def analyze_market(symbol):
             zone_threshold = atr_15m * 0.35
             has_spike_volume = recent_volume >= (avg_volume_20 * 1.2)
 
+            # --- 1) ФЛЕТ ШОРТ (ВІД ОПОРУ) ---
             is_near_resistance = current_price >= (max_85_high - zone_threshold)
             if is_near_resistance and has_spike_volume:
                 recent_tests = count_recent_tests(recent_15_candles, max_85_high, zone_threshold, test_type="resistance")
@@ -413,6 +414,7 @@ async def analyze_market(symbol):
                     (float(c['high']) - max(c['open'], c['close'])) >= ((float(c['high']) - float(c['low'])) * 0.4)
                     for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
                 )
+
                 if recent_tests >= 2 and has_upper_wick_range:
                     entry_type = "Флет від опору"
                     stop_loss = round(max(max_85_high, last_candle['high']) + (atr_15m * 1.0), 6)
@@ -437,11 +439,45 @@ async def analyze_market(symbol):
                         return None, True, "Флет шорт: R:R < 1.3"
                 else:
                     return None, True, "Флет шорт: мало тестів рівня або немає верхнього ґнота"
-            else:
-                return None, True, "Флет: ціна не біля опору або немає об'єму для шорта"
+
+            # --- 2) ФЛЕТ ЛОНГ (ВІД ПІДТРИМКИ) ---
+            is_near_support = current_price <= (min_85_low + zone_threshold)
+            if is_near_support and has_spike_volume:
+                recent_tests = count_recent_tests(recent_15_candles, min_85_low, zone_threshold, test_type="support")
+                has_lower_wick_range = any(
+                    (min(c['open'], c['close']) - float(c['low'])) >= ((float(c['high']) - float(c['low'])) * 0.4)
+                    for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
+                )
+
+                if recent_tests >= 2 and has_lower_wick_range:
+                    entry_type = "Флет від підтримки"
+                    stop_loss = round(min(min_85_low, last_candle['low']) - (atr_15m * 1.0), 6)
+                    risk = current_price - stop_loss
+
+                    fractal_resistance_list = find_last_two_fractals(closed_candles, fractal_type='high')
+                    target_by_resistance = (fractal_resistance_list[0] - current_price) if fractal_resistance_list else atr_15m * 3.0
+                    tp1_distance = target_by_resistance * 0.8 if fractal_resistance_list else atr_15m * 2.0
+
+                    tp1 = round(current_price + tp1_distance, 6)
+                    tp2 = round(tp1 + (atr_15m * 2.0), 6)
+                    tp3 = round(tp2 + (atr_15m * 2.0), 6)
+                    reward = tp1 - current_price
+
+                    if risk > 0 and (reward / risk) >= 1.3:
+                        return {
+                            "symbol": symbol, "signal": "LONG", "entry": current_price,
+                            "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                            "atr": atr_15m, "entry_type": entry_type
+                        }, True, f"OK (15m Range Support Long - {entry_type})"
+                    else:
+                        return None, True, "Флет лонг: R:R < 1.3"
+                else:
+                    return None, True, "Флет лонг: мало тестів рівня або немає нижнього ґнота"
+
+            return None, True, "Флет: ціна не біля меж діапазону або немає об'єму"
 
         return None, True, ""
-
+    
     except Exception as e:
         return None, True, f"Помилка аналізу: {str(e)}"
         
