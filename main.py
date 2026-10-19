@@ -743,7 +743,7 @@ async def count_risk_positions():
 async def main_scanner():
     asyncio.create_task(monitor_trades_loop())
     asyncio.create_task(report_loop())
-    asyncio.create_task(self_ping_loop())
+    #asyncio.create_task(self_ping_loop())
 
     threading.Thread(target=run_http_server, daemon=True).start()
 
