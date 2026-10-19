@@ -225,7 +225,7 @@ def count_recent_tests(candles_last_15, level_price, threshold, test_type="resis
 # --- ОСНОВНИЙ АНАЛІЗ РИНКУ ---
 async def analyze_market(symbol):
     try:
-        # Отримуємо дані: 100 свічок на 15м та 50 свічок на 1хв
+        # Отримуємо дані: 100 свічок на 15м та 50 свічок на 1м
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1m = await get_klines(symbol, "1m", 50)
         
@@ -240,16 +240,7 @@ async def analyze_market(symbol):
         atr_15m = calculate_atr(df_15m)
         last_candle = df_15m.iloc[-1]
         
-        # ----------------------------------------------------
-        # 1. АНАЛІЗ ТРЕНДУ
-        # ----------------------------------------------------
-        vol_1m_recent = df_1m['volume'].iloc[-10:]
-        avg_vol_1m = vol_1m_recent.mean()
-        current_vol_1m = df_1m['volume'].iloc[-1]
-        
-        has_trend_volume = current_vol_1m >= (avg_vol_1m * 1.1)
-        
-        # Фільтр відстані до EMA (не більше ніж ATR * 6)
+        # 1. Загальний попередній фільтр відстані до EMA
         distance_to_ema = abs(current_price - ema_50)
         if distance_to_ema > (atr_15m * 6.0):
             return None, False, "Далеко від ема"
@@ -258,30 +249,42 @@ async def analyze_market(symbol):
         if last_candle['open'] == last_candle['close']:
             return None, False, "Тренд немає руху (open == close)"
 
+        # Визначаємо тренд чи флет за EMA та базовими умовами
         is_uptrend = current_price > ema_50
         
+        # ----------------------------------------------------
+        # ПЕРЕВІРКА ОБ'ЄМУ ДЛЯ ТРЕНДУ (1м тф * 1.1 за останні 10 свічок)
+        # ----------------------------------------------------
+        vol_1m_recent = df_1m['volume'].iloc[-10:]
+        avg_vol_1m = vol_1m_recent.mean()
+        current_vol_1m = df_1m['volume'].iloc[-1]
+        has_trend_volume = current_vol_1m >= (avg_vol_1m * 1.1)
+
         if has_trend_volume:
+            fractal_support = find_last_fractal(raw_15m, fractal_type='low')
+            fractal_resistance = find_last_fractal(raw_15m, fractal_type='high')
+            
             if is_uptrend:
-                # 1.2 Висхідний тренд (Лонг)
-                fractal_support = find_last_fractal(df_15m, fractal_type='low')
-                fractal_resistance = find_last_fractal(df_15m, fractal_type='high')
-                
-                # Перевірка пробиття та тіней
+                # 1.2 Висхідний тренд
+                # Перевірка пробиття фрактала вниз та закріплення під EMA
                 if check_breakdown_below_fractal(df_15m):
                     if check_ema_breakdown_down(df_15m, ema_50):
-                        return None, False, "Тренд пробиття фрактала/ема чекаємо закріплення під ема"
+                        return None, False, "Тренд пробиття фрактала/ема очкіємо закріплення під ема"
                     else:
-                        if not has_long_shadow_dominance(last_candle):
-                            return None, False, "Тренд немає тіні"
+                        # Якщо немає пробиття EMA, шукаємо ТВХ для лонгів (нижня тінь значно більша за верхню)
+                        lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
+                        upper_shadow = last_candle['high'] - max(last_candle['open'], last_candle['close'])
+                        if not (lower_shadow > upper_shadow * 2):
+                            return None, False, "Тренер немає тіні"
                 
-                # Розрахунок SL, TP та RR за шаблоном з попереднього скрипта
-                stop_loss = round(ema_50 - (atr_15m * 1.5), 6)
+                # Розрахунок SL, TP та RR
+                stop_loss = round(ema_50 - (atr_15m * 1.0), 6)
                 if fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5):
-                    stop_loss = round(min(fractal_support, last_candle['low']) - 0.00001, 6)
+                    stop_loss = round(fractal_support - atr_15m, 6)
                 
                 risk = current_price - stop_loss
                 target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3
-                tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
+                tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 1.0)
                 
                 tp1 = round(current_price + tp1_distance, 6)
                 tp2 = round(tp1 + (atr_15m * 2.0), 6)
@@ -294,28 +297,25 @@ async def analyze_market(symbol):
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                     }, True, "OK (Trend Bullish)")
                 else:
-                    return None, True, "Тренд лонг: R:R < 1.3"
-                    
+                    return None, False, "Тренд лонг: R:R < 1.3"
             else:
-                # 1.3 Низхідний тренд (Шорт)
-                fractal_support = find_last_fractal(df_15m, fractal_type='low')
-                fractal_resistance = find_last_fractal(df_15m, fractal_type='high')
-                
-                if check_breakout_above_fractal(df_15m):
+                # 1.3 Низхідний тренд
+                if check_breakdown_above_fractal(df_15m):
                     if check_ema_breakdown_up(df_15m, ema_50):
                         return None, False, "Тренд пробиття фрактала/ема чекаємо закріплення над ема"
                     else:
-                        if not has_short_shadow_dominance(last_candle):
-                            return None, False, "Тренд немає тіні"
+                        upper_shadow = last_candle['high'] - max(last_candle['open'], last_candle['close'])
+                        lower_shadow = min(last_candle['open'], last_candle['close']) - last_candle['low']
+                        if not (upper_shadow > lower_shadow * 2):
+                            return None, False, "Тренер немає тіні"
 
-                # Розрахунок SL, TP та RR за шаблоном з попереднього скрипта[span_3](start_span)[span_3](end_span)
-                stop_loss = round(ema_50 + (atr_15m * 1.5), 6)
+                stop_loss = round(ema_50 + (atr_15m * 1.0), 6)
                 if fractal_resistance and abs(current_price - fractal_resistance) <= (atr_15m * 1.5):
-                    stop_loss = round(max(fractal_resistance, last_candle['high']) + 0.00001, 6)
+                    stop_loss = round(fractal_resistance + atr_15m, 6)
                 
                 risk = stop_loss - current_price
                 target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3
-                tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
+                tp1_distance = max(target_by_support - atr_15m, atr_15m * 1.0)
                 
                 tp1 = round(current_price - tp1_distance, 6)
                 tp2 = round(tp1 - (atr_15m * 2.0), 6)
@@ -328,10 +328,10 @@ async def analyze_market(symbol):
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                     }, True, "OK (Trend Bearish)")
                 else:
-                    return None, True, "Тренд шорт: R:R < 1.3"
+                    return None, False, "Тренд шорт: R:R < 1.3"
 
         # ----------------------------------------------------
-        # 2. АНАЛІЗ ФЛЕТУ
+        # 2. АНАЛІЗ ФЛЕТУ (якщо трендового об'єму не було)
         # ----------------------------------------------------
         is_market_ranging = distance_to_ema <= (atr_15m * 2.5)
         if not is_market_ranging:
@@ -339,28 +339,28 @@ async def analyze_market(symbol):
 
         zone_threshold = atr_15m * 0.35
         
-        # Об'єм на 1хв: за 15 свічок сплеск має бути х2
-        vol_15_1m = df_1m['volume'].iloc[-15:]
-        avg_vol_flat = vol_15_1m.mean()
-        has_flat_volume_spike = current_vol_1m >= (avg_vol_flat * 2.0)
+        # 2.1 Об'єм на 1хв: за 16 свічок сплеск має бути х2
+        vol_16_1m = df_1m['volume'].iloc[-16:]
+        avg_vol_flat = vol_16_1m.mean()
+        current_vol_flat = df_1m['volume'].iloc[-1]
+        has_flat_volume_spike = current_vol_flat >= (avg_vol_flat * 2.0)
         
+        # Якщо немає об'ємів на 1хв — повертаємо вашу точну причину відсіювання
         if not has_flat_volume_spike:
-            return None, False, "Флет немає об'ємів"
+            return None, False, "флет немає об'ємів"
 
         max_85_high = df_15m['high'].iloc[-100:].max()
         min_85_low = df_15m['low'].iloc[-100:].min()
         
         # 2.2 Шорт біля опору
-        is_near_resistance = current_price >= (max_85_high - zone_threshold)
-        if is_near_resistance:
+        if current_price >= (max_85_high - zone_threshold):
             recent_tests = count_recent_tests(raw_15m, max_85_high, zone_threshold, test_type="resistance")
             if recent_tests < 2:
                 return None, False, "Флет торкання меньше 2"
             
-            # Розрахунок для флет-шорту за попереднім шаблоном[span_5](start_span)[span_5](end_span)
-            stop_loss = round(max(max_85_high, last_candle['high']) + 0.00001, 6)
+            stop_loss = round(max(max_85_high, last_candle['high']) + atr_15m, 6)
             risk = stop_loss - current_price
-            fractal_support = find_last_fractal(df_15m, fractal_type='low')
+            fractal_support = find_last_fractal(raw_15m, fractal_type='low')
             target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3
             tp1_distance = max(target_by_support - atr_15m, atr_15m * 2.0)
             
@@ -375,17 +375,17 @@ async def analyze_market(symbol):
                     "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                 }, True, "OK (Range Resistance Short)")
             else:
-                return None, True, "Флет шорт: R:R < 1.3"
+                return None, False, "Флет шорт: R:R < 1.3"
+
         # 2.3 Лонг біля підтримки
-        is_near_support = current_price <= (min_85_low + zone_threshold)
-        if is_near_support:
+        if current_price <= (min_85_low + zone_threshold):
             recent_tests = count_recent_tests(raw_15m, min_85_low, zone_threshold, test_type="support")
             if recent_tests < 2:
                 return None, False, "Флет торкання меньше 2"
                 
-            stop_loss = round(min(min_85_low, last_candle['low']) - 0.00001, 6)
+            stop_loss = round(min(min_85_low, last_candle['low']) - atr_15m, 6)
             risk = current_price - stop_loss
-            fractal_resistance = find_last_fractal(df_15m, fractal_type='high')
+            fractal_resistance = find_last_fractal(raw_15m, fractal_type='high')
             target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3
             tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 2.0)
             
@@ -400,13 +400,12 @@ async def analyze_market(symbol):
                     "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3, "atr": atr_15m
                 }, True, "OK (Range Support Long)")
             else:
-                return None, True, "Флет лонг: R:R < 1.3"
+                return None, False, "Флет лонг: R:R < 1.3"
 
         return None, False, "Умови не виконано"
         
     except Exception as e:
         return None, False, f"Помилка аналізу: {str(e)}"
-        
         
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ---
