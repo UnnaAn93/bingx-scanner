@@ -299,7 +299,7 @@ async def analyze_market(symbol):
         candle_body = abs(last_candle['close'] - last_candle['open'])
         has_movement = candle_body >= (atr_15m * 0.1)
 
-        if distance_to_ema <= (atr_15m * 4.0) and has_stable_volume and has_movement:
+        if distance_to_ema <= (atr_15m * 6.0) and has_stable_volume and has_movement:
 
             # Висхідний тренд (тільки ЛОНГ біля ЕМА та фрактала підтримки)
             fractal_support = find_last_fractal(closed_candles, fractal_type='low')
