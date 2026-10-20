@@ -825,11 +825,16 @@ async def main_scanner():
 
             tickers_res = await bingx_request('GET', '/openApi/swap/v2/quote/ticker')
             ticker_volumes = {}
+            ticker_price_changes = {}  # 👈 Додаємо словник для зміни ціни
             if tickers_res and isinstance(tickers_res, dict) and tickers_res.get('code') == 0:
                 for t in tickers_res.get("data", []):
                     sym = t.get("symbol")
                     q_vol = float(t.get("quoteVolume", 0) or t.get("volume", 0) or 0)
                     ticker_volumes[sym] = q_vol
+                    
+                    # Зберігаємо відсоток зміни ціни (у BingX ключ зазвичай називається priceChangePercent)
+                    p_change = float(t.get("priceChangePercent", 0) or 0)
+                    ticker_price_changes[sym] = p_change
 
             res = await bingx_request('GET', '/openApi/swap/v2/quote/contracts')
             if not res:
@@ -857,6 +862,11 @@ async def main_scanner():
 
                 vol_24h = ticker_volumes.get(symbol, 0)
                 if vol_24h > 0 and not (MIN_24H_VOLUME <= vol_24h <= MAX_24H_VOLUME):
+                    continue
+
+                # 👈 Фільтруємо «сплячі» монети, які майже не рухаються за добу (наприклад, менше 1.5% руху)
+                price_change = abs(ticker_price_changes.get(symbol, 0))
+                if price_change < 1.5:
                     continue
 
                 if symbol in coin_cooldowns and time.time() < coin_cooldowns[symbol]:
