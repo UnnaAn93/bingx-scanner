@@ -230,7 +230,7 @@ async def analyze_market(symbol):
         raw_1m = await get_klines(symbol, "1m", 20)
         raw_1h = await get_klines(symbol, "1h", 50)  # Тренд на 1 годині
         
-        if len(raw_15m) < 100 or len(raw_1m) < 20 or len(raw_1h) < 30:
+        if len(raw_15m) < 100 or len(raw_1m) < 20 or len(raw_1h) < 50:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
