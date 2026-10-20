@@ -306,7 +306,7 @@ async def analyze_market(symbol):
                     tp3 = round(tp2 + (atr_15m * 2.0), 6)
                 else:
                     entry_type = "Від EMA"
-                    stop_loss = round(ema_50_15m - (atr_15m * 1.0), 6)
+                    stop_loss = round(ema_50_15m - (atr_15m * 2.0), 6)
                     target_by_resistance = fractal_resistance - current_price if fractal_resistance else atr_15m * 3.0
                     tp1_distance = max(target_by_resistance - atr_15m, atr_15m * 0.5)
                     
@@ -360,7 +360,7 @@ async def analyze_market(symbol):
                     tp3 = round(tp2 - (atr_15m * 2.0), 6)
                 else:
                     entry_type = "Від EMA"
-                    stop_loss = round(ema_50_15m + (atr_15m * 1.0), 6)
+                    stop_loss = round(ema_50_15m + (atr_15m * 2.0), 6)
                     target_by_support = current_price - fractal_support if fractal_support else atr_15m * 3.0
                     tp1_distance = max(target_by_support - atr_15m, atr_15m * 0.5)
                     
