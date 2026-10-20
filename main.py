@@ -127,8 +127,11 @@ async def get_klines(symbol, interval, limit=100):
         try:
             async with session.get(url, timeout=10) as resp:
                 res = await resp.json()
-                if isinstance(res, dict) and res.get("code") == 0:
-                    return res.get("data", [])
+                if isinstance(res, dict):
+                    if res.get("code") == 0:
+                        return res.get("data", [])
+                    else:
+                        print(f"[API ERROR] Klines {symbol} resp: {res}", flush=True)
                 elif isinstance(res, list):
                     return res
         except Exception as e:
