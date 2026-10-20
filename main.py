@@ -273,7 +273,7 @@ async def analyze_market(symbol):
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
         distance_to_ema = abs(current_price - ema_50_15m)
-        is_market_ranging = distance_to_ema <= (atr_15m * 2.3)
+        is_market_ranging = False
 
         # Тіні тільки на закритих 4 свічках (closed_candles[-4:])
         has_required_lower_wick = any(
@@ -920,7 +920,7 @@ async def main_scanner():
                         full_report += f"▪️ {reason_text} ({len(syms)} шт.):\n {symbols_str}\n\n"
                     
                     # Розбиваємо на частини при потребі
-                    MAX_LEN = 1500
+                    MAX_LEN = 3500
                     chunks = []
                     while len(full_report) > MAX_LEN:
                         split_idx = full_report.rfind('\n\n', 0, MAX_LEN)
