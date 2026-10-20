@@ -230,7 +230,7 @@ async def analyze_market(symbol):
         raw_1m = await get_klines(symbol, "1m", 20)
         raw_1h = await get_klines(symbol, "1h", 30)  # Тренд на 1 годині
         
-        if len(raw_15m) < 100 or len(raw_1m) < 30 or len(raw_1h) < 30:
+        if len(raw_15m) < 100 or len(raw_1m) < 20 or len(raw_1h) < 30:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
@@ -241,7 +241,7 @@ async def analyze_market(symbol):
                       'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h]
 
         # 2. Об'єм на 1м за останні 10 свічок
-        avg_volume_ln = sum(float(x.get('volume', 0)) for x in klines_1m[-30:-10]) / 20
+        avg_volume_ln = sum(float(x.get('volume', 0)) for x in klines_1m[-20:-10]) / 10
         has_volume_spike_ln = any(
             float(x.get('volume', 0)) >= avg_volume_ln * 2.0
             for x in klines_1m[-10:]
