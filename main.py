@@ -920,7 +920,7 @@ async def main_scanner():
                         full_report += f"▪️ {reason_text} ({len(syms)} шт.):\n {symbols_str}\n\n"
                     
                     # Розбиваємо на частини при потребі
-                    MAX_LEN = 3500
+                    MAX_LEN = 1500
                     chunks = []
                     while len(full_report) > MAX_LEN:
                         split_idx = full_report.rfind('\n\n', 0, MAX_LEN)
