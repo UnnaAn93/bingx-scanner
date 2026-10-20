@@ -161,11 +161,12 @@ def calculate_atr(candles, period=14):
     return sum(tr_list[-period:]) / period
 
 def calculate_ema(candles, period=50):
-    if len(candles) < period:
+    if len(candles) < 20:
         return None
-    multiplier = 2 / (period + 1)
-    ema = sum(float(x['close']) for x in candles[:period]) / period
-    for i in range(period, len(candles)):
+    actual_period = min(period, len(candles))
+    multiplier = 2 / (actual_period + 1)
+    ema = sum(float(x['close']) for x in candles[:actual_period]) / actual_period
+    for i in range(actual_period, len(candles)):
         close = float(candles[i]['close'])
         ema = (close - ema) * multiplier + ema
     return ema
