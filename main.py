@@ -227,8 +227,8 @@ async def analyze_market(symbol):
     try:
         # 1. Завантаження даних з потрібних таймфреймів (15m, 1m, 1h)
         raw_15m = await get_klines(symbol, "15m", 100)
-        raw_1m = await get_klines(symbol, "1m", 50)
-        raw_1h = await get_klines(symbol, "1h", 50)  # Тренд на 1 годині
+        raw_1m = await get_klines(symbol, "1m", 20)
+        raw_1h = await get_klines(symbol, "1h", 30)  # Тренд на 1 годині
         
         if len(raw_15m) < 100 or len(raw_1m) < 30 or len(raw_1h) < 30:
             return None, False, "Недостатньо історичних даних"
