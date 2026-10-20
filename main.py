@@ -121,7 +121,7 @@ async def bingx_request(method, endpoint, params=None):
             await log_and_alert("Помилка запиту до API", str(e), endpoint)
             return None
 
-async def get_klines(symbol, interval, limit=40):
+async def get_klines(symbol, interval, limit=100):
     url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines?symbol={symbol}&interval={interval}&limit={limit}"
     async with aiohttp.ClientSession() as session:
         try:
@@ -228,9 +228,9 @@ async def analyze_market(symbol):
         # 1. Завантаження даних з потрібних таймфреймів (15m, 1m, 1h)
         raw_15m = await get_klines(symbol, "15m", 100)
         raw_1m = await get_klines(symbol, "1m", 20)
-        raw_1h = await get_klines(symbol, "1h", 50)  # Тренд на 1 годині
+        raw_1h = await get_klines(symbol, "1h", 60)  # Тренд на 1 годині
         
-        if len(raw_15m) < 100 or len(raw_1m) < 20 or len(raw_1h) < 50:
+        if len(raw_15m) < 100 or len(raw_1m) < 20 or len(raw_1h) < 60:
             return None, False, "Недостатньо історичних даних"
 
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 
