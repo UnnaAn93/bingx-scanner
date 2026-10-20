@@ -888,6 +888,7 @@ async def main_scanner():
                     print(f"[ERROR] Помилка аналізу {symbol}: {e}", flush=True)
 
                 scanned_count += 1
+                await asyncio.sleep(0.15)
 
             # Виводимо розширену статистику в логи Render
             print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count} | Зібрано причин: {len(skipped_reasons)}", flush=True)
