@@ -490,7 +490,7 @@ async def open_position(setup):
         await log_and_alert("Помилка відкриття позиції", str(e), setup['symbol'])
         raise e
 
-# --- МОНІТОРИНГ УГОД ---
+# --- МОНІТОРИНГ УГОД (виправлене відновлення) ---
 async def monitor_trades_loop():
     while True:
         try:
@@ -505,39 +505,21 @@ async def monitor_trades_loop():
                         entry_p = float(p.get('entryPrice', 0))
                         current_qty = abs(float(p.get('positionAmt', 0)))
                         
-                        is_be = False
-                        try:
-                            orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
-                            orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
-                            if isinstance(orders_list, dict):
-                                orders_list = orders_list.get('orders', [])
-                            
-                            for ord_item in orders_list:
-                                if ord_item.get('type') == 'STOP_MARKET':
-                                    stop_price = float(ord_item.get('stopPrice', 0))
-                                    if pos_side == 'LONG' and stop_price <= entry_p:
-                                        is_be = True
-                                        break
-                                    elif pos_side == 'SHORT' and stop_price >= entry_p:
-                                        is_be = True
-                                        break
-                        except Exception as ex:
-                            print(f"[INFO] Не вдалося перевірити стоп для {sym}: {ex}", flush=True)
-
+                        # Якщо позиції не було в пам'яті, за замовчуванням це новий/ризиковий стоп (НЕ в БУ)
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
-                            'stop_loss': entry_p if is_be else entry_p,
+                            'stop_loss': entry_p,
                             'initial_qty': current_qty,
-                            'in_breakeven': is_be,
-                            'tp1_hit': is_be,
+                            'in_breakeven': False,  # 👈 Нова позиція за замовчуванням ризикова
+                            'tp1_hit': False,
                             'tp2_hit': False,
                             'tp3_hit': False,
                             'side': pos_side,
                             'opp_volume_count': 0,
                             'last_opp_alert_time': 0
                         }
-                        print(f"[INFO] Відновлено позицію: {sym} (Стоп в БУ/плюсі: {is_be})", flush=True)
-                        
+                        save_trades_state(active_trade_monitors)
+                        print(f"[INFO] Відновлено позицію без історії у файлі: {sym} (Ризикова)", flush=True)
 
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
@@ -672,41 +654,23 @@ async def count_risk_positions():
             qty = float(p.get('positionAmt', 0))
             if qty != 0:
                 symbol = p['symbol']
-                pos_side = p.get('positionSide') or ('LONG' if qty > 0 else 'SHORT')
-                entry_p = float(p.get('entryPrice', 0))
-
+                
+                # Перевіряємо статус у нашому збереженому стані
                 if symbol in active_trade_monitors:
-                    if active_trade_monitors[symbol].get('in_breakeven', False):
-                        continue
-                    else:
-                        risk_count += 1
-                else:
-                    is_protected = False
-                    try:
-                        orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
-                        orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
-                        if isinstance(orders_list, dict):
-                            orders_list = orders_list.get('orders', [])
-                        
-                        for ord_item in orders_list:
-                            if ord_item.get('type') == 'STOP_MARKET':
-                                stop_price = float(ord_item.get('stopPrice', 0))
-                                if pos_side == 'LONG' and stop_price <= entry_p:
-                                    is_protected = True
-                                    break
-                                elif pos_side == 'SHORT' and stop_price >= entry_p:
-                                    is_protected = True
-                                    break
-                    except Exception:
-                        pass
-
-                    if not is_protected:
-                        risk_count += 1
+                    is_safe = active_trade_monitors[symbol].get('in_breakeven', False) or active_trade_monitors[symbol].get('tp1_hit', False)
+                    if is_safe:
+                        print(f"[INFO] Позиція {symbol} захищена (TP1 досягнуто / в БУ). Не рахується як ризик.", flush=True)
+                        continue  # Захищена, пропускаємо
+                
+                # Якщо позиції немає в пам'яті або вона ще не досягла TP1 — це ризикова позиція
+                risk_count += 1
+                print(f"[INFO] Позиція {symbol} вважається ризиковою.", flush=True)
 
         return risk_count
     except Exception as e:
         print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
         return 0
+        
 
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
