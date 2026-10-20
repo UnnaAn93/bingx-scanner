@@ -913,7 +913,7 @@ async def main_scanner():
 
                 if filtered_reasons:
                     print(f"[INFO] Сформовано детальний звіт (категорій: {len(filtered_reasons)}).", flush=True)
-                    full_report = "📊 Детальний звіт сканування (Фільтри умов):\n\n"
+                    full_report = f"📊 Детальний звіт сканування (Фільтри умов) [{time.strftime('%H:%M')}]:\n\n"
                     
                     for reason_text, syms in filtered_reasons.items():
                         symbols_str = ", ".join(syms)
