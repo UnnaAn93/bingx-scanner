@@ -257,13 +257,16 @@ async def analyze_market(symbol):
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
 
-        # Тіні тільки на закритих 4 свічках (closed_candles[-4:])
+        # Тіні: хоча б на одній із останніх 4 закритих свічок (closed_candles[-4:])
+        # Для лонгів: нижня тінь значно більша за верхню
         has_required_lower_wick = any(
-            (min(c['open'], c['close']) - float(c['low'])) >= ((float(c['high']) - float(c['low'])) * 0.3)
+            (min(c['open'], c['close']) - float(c['low'])) > (float(c['high']) - max(c['open'], c['close'])) * 2.5
             for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
         )
+        
+        # Для шортів: верхня тінь значно більша за нижню
         has_required_upper_wick = any(
-            (float(c['high']) - max(c['open'], c['close'])) >= ((float(c['high']) - float(c['low'])) * 0.3)
+            (float(c['high']) - max(c['open'], c['close'])) > (min(c['open'], c['close']) - float(c['low'])) * 2.5
             for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
         )
 
