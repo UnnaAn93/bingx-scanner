@@ -293,6 +293,7 @@ async def analyze_market(symbol):
             has_not_broken_support = last_candle['close'] >= fractal_support if fractal_support else True
 
             if has_required_lower_wick and is_bullish_structure and has_room_for_long and has_not_broken_support and has_stable_volume and has_movement:
+                and has_required_lower_wick
                 is_near_support = fractal_support and abs(current_price - fractal_support) <= (atr_15m * 1.5)
                 
                 if is_near_support:
@@ -347,6 +348,7 @@ async def analyze_market(symbol):
             has_not_broken_resistance = last_candle['close'] <= fractal_resistance if fractal_resistance else True
 
             if has_required_upper_wick and is_bearish_structure and has_room_for_short and has_not_broken_resistance and has_stable_volume and has_movement:
+                and has_required_upper_wick
                 is_near_resistance = fractal_resistance and abs(current_price - fractal_resistance) <= (atr_15m * 1.5)
                 
                 if is_near_resistance:
