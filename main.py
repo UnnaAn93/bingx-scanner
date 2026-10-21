@@ -768,10 +768,10 @@ async def main_scanner():
             print(f"[INFO] Сканування завершено. Перевірено монет: {scanned_count} | Пройшли 1m об'єм: {volume_passed_count} | Зібрано причин: {len(skipped_reasons)}", flush=True)
 
             if skipped_reasons:
-                filtered_reasons = {
-                    reason: syms for reason, syms in skipped_reasons.items() 
-                    if "об'єм" not in reason.lower()
-                }
+                filtered_reasons = {}
+                for reason, syms in skipped_reasons.items():
+                    if "об'єм" not in reason.lower() and "volume" not in reason.lower():
+                        filtered_reasons[reason] = syms
 
                 if filtered_reasons:
                     print(f"[INFO] Сформовано детальний звіт (категорій: {len(filtered_reasons)}).", flush=True)
