@@ -505,18 +505,24 @@ async def monitor_trades_loop():
                         entry_p = float(p.get('entryPrice', 0))
                         current_qty = abs(float(p.get('positionAmt', 0)))
                     
-                        # Перевіряємо біржу на наявність стопу в БУ
+                        # Перевіряємо біржу на наявність стопу в БУ за поточною ціною відносно входу
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
                             if isinstance(ord_res, dict) and ord_res.get('code') == 0:
                                 for o in ord_res.get('data', {}).get('orders', []):
                                     if o.get('type') == 'STOP_MARKET':
-                                        if abs(float(o.get('stopPrice', 0)) - entry_p) < 0.00001:
-                                            is_be = True
-                                            break
+                                        stop_price = float(o.get('stopPrice', 0))
+                                        if stop_price > 0:
+                                            if pos_side == 'LONG' and stop_price >= entry_p:
+                                                is_be = True
+                                                break
+                                            elif pos_side == 'SHORT' and stop_price <= entry_p:
+                                                is_be = True
+                                                break
                         except:
                             pass
+
 
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
