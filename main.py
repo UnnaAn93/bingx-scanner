@@ -587,26 +587,36 @@ async def monitor_trades_loop():
                 initial_qty = data['initial_qty']
                 side_val = str(data.get('side', 'LONG')).upper()
 
-                if current_qty < initial_qty:
-                    ratio = current_qty / initial_qty
+                # Перевірка виконання цілей TP1, TP2, TP3 відносно початкового об'єму
+                initial_full_qty = data.get('initial_full_qty')
+                if not initial_full_qty:
+                    # Зберігаємо первинний об'єм раз і назавжди при першому занку
+                    initial_full_qty = initial_qty
+                    data['initial_full_qty'] = initial_full_qty
+                    save_trades_state(active_trade_monitors)
 
+                if current_qty < initial_full_qty:
+                    ratio = current_qty / initial_full_qty
+
+                    # Перевіряємо TP3 (залишилося <= 5%)
                     if ratio <= 0.05 and not data.get('tp3_hit', False):
                         data['tp3_hit'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔥 **ТР3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
-                    elif ratio <= 0.30 and not data.get('tp2_hit', False):
+                        await send_telegram(f"🔥 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
+
+                    # Перевіряємо TP2 (залишилося <= 33%)
+                    if ratio <= 0.33 and not data.get('tp2_hit', False):
                         data['tp2_hit'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **ТР2 досягнуто!** Монета: {symbol}")
-                    elif ratio <= 0.55 and not data.get('tp1_hit', False):
+                        await send_telegram(f"🔴 **TP2 досягнуто!** Монета: {symbol}")
+
+                    # Перевіряємо TP1 (залишилося <= 55%)
+                    if ratio <= 0.55 and not data.get('tp1_hit', False):
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔴 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в безубиток...")
-                        
+                        await send_telegram(f"🟢 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в безубиток")
+
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = []
