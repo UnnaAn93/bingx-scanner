@@ -262,13 +262,15 @@ async def analyze_market(symbol):
         # 4. Тіні: перевірка на хоча б одній із останніх 4 закритих свічок (closed_candles[-4:])
         # Для лонгів: нижня тінь значно більша за верхню (в 2.5 рази)
         has_required_lower_wick = any(
-            (min(c['open'], c['close']) - float(c['low'])) > (float(c['high']) - max(c['open'], c['close'])) * 2.5
+            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) and
+            (abs(float(c['close']) - float(c['open'])) < (min(float(c['open']), float(c['close'])) - float(c['low'])))
             for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
         )
 
         # Для шортів: верхня тінь значно більша за нижню (в 2.5 рази)
         has_required_upper_wick = any(
-            (float(c['high']) - max(c['open'], c['close'])) > (min(c['open'], c['close']) - float(c['low'])) * 2.5
+            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) and
+            (abs(float(c['close']) - float(c['open'])) < (float(c['high']) - max(float(c['open']), float(c['close']))))
             for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
         )
 
