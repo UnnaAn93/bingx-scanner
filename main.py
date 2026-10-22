@@ -259,7 +259,7 @@ async def analyze_market(symbol):
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
         # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
-        closed_candles_shifted = closed_candles_15m[:-3]
+        closed_candles_shifted = closed_candles[:-3]
         ema_50_15m_prev = calculate_ema(closed_candles_shifted, period=50)
 
         ema_is_up = ema_50_15m > ema_50_15m_prev if ema_50_15m_prev is not None else True
