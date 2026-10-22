@@ -1,4 +1,4 @@
-import asyncio
+йimport asyncio
 import aiohttp
 import os
 import time
@@ -480,25 +480,35 @@ async def monitor_trades_loop():
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         entry_p = float(p.get('entryPrice', 0))
                         current_qty = abs(float(p.get('positionAmt', 0)))
-                    
+
                         # Перевіряємо біржу на наявність стопу в БУ за поточною ціною відносно входу
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
-                            if isinstance(ord_res, dict) and ord_res.get('code') == 0:
-                                for o in ord_res.get('data', {}).get('orders', []):
-                                    if o.get('type') == 'STOP_MARKET':
-                                        stop_price = float(o.get('stopPrice', 0))
-                                        if stop_price > 0:
-                                            if pos_side == 'LONG' and stop_price >= entry_p:
-                                                is_be = True
-                                                break
-                                            elif pos_side == 'SHORT' and stop_price <= entry_p:
-                                                is_be = True
-                                                break
-                        except:
-                            pass
+                            orders_list = []
+                            if isinstance(ord_res, list):
+                                orders_list = ord_res
+                            elif isinstance(ord_res, dict):
+                                data = ord_res.get('data', [])
+                                if isinstance(data, list):
+                                    orders_list = data
+                                elif isinstance(data, dict):
+                                    orders_list = data.get('orders', [])
+                                elif 'orders' in ord_res:
+                                    orders_list = ord_res.get('orders', [])
 
+                            for e in orders_list:
+                                if isinstance(e, dict) and e.get('type') == 'STOP_MARKET':
+                                    stop_price = float(e.get('stopPrice', 0))
+                                    if stop_price > 0:
+                                        if pos_side == 'LONG' and stop_price >= entry_p:
+                                            is_be = True
+                                            break
+                                        elif pos_side == 'SHORT' and stop_price <= entry_p:
+                                            is_be = True
+                                            break
+                        except Exception as ex:
+                            pass
 
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
