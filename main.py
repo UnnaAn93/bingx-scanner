@@ -556,8 +556,7 @@ async def monitor_trades_loop():
                         data['in_breakeven'] = True
                         data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔴 **TP1 досягнуто!** Стоп-лосс успішно перенесено в безубиток...")
-
+                        await send_telegram(f"🔴 **ТР1 досягнуто!** Монета: {symbol} | Стоп-лосс успішно перенесено в безубиток...")
                         try:
                             orders_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = orders_res.get('data', []) if isinstance(orders_res, dict) else []
@@ -592,7 +591,6 @@ async def monitor_trades_loop():
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
                                 "stopPrice": float(f"{entry_price:.6f}"),
-                                "reduceOnly": "true",
                                 "workingType": "MARK_PRICE"
                             }
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
