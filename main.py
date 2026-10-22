@@ -1,4 +1,4 @@
-йimport asyncio
+import asyncio
 import aiohttp
 import os
 import time
