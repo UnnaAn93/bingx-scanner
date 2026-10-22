@@ -499,14 +499,15 @@ async def monitor_trades_loop():
 
                             for e in orders_list:
                                 if isinstance(e, dict):
-                                    print(f"DEBUG ORDER found for {sym}: {e}")
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                                         stop_price = float(e.get('stopPrice', e.get('triggerPrice', 0)))
-                                        print(f"DEBUG STOP -> Symbol: {sym}, Price: {stop_price}, Entry: {entry_p}")
-                                        if stop_price > 0:
+                                        print(f"DEBUG STOP MATCH -> Side: {pos_side}, StopPrice: {stop_price}, Entry: {entry_p}")
+                                        if stop_price > 0 and entry_p > 0:
+                                            # Для LONG стоп у БУ має бути вище або рівно входу
                                             if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
+                                            # Для SHORT стоп у БУ має бути нижче або рівно входу
                                             elif pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
