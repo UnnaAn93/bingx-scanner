@@ -478,7 +478,8 @@ async def monitor_trades_loop():
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
-                        entry_p = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or 0)
+                        # Шукаємо ціну входу по всіх можливих ключах біржі
+                        entry_p = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or p.get('price') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
                         # Перевіряємо біржу на наявність стопу в БУ за поточною ціною відносно входу
@@ -584,17 +585,29 @@ async def monitor_trades_loop():
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
 
                             pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
-                            pos_data_list = pos_res.get('data', []) if isinstance(pos_res, dict) else []
-        
+                            pos_data_list = []
+                            if isinstance(pos_res, list):
+                                pos_data_list = pos_res
+                            elif isinstance(pos_res, dict):
+                                res_data = pos_res.get('data', [])
+                                if isinstance(res_data, list):
+                                    pos_data_list = res_data
+                                elif isinstance(res_data, dict):
+                                    pos_data_list = res_data.get('positions', [])
+
                             exact_qty = 0.0
+                            # Спочатку беремо з локальних даних збереженої угоди, як резерв
                             entry_price = float(data.get('entry', 0))
-        
+
                             for p in pos_data_list:
-                                if float(p.get('positionAmt', 0)) != 0:
+                                if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_qty = abs(float(p.get('positionAmt', 0)))
-                                    entry_price = float(p.get('entryPrice', entry_price))
+                                    # Надійний пошук ціни входу з відповіді позиції
+                                    p_entry = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or p.get('price') or 0)
+                                    if p_entry > 0:
+                                        entry_price = p_entry
                                     break
-        
+
                             if exact_qty == 0:
                                 exact_qty = abs(float(current_qty))
 
