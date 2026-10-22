@@ -478,7 +478,7 @@ async def monitor_trades_loop():
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
-                        entry_p = float(p.get('entryPrice', 0))
+                        entry_p = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
                         # Перевіряємо біржу на наявність стопу в БУ за поточною ціною відносно входу
