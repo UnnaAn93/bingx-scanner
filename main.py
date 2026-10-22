@@ -480,7 +480,8 @@ async def monitor_trades_loop():
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         
                         # Надійно витягуємо реальну ціну входу (ТВХ) з позиції біржі
-                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('price') or 0)
+                        print(f"DEBUG FULL POSITION OBJECT for {sym}: {p}", flush=True)
+                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
                         # Перевіряємо біржу на наявність стопу та порівнюємо його з ТВХ
