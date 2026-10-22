@@ -537,12 +537,12 @@ async def monitor_trades_loop():
                         if isinstance(e, dict) and e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                             stop_price = float(e.get('stopPrice', e.get('triggerPrice', 0)))
                             if stop_price > 0 and entry_p > 0:
-                                # Для LONG: стоп у БУ, якщо він вище або дорівнює ТвХ
-                                if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
+                                # Додаємо невеликий похиковий діапазон (0.1%), щоб не чіплятися до мікро-округлень біржі
+                                tolerance = entry_p * 0.001
+                                if pos_side == 'LONG' and stop_price >= (entry_p - tolerance):
                                     is_be = True
                                     break
-                                # Для SHORT: стоп у БУ, якщо він нижче або дорівнює ТвХ
-                                elif pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
+                                elif pos_side == 'SHORT' and stop_price <= (entry_p + tolerance):
                                     is_be = True
                                     break
                 except Exception as ex:
