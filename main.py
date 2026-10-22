@@ -290,6 +290,16 @@ async def analyze_market(symbol):
 
         if abs(slope) < min_slope:
             return None, True, f"Слабкий нахил EMA (slope: {slope:.6f})"
+         # Фільтр затиснутої ціни у флеті (перевірка діапазону останніх 6 свічок)
+        recent_candles = closed_candles[-6:]
+        highest_in_range = max(float(c['high']) for c in recent_candles)
+        lowest_in_range = min(float(c['low']) for c in recent_candles)
+        range_span = highest_in_range - lowest_in_range
+    
+        # Якщо весь діапазон за останні свічки занадто вузький відносно ATR (менше 1.8 * ATR), це флет/пила
+        if range_span < atr_15m * 1.8:
+            return None, True, f"Занадто вузький діапазон флету (range: {range_span:.5f})"
+         
         # 4. Тіні: перевірка на хоча б одній із останніх 4 закритих свічок (closed_candles[-4:])
         # Для лонгів: нижня тінь значно більша за верхню (в 2.5 рази)
         has_required_lower_wick = any(
