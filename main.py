@@ -499,19 +499,19 @@ async def monitor_trades_loop():
 
                             for e in orders_list:
                                 if isinstance(e, dict):
-                                    # Друк для логів, щоб бачити, які ордери знаходить бот
                                     print(f"DEBUG ORDER found for {sym}: {e}")
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                                         stop_price = float(e.get('stopPrice', e.get('triggerPrice', 0)))
                                         print(f"DEBUG STOP -> Symbol: {sym}, Price: {stop_price}, Entry: {entry_p}")
                                         if stop_price > 0:
-                                            # Додаємо невеликий запас (0.01) на випадок мікро-округлень
                                             if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
                                             elif pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
+                        except Exception as ex:
+                            pass
 
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
@@ -522,7 +522,7 @@ async def monitor_trades_loop():
                             'tp2_hit': False,
                             'tp3_hit': False,
                             'side': pos_side,
-                            'opp_volume_count': 0,
+                            'app_volume_count': 0,
                             'last_opp_alert_time': 0
                         }
                         save_trades_state(active_trade_monitors)
