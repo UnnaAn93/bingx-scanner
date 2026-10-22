@@ -644,7 +644,7 @@ async def monitor_trades_loop():
                             for p in pos_data_list:
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_qty = abs(float(p.get('positionAmt', 0)))
-                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('price') or 0)
+                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
                                     if p_entry > 0:
                                         entry_price = p_entry
                                     break
@@ -682,7 +682,6 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
         
         await asyncio.sleep(60)
-        
         
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
