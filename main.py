@@ -259,13 +259,16 @@ async def analyze_market(symbol):
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
         # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
-        ema_1 = calculate_ema(closed_candles[:-1], period=50)
-        ema_2 = calculate_ema(closed_candles[:-2], period=50)
-        ema_3 = calculate_ema(closed_candles[:-3], period=50)
+        # Розраховуємо нахил EMA за кілька свічок назад (Slope Filter для відсікання боковиків)
+        ema_current = calculate_ema(closed_candles, period=50)
+        ema_past = calculate_ema(closed_candles[:-5], period=50) # Значення 5 свічок тому
+    
+        # Вираховуємо відносний нахил
+        slope = (ema_current - ema_past) / ema_past if ema_past else 0
+        min_slope = 0.0003  # Мінімальний поріг нахилу (можна трохи підкоригувати за потреби)
 
-        ema_is_up = (ema_50_15m > ema_1) and (ema_1 > ema_2) and (ema_2 > ema_3) if (ema_1 is not None and ema_2 is not None and ema_3 is not None) else True
-        ema_is_down = (ema_50_15m < ema_1) and (ema_1 < ema_2) and (ema_2 < ema_3) if (ema_1 is not None and ema_2 is not None and ema_3 is not None) else True
-
+        ema_is_up = (ema_50_15m > ema_past) and (slope > min_slope)
+        ema_is_down = (ema_50_15m < ema_past) and (slope < -min_slope)
         # 4. Тіні: перевірка на хоча б одній із останніх 4 закритих свічок (closed_candles[-4:])
         # Для лонгів: нижня тінь значно більша за верхню (в 2.5 рази)
         has_required_lower_wick = any(
