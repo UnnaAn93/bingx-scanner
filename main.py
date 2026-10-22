@@ -258,6 +258,12 @@ async def analyze_market(symbol):
             return None, False, "Недостатньо даних для EMA 50 на 1h"
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
+        # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
+        closed_candles_shifted = closed_candles_15m[:-3]
+        ema_50_15m_prev = calculate_ema(closed_candles_shifted, period=50)
+
+        ema_is_up = ema_50_15m > ema_50_15m_prev if ema_50_15m_prev is not None else True
+        ema_is_down = ema_50_15m < ema_50_15m_prev if ema_50_15m_prev is not None else True
 
         # 4. Тіні: перевірка на хоча б одній із останніх 4 закритих свічок (closed_candles[-4:])
         # Для лонгів: нижня тінь значно більша за верхню (в 2.5 рази)
