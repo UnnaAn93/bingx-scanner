@@ -254,8 +254,8 @@ async def analyze_market(symbol):
         
         # 3. Визначення тренду на годині (1h EMA 50)
         closed_candles_h = klines_1h[:-1]
-        ema_50_th = calculate_ema(closed_candles_h, period=50)
-        if ema_50_th is None:
+        ema_50_1h = calculate_ema(closed_candles_h, period=50)
+        if ema_50_1h is None:
             return None, False, "Недостатньо даних для EMA 50 на 1г"
 
         # Перевірка на великі шпильки/тіні на останній закритій годинній свічці
