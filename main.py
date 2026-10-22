@@ -597,21 +597,8 @@ async def monitor_trades_loop():
                                 elif isinstance(res_data, dict):
                                     pos_data_list = res_data.get('positions', [])
 
-                            exact_qty = 0.0
-                            # Спочатку беремо з локальних даних збереженої угоди, як резерв
-                            entry_price = float(data.get('entry', 0))
-
-                            for p in pos_data_list:
-                                if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
-                                    exact_qty = abs(float(p.get('positionAmt', 0)))
-                                    # Надійний пошук ціни входу з відповіді позиції
-                                    p_entry = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or p.get('price') or 0)
-                                    if p_entry > 0:
-                                        entry_price = p_entry
-                                    break
-
-                            if exact_qty == 0:
-                                exact_qty = abs(float(current_qty))
+                            exact_qty_str = str(exact_qty) if exact_qty > 0 else str(current_qty)
+                            stop_price_str = f"{entry_price:.6f}"
 
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
                             sl_payload = {
@@ -619,9 +606,13 @@ async def monitor_trades_loop():
                                 "side": sl_side,
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
-                                "stopPrice": float(f"{entry_price:.6f}"),
+                                "stopPrice": stop_price_str,
+                                "quantity": exact_qty_str,
                                 "workingType": "MARK_PRICE"
                             }
+                    
+                    print(f"DEBUG SL PAYLOAD -> {sl_payload}", flush=True)
+                    res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
                             if isinstance(res, dict) and res.get('code') != 0:
                                 err_msg = f"❌ [ПОМИЛКА БІРЖІ] Не вдалося поставити стоп у БУ для {symbol}: {res}"
