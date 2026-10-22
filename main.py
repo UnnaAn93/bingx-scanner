@@ -261,11 +261,11 @@ async def analyze_market(symbol):
         # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
         # Розраховуємо нахил EMA за кілька свічок назад (Slope Filter для відсікання боковиків)
         ema_current = calculate_ema(closed_candles, period=50)
-        ema_past = calculate_ema(closed_candles[:-5], period=50) # Значення 5 свічок тому
+        ema_past = calculate_ema(closed_candles[:-8], period=50) # Значення 5 свічок тому
     
         # Вираховуємо відносний нахил
         slope = (ema_current - ema_past) / ema_past if ema_past else 0
-        min_slope = 0.0003  # Мінімальний поріг нахилу (можна трохи підкоригувати за потреби)
+        min_slope = 0.0005  # Мінімальний поріг нахилу (можна трохи підкоригувати за потреби)
 
         ema_is_up = (ema_50_15m > ema_past) and (slope > min_slope)
         ema_is_down = (ema_50_15m < ema_past) and (slope < -min_slope)
