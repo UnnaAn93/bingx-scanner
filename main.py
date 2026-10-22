@@ -554,7 +554,7 @@ async def monitor_trades_loop():
                             'stop_loss': entry_p,
                             'initial_qty': current_qty,
                             'in_breakeven': is_be,
-                            'tp1_hit': is_be,
+                            'tp1_hit': is_be,  # Залишається як є тільки якщо реальний стоп на біржі в БУ
                             'tp2_hit': False,
                             'tp3_hit': False,
                             'side': pos_side,
@@ -644,7 +644,7 @@ async def monitor_trades_loop():
                             for p in pos_data_list:
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_qty = abs(float(p.get('positionAmt', 0)))
-                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
+                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('price') or 0)
                                     if p_entry > 0:
                                         entry_price = p_entry
                                     break
