@@ -251,11 +251,29 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
 
-        # 3. Визначення тренду на 1 годині (1h EMA 50)
+        
+        # 3. Визначення тренду на годині (1h EMA 50)
         closed_candles_h = klines_1h[:-1]
-        ema_50_1h = calculate_ema(closed_candles_h, period=50)
-        if ema_50_1h is None:
-            return None, False, "Недостатньо даних для EMA 50 на 1h"
+        ema_50_th = calculate_ema(closed_candles_h, period=50)
+        if ema_50_th is None:
+            return None, False, "Недостатньо даних для EMA 50 на 1г"
+
+        # Перевірка на великі шпильки/тіні на останній закритій годинній свічці
+        last_candle_h = closed_candles_h[-1]
+        h_high = float(last_candle_h['high'])
+        h_low = float(last_candle_h['low'])
+        h_open = float(last_candle_h['open'])
+        h_close = float(last_candle_h['close'])
+        h_range = h_high - h_low
+    
+        if h_range > 0:
+            h_upper_wick = h_high - max(h_open, h_close)
+            h_lower_wick = min(h_open, h_close) - h_low
+        
+            # Якщо верхня або нижня тінь більша за 55% від загального діапазону годинної свічки — це шпилька
+            if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
+                return None, True, "Велика шпилька/тінь на 1г свічці"
+
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
         # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
