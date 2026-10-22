@@ -478,11 +478,12 @@ async def monitor_trades_loop():
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
-                        # Шукаємо ціну входу по всіх можливих ключах біржі
-                        entry_p = float(p.get('entryPrice') or p.get('averagePrice') or p.get('holdAvgPrice') or p.get('price') or 0)
+                        
+                        # Надійно витягуємо реальну ціну входу (ТВХ) з позиції біржі
+                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('price') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        # Перевіряємо біржу на наявність стопу в БУ за поточною ціною відносно входу
+                        # Перевіряємо біржу на наявність стопу та порівнюємо його з ТВХ
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
@@ -490,11 +491,11 @@ async def monitor_trades_loop():
                             if isinstance(ord_res, list):
                                 orders_list = ord_res
                             elif isinstance(ord_res, dict):
-                                data = ord_res.get('data', [])
-                                if isinstance(data, list):
-                                    orders_list = data
-                                elif isinstance(data, dict):
-                                    orders_list = data.get('orders', [])
+                                data_ord = ord_res.get('data', [])
+                                if isinstance(data_ord, list):
+                                    orders_list = data_ord
+                                elif isinstance(data_ord, dict):
+                                    orders_list = data_ord.get('orders', [])
                                 elif 'orders' in ord_res:
                                     orders_list = ord_res.get('orders', [])
 
@@ -502,13 +503,13 @@ async def monitor_trades_loop():
                                 if isinstance(e, dict):
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                                         stop_price = float(e.get('stopPrice', e.get('triggerPrice', 0)))
-                                        print(f"DEBUG STOP MATCH -> Side: {pos_side}, StopPrice: {stop_price}, Entry: {entry_p}")
+                                        print(f"DEBUG CHECK -> Symbol: {sym}, Side: {pos_side}, TVX: {entry_p}, Stop: {stop_price}")
                                         if stop_price > 0 and entry_p > 0:
-                                            # Для LONG стоп у БУ має бути вище або рівно входу
+                                            # Для LONG: стоп у БУ, якщо він вище або дорівнює ТВХ
                                             if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
-                                            # Для SHORT стоп у БУ має бути нижче або рівно входу
+                                            # Для SHORT: стоп у БУ, якщо він нижче або дорівнює ТВХ
                                             elif pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
