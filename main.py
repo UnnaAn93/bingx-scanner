@@ -284,7 +284,7 @@ async def analyze_market(symbol):
         max_distance_from_ema = atr_15m * 4.0
 
         # --- Висхідний тренд (LONG) за 1h EMA50 ---
-        if current_price > ema_50_1h:
+        if current_price > ema_50_1h and ema_is_up and float(last_candle['close']) > ema_50_15m:
             # Перевірка пробою з урахуванням люфту ATR (0.5 ATR)
             breakout_threshold = ema_50_15m - (atr_15m * 0.5)
             if float(last_candle['close']) < breakout_threshold:
@@ -322,7 +322,7 @@ async def analyze_market(symbol):
                 return None, True, "Тренд лонг: R:R менше 1.3"
 
         # --- Низхідний тренд (SHORT) за 1h EMA50 ---
-        elif current_price < ema_50_1h:
+        elif current_price < ema_50_1h and ema_is_down and float(last_candle['close']) < ema_50_15m:
             # Перевірка пробою з урахуванням люфту ATR (0.5 ATR)
             breakout_threshold = ema_50_15m + (atr_15m * 0.5)
             if float(last_candle['close']) > breakout_threshold:
