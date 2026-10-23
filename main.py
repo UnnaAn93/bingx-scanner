@@ -250,7 +250,6 @@ async def analyze_market(symbol):
 
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
-
         
         # 3. Визначення тренду на годині (1h EMA 50)
         closed_candles_h = klines_1h[:-1]
@@ -258,7 +257,7 @@ async def analyze_market(symbol):
         if ema_50_1h is None:
             return None, False, "Недостатньо даних для EMA 50 на 1г"
 
-        # Перевірка на великі шпильки/тіні на останній закритій годинній свічці
+        # Перевірка на великі шпильки/тіні на останній закритій годинній свічці (з виправленою ініціалізацією)
         last_candle_h = closed_candles_h[-1]
         h_high = float(last_candle_h['high'])
         h_low = float(last_candle_h['low'])
@@ -266,6 +265,9 @@ async def analyze_market(symbol):
         h_close = float(last_candle_h['close'])
         h_range = h_high - h_low
     
+        h_upper_wick = 0.0
+        h_lower_wick = 0.0
+
         if h_range > 0:
             h_upper_wick = h_high - max(h_open, h_close)
             h_lower_wick = min(h_open, h_close) - h_low
@@ -274,33 +276,29 @@ async def analyze_market(symbol):
         if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
             return None, True, "Велика шпилька/тінь на 1г свічці"
 
-
         ema_50_15m = calculate_ema(closed_candles, period=50)
-        # Розраховуємо EMA50 на 3 свічки назад для визначення нахилу
-        # Розраховуємо нахил EMA за кілька свічок назад (Slope Filter для відсікання боковиків)
         ema_current = calculate_ema(closed_candles, period=50)
-        ema_past = calculate_ema(closed_candles[:-8], period=50) # Значення 5 свічок тому
+        ema_past = calculate_ema(closed_candles[:-8], period=50) 
     
-        # Вираховуємо відносний нахил
         slope = (ema_current - ema_past) / ema_past if ema_past else 0
-        min_slope = 0.0005  # Мінімальний поріг нахилу (можна трохи підкоригувати за потреби)
+        min_slope = 0.0005  
 
         ema_is_up = (ema_50_15m > ema_past) and (slope > min_slope)
         ema_is_down = (ema_50_15m < ema_past) and (slope < -min_slope)
 
         if abs(slope) < min_slope:
             return None, True, f"Слабкий нахил EMA (slope: {slope:.6f})"
-         # Фільтр затиснутої ціни у флеті (перевірка діапазону останніх 6 свічок)
+
+        # Фільтр затиснутої ціни у флеті
         recent_candles = closed_candles[-6:]
         highest_in_range = max(float(c['high']) for c in recent_candles)
         lowest_in_range = min(float(c['low']) for c in recent_candles)
         range_span = highest_in_range - lowest_in_range
     
-        # Якщо весь діапазон за останні свічки занадто вузький відносно ATR (менше 1.8 * ATR), це флет/пила
         if range_span < atr_15m * 1.8:
             return None, True, f"Занадто вузький діапазон флету (range: {range_span:.5f})"
          
-        # 4. Тіні: перевірка на 2 останніх закритих свічках (closed_candles[-3:-1])
+        # 4. Тіні: перевірка на 2 останніх закритих свічках
         has_required_lower_wick = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5
             and (min(float(c['open']), float(c['close'])) - float(c['low'])) > (max(float(c['open']), float(c['close'])) - min(float(c['open']), float(c['close'])))
@@ -320,21 +318,19 @@ async def analyze_market(symbol):
 
         # --- Висхідний тренд (LONG) за 1h EMA50 ---
         if current_price > ema_50_1h and ema_is_up and float(last_candle['close']) > ema_50_15m:
-            # Перевірка пробою з урахуванням люфту ATR (0.5 ATR)
             breakout_threshold = ema_50_15m - (atr_15m * 0.5)
             if float(last_candle['close']) < breakout_threshold:
                 return None, True, "Ціна пробила 15m EMA з закриттям нижче допустимого люфту ATR"
 
-            # Перевірка віддаленості від EMA
             if (current_price - ema_50_15m) > max_distance_from_ema:
                 return None, True, "Занадто далеко від EMA (для лонга)"
-            # Фільтр «пилки»: ціна не повинна перетинати EMA50 або чіпати її знизу на останніх свічках
+
             recent_crossed_ema = any(
                 float(c['low']) <= ema_50_15m for c in closed_candles[-3:]
             )
             if recent_crossed_ema:
                 return None, True, "Ціна пиляє або перетинає EMA50 знизу (флет)"
-            # Перевірка наявності необхідної нижньої тіні за останні 4 свічки
+
             if not has_required_lower_wick:
                 return None, True, "Немає необхідної нижньої тіні"
                 
@@ -363,22 +359,19 @@ async def analyze_market(symbol):
 
         # --- Низхідний тренд (SHORT) за 1h EMA50 ---
         elif current_price < ema_50_1h and ema_is_down and float(last_candle['close']) < ema_50_15m:
-            # Перевірка пробою з урахуванням люфту ATR (0.5 ATR)
             breakout_threshold = ema_50_15m + (atr_15m * 0.5)
             if float(last_candle['close']) > breakout_threshold:
                 return None, True, "Ціна пробила 15m EMA з закриттям вище допустимого люфту ATR"
 
-            # Перевірка віддаленості від EMA
             if (ema_50_15m - current_price) > max_distance_from_ema:
                 return None, True, "Занадто далеко від EMA (для шорта)"
-            # Фільтр «пилки»: ціна не повинна перетинати EMA50 або чіпати її зверху на останніх свічках
+
             recent_crossed_ema = any(
                 float(c['high']) >= ema_50_15m for c in closed_candles[-3:]
             )
             if recent_crossed_ema:
                 return None, True, "Ціна пиляє або перетинає EMA50 зверху (флет)"
                 
-            # Перевірка наявності необхідної верхньої тіні за останні 4 свічки
             if not has_required_upper_wick:
                 return None, True, "Немає необхідної верхньої тіні"
                 
@@ -409,7 +402,6 @@ async def analyze_market(symbol):
 
     except Exception as e:
         return None, True, f"Помилка аналізу: {str(e)}"
-        
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
@@ -511,7 +503,7 @@ async def open_position(setup):
         await log_and_alert("Помилка відкриття позиції", str(e), setup['symbol'])
         raise e
 
-# --- МОНІТОРИНГ УГОД (виправлене відновлення) ---
+# --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
         try:
@@ -524,11 +516,9 @@ async def monitor_trades_loop():
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         
-                        # 1. Надійно витягуємо ціну входу (ТВХ) з біржі
                         entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        # 2. Перевіряємо біржу на наявність стопу для визначення БУ при рестарті
                         found_stop_price = 0.0
                         is_be = False
                         try:
@@ -550,11 +540,9 @@ async def monitor_trades_loop():
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                                         found_stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
                                         if found_stop_price > 0 and entry_p > 0:
-                                            # Для LONG: стоп у БУ, якщо він вище або дорівнює ТВХ
                                             if pos_side == 'LONG' and found_stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
-                                            # Для SHORT: стоп у БУ, якщо він нижче або дорівнює ТВХ
                                             elif pos_side == 'SHORT' and found_stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
@@ -578,7 +566,6 @@ async def monitor_trades_loop():
                         status_text = "В безубитку (БУ)" if is_be else "Ризикова"
                         print(f"[INFO] Моніторинг {sym} | Сторона: {pos_side} | ТВХ: {entry_p} | Стоп: {found_stop_price} | Статус: {status_text}", flush=True)
 
-            # 3. Перевірка закриття угод, стопів та тейків
             for symbol, data in list(active_trade_monitors.items()):
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
 
@@ -616,7 +603,6 @@ async def monitor_trades_loop():
                         await send_telegram(f"🔵 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в БУ.")
 
                         try:
-                            # Скасовуємо старі стопи
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = []
                             if isinstance(ord_res, list):
@@ -636,7 +622,6 @@ async def monitor_trades_loop():
                                     if ord_id:
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
 
-                            # Отримуємо актуальні дані для виставлення нового стопу в БУ
                             pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
                             pos_data_list = []
                             if isinstance(pos_res, list):
@@ -707,8 +692,7 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
 
         await asyncio.sleep(60)
-        
-        
+
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
     while True:
@@ -748,15 +732,12 @@ async def count_risk_positions():
             qty = float(p.get('positionAmt', 0))
             if qty != 0:
                 symbol = p['symbol']
-                
-                # Перевіряємо статус у нашому збереженому стані
                 if symbol in active_trade_monitors:
                     is_safe = active_trade_monitors[symbol].get('in_breakeven', False) or active_trade_monitors[symbol].get('tp1_hit', False)
                     if is_safe:
                         print(f"[INFO] Позиція {symbol} захищена (TP1 досягнуто / в БУ). Не рахується як ризик.", flush=True)
-                        continue  # Захищена, пропускаємо
+                        continue 
                 
-                # Якщо позиції немає в пам'яті або вона ще не досягла TP1 — це ризикова позиція
                 risk_count += 1
                 print(f"[INFO] Позиція {symbol} вважається ризиковою.", flush=True)
 
@@ -764,7 +745,6 @@ async def count_risk_positions():
     except Exception as e:
         print(f"Помилка підрахунку ризикових позицій: {e}", flush=True)
         return 0
-        
 
 # --- ГОЛОВНИЙ ЦИКЛ СКАНУВАННЯ ---
 async def main_scanner():
@@ -900,10 +880,9 @@ async def main_scanner():
                 print("[INFO] Словник skipped_reasons порожній.", flush=True)
 
         except Exception as e:
-            log_and_alert("Помилка в головному циклі сканування", str(e))
+            await log_and_alert("Помилка в головному циклі сканування", str(e))
 
         await asyncio.sleep(60)
-        
 
 if __name__ == "__main__":
     try:
