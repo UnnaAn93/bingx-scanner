@@ -270,9 +270,9 @@ async def analyze_market(symbol):
             h_upper_wick = h_high - max(h_open, h_close)
             h_lower_wick = min(h_open, h_close) - h_low
         
-            # Якщо верхня або нижня тінь більша за 55% від загального діапазону годинної свічки — це шпилька
-            if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
-                return None, True, "Велика шпилька/тінь на 1г свічці"
+        # Якщо верхня або нижня тінь більша за 55% від загального діапазону годинної свічки — це шпилька
+         if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
+            return None, True, "Велика шпилька/тінь на 1г свічці"
 
 
         ema_50_15m = calculate_ema(closed_candles, period=50)
@@ -300,15 +300,19 @@ async def analyze_market(symbol):
         if range_span < atr_15m * 1.8:
             return None, True, f"Занадто вузький діапазон флету (range: {range_span:.5f})"
          
-        # 4. Тіні: перевірка на 2 попередніх закритих свічках (closed_candles[-3:-1])
+        # 4. Тіні: перевірка на 2 останніх закритих свічках (closed_candles[-3:-1])
         has_required_lower_wick = any(
-            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5 
-            for c in closed_candles[-3:-1] if (float(c['high']) - float(c['low'])) > 0
+            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5
+            and (min(float(c['open']), float(c['close'])) - float(c['low'])) > (max(float(c['open']), float(c['close'])) - min(float(c['open']), float(c['close'])))
+            for c in closed_candles[-3:-1]
+            if (float(c['high']) - float(c['low'])) > 0
         )
 
         has_required_upper_wick = any(
-            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) * 2.5 
-            for c in closed_candles[-3:-1] if (float(c['high']) - float(c['low'])) > 0
+            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) * 2.5
+            and (float(c['high']) - max(float(c['open']), float(c['close']))) > (max(float(c['open']), float(c['close'])) - min(float(c['open']), float(c['close'])))
+            for c in closed_candles[-3:-1]
+            if (float(c['high']) - float(c['low'])) > 0
         )
 
         # ============= ТРЕНДОВА ЛОГІКА (15m за 1h трендом) =============
