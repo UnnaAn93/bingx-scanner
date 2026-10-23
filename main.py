@@ -528,7 +528,8 @@ async def monitor_trades_loop():
                         entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        # Перевіряємо біржу на наявність стопу та порівнюємо його з ТВХ (тільки при появі/рестарті)
+                        
+                        # Перевіряємо біржу на наявність стопу та перевіряємо його у ТВХ (тільки при панелі/рестарті)
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
@@ -536,30 +537,30 @@ async def monitor_trades_loop():
                             if isinstance(ord_res, list):
                                 orders_list = ord_res
                             elif isinstance(ord_res, dict):
-                                data_ord = ord_res.get('data', [])
-                                if isinstance(data_ord, list):
-                                    orders_list = data_ord
-                                elif isinstance(data_ord, dict):
-                                    orders_list = data_ord.get('orders', [])
+                                ord_data = ord_res.get('data', {})
+                                if isinstance(ord_data, list):
+                                    orders_list = ord_data
+                                elif isinstance(ord_data, dict):
+                                    orders_list = ord_data.get('orders', [])
                                 elif 'orders' in ord_res:
                                     orders_list = ord_res.get('orders', [])
 
                             for e in orders_list:
                                 if isinstance(e, dict):
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
-                                        stop_price = float(e.get('stopPrice', e.get('triggerPrice', 0)))
+                                        stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
                                         if stop_price > 0 and entry_p > 0:
                                             # Для LONG: стоп у БУ, якщо він вище або дорівнює ТВХ
                                             if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
                                             # Для SHORT: стоп у БУ, якщо він нижче або дорівнює ТВХ
-                                            elif pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
+                                            if pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
                         except Exception as ex:
                             pass
-
+                            
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
                             'stop_loss': entry_p,
