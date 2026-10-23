@@ -517,19 +517,19 @@ async def monitor_trades_loop():
         try:
             positions = await get_exchange_positions()
             active_symbols = [p['symbol'] for p in positions if float(p.get('positionAmt', 0)) != 0]
-            
+
             for p in positions:
                 if float(p.get('positionAmt', 0)) != 0:
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         
-                        # Надійно витягуємо реальну ціну входу (ТВХ) з урахуванням avgPrice
-                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
+                        # 1. Надійно витягуємо ціну входу (ТВХ) з біржі
+                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        
-                        # Перевіряємо біржу на наявність стопу та перевіряємо його у ТВХ (тільки при панелі/рестарті)
+                        # 2. Перевіряємо біржу на наявність стопу для визначення БУ при рестарті
+                        found_stop_price = 0.0
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
@@ -548,22 +548,22 @@ async def monitor_trades_loop():
                             for e in orders_list:
                                 if isinstance(e, dict):
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
-                                        stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
-                                        if stop_price > 0 and entry_p > 0:
+                                        found_stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
+                                        if found_stop_price > 0 and entry_p > 0:
                                             # Для LONG: стоп у БУ, якщо він вище або дорівнює ТВХ
-                                            if pos_side == 'LONG' and stop_price >= (entry_p - 0.01):
+                                            if pos_side == 'LONG' and found_stop_price >= (entry_p - 0.01):
                                                 is_be = True
                                                 break
                                             # Для SHORT: стоп у БУ, якщо він нижче або дорівнює ТВХ
-                                            if pos_side == 'SHORT' and stop_price <= (entry_p + 0.01):
+                                            elif pos_side == 'SHORT' and found_stop_price <= (entry_p + 0.01):
                                                 is_be = True
                                                 break
                         except Exception as ex:
                             pass
-                            
+
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
-                            'stop_loss': entry_p,
+                            'stop_loss': found_stop_price,
                             'initial_qty': current_qty,
                             'in_breakeven': is_be,
                             'tp1_hit': is_be,
@@ -574,17 +574,22 @@ async def monitor_trades_loop():
                             'last_opp_alert_time': 0
                         }
                         save_trades_state(active_trade_monitors)
-                        status_text = "В безубитку" if is_be else "Ризикова"
-                        print(f"[INFO] Відновлено позицію без історії у файлі: {sym} ({status_text})", flush=True)
 
+                        status_text = "В безубитку (БУ)" if is_be else "Ризикова"
+                        print(f"[INFO] Моніторинг {sym} | Сторона: {pos_side} | ТВХ: {entry_p} | Стоп: {found_stop_price} | Статус: {status_text}", flush=True)
+
+            # 3. Перевірка закриття угод, стопів та тейків
             for symbol, data in list(active_trade_monitors.items()):
-                current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
-                
+                current_pos_data = next((p for p in positions if p.get('symbol'] == symbol), None)
+
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
                     if data.get('tp3_hit', False):
-                        await send_telegram(f"🔥 **Всі цілі (ТР3) досягнуто!** Позиція по {symbol} повністю закрита.")
+                        await send_telegram(f"🟢 **Всі цілі (TP3) досягнуто!** Позиція по {symbol} повністю закрита.")
+                    elif data.get('in_breakeven', False):
+                        await send_telegram(f"🛡 **Безубиток!** Позицію по {symbol} закрито в БУ.")
                     else:
-                        await send_telegram(f"🔴 **Стоп по позиції!** Позиція по {symbol} закрито за стоп-лоссом.")
+                        await send_telegram(f"🛑 **Стоп по позиції!** Позицію по {symbol} закрито за стоп-лоссом.")
+
                     del active_trade_monitors[symbol]
                     save_trades_state(active_trade_monitors)
                     continue
@@ -597,26 +602,27 @@ async def monitor_trades_loop():
                     continue
 
                 initial_qty = data['initial_qty']
-                side_val = str(data.get('side', 'LONG')).upper()
 
                 if current_qty < initial_qty:
                     ratio = current_qty / initial_qty
+                    side_val = data.get('side', 'LONG').upper()
 
-                    # Незалежні перевірки (if замість elif), щоб не пропускати сповіщення
+                    # TP1 (з перенесенням стопу в безубиток)
                     if not data.get('tp1_hit', False) and ratio <= 0.55:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
                         data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔴 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в безубиток...")
-                        
+                        await send_telegram(f"🔵 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в БУ.")
+
                         try:
+                            # Скасовуємо старі стопи
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': symbol})
                             orders_list = []
                             if isinstance(ord_res, list):
                                 orders_list = ord_res
                             elif isinstance(ord_res, dict):
-                                ord_data = ord_res.get('data', [])
+                                ord_data = ord_res.get('data', {})
                                 if isinstance(ord_data, list):
                                     orders_list = ord_data
                                 elif isinstance(ord_data, dict):
@@ -630,6 +636,7 @@ async def monitor_trades_loop():
                                     if ord_id:
                                         await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
 
+                            # Отримуємо актуальні дані для виставлення нового стопу в БУ
                             pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
                             pos_data_list = []
                             if isinstance(pos_res, list):
@@ -641,61 +648,64 @@ async def monitor_trades_loop():
                                 elif isinstance(res_data, dict):
                                     pos_data_list = res_data.get('positions', [])
 
-                            exact_qty = 0.0
+                            exact_q = 0.0
                             entry_price = float(data.get('entry', 0))
 
                             for p in pos_data_list:
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
-                                    exact_qty = abs(float(p.get('positionAmt', 0)))
-                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('price') or 0)
+                                    exact_q = abs(float(p.get('positionAmt', 0)))
+                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or 0)
                                     if p_entry > 0:
                                         entry_price = p_entry
                                     break
 
-                            if exact_qty == 0:
-                                exact_qty = abs(float(current_qty))
+                            if exact_q == 0:
+                                exact_q = abs(float(current_qty))
 
-                            exact_qty_str = str(exact_qty)
+                            exact_q_str = str(exact_q)
                             stop_price_str = f"{entry_price:.6f}"
-
                             sl_side = "SELL" if side_val == "LONG" else "BUY"
+
                             sl_payload = {
                                 "symbol": symbol,
                                 "side": sl_side,
                                 "positionSide": side_val,
                                 "type": "STOP_MARKET",
                                 "stopPrice": stop_price_str,
-                                "quantity": exact_qty_str,
+                                "quantity": exact_q_str,
                                 "workingType": "MARK_PRICE"
                             }
-                            
-                            print(f"DEBUG SL PAYLOAD -> {sl_payload}", flush=True)
+
+                            print(f"[DEBUG] SL PAYLOAD -> {sl_payload}", flush=True)
                             res = await bingx_request('POST', '/openApi/swap/v2/trade/order', sl_payload)
-                            
+
                             if isinstance(res, dict) and res.get('code') != 0:
                                 err_msg = f"❌ **ПОМИЛКА БІРЖІ** Не вдалося поставити стоп у БУ для {symbol}: {res}"
                                 print(err_msg, flush=True)
                                 await send_telegram(err_msg)
+
                         except Exception as ex:
                             err_msg = f"❌ **КРИТИЧНА ПОМИЛКА** Помилка перенесення стопа в БУ для {symbol}: {str(ex)}"
                             print(err_msg, flush=True)
                             await send_telegram(err_msg)
 
+                    # TP2
                     if not data.get('tp2_hit', False) and ratio <= 0.30:
                         data['tp2_hit'] = True
                         data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🎯 **ТР2 досягнуто!** Монета: {symbol}")
+                        await send_telegram(f"🟡 **TP2 досягнуто!** Монета: {symbol}")
 
+                    # TP3
                     if not data.get('tp3_hit', False) and ratio <= 0.05:
                         data['tp3_hit'] = True
                         data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
-                        await send_telegram(f"🔥 **ТР3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
+                        await send_telegram(f"🟢 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
 
         except Exception as ex:
             print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
-        
+
         await asyncio.sleep(60)
         
         
