@@ -300,19 +300,15 @@ async def analyze_market(symbol):
         if range_span < atr_15m * 1.8:
             return None, True, f"Занадто вузький діапазон флету (range: {range_span:.5f})"
          
-        # 4. Тіні: перевірка на хоча б одній із останніх 4 закритих свічок (closed_candles[-4:])
-        # Для лонгів: нижня тінь значно більша за верхню (в 2.5 рази)
+        # 4. Тіні: перевірка на 2 попередніх закритих свічках (closed_candles[-3:-1])
         has_required_lower_wick = any(
-            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) and
-            (abs(float(c['close']) - float(c['open'])) < (min(float(c['open']), float(c['close'])) - float(c['low'])))
-            for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
+            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5 
+            for c in closed_candles[-3:-1] if (float(c['high']) - float(c['low'])) > 0
         )
 
-        # Для шортів: верхня тінь значно більша за нижню (в 2.5 рази)
         has_required_upper_wick = any(
-            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) and
-            (abs(float(c['close']) - float(c['open'])) < (float(c['high']) - max(float(c['open']), float(c['close']))))
-            for c in closed_candles[-4:] if (float(c['high']) - float(c['low'])) > 0
+            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) * 2.5 
+            for c in closed_candles[-3:-1] if (float(c['high']) - float(c['low'])) > 0
         )
 
         # ============= ТРЕНДОВА ЛОГІКА (15m за 1h трендом) =============
