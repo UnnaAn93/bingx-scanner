@@ -517,7 +517,7 @@ async def monitor_trades_loop():
                         entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or p.get('avgPrice') or p.get('holdPrice') or p.get('price') or 0)
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        # Перевіряємо біржу на наявність стопу та порівнюємо його з ТВХ
+                        # Перевіряємо біржу на наявність стопу та порівнюємо його з ТВХ (тільки при появі/рестарті)
                         is_be = False
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
@@ -554,7 +554,7 @@ async def monitor_trades_loop():
                             'stop_loss': entry_p,
                             'initial_qty': current_qty,
                             'in_breakeven': is_be,
-                            'tp1_hit': is_be,  # Залишається як є тільки якщо реальний стоп на біржі в БУ
+                            'tp1_hit': is_be,
                             'tp2_hit': False,
                             'tp3_hit': False,
                             'side': pos_side,
