@@ -519,7 +519,26 @@ async def monitor_trades_loop():
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
                         
-                        entry_p = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or 0)
+                        entry_p = float(
+                            p.get('avgPrice') or 
+                            p.get('averagePrice') or 
+                            p.get('entryPrice') or 
+                            p.get('holdAvgPrice') or 
+                            p.get('price') or 
+                            0
+                        )
+                        
+                        # Якщо біржа в positions ще не оновила і віддає 0, беремо з історії ордерів
+                        if entry_p <= 0:
+                            try:
+                                trades_res = await bingx_request('GET', '/openApi/swap/v2/trade/fillHistory', {'symbol': sym, 'limit': 1})
+                                if isinstance(trades_res, dict) and trades_res.get('code') == 0:
+                                    trades_data = trades_res.get('data', [])
+                                    if trades_data and isinstance(trades_data, list):
+                                        entry_p = float(trades_data[0].get('price', 0))
+                            except Exception:
+                                pass
+
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
                         found_stop_price = 0.0
@@ -642,7 +661,14 @@ async def monitor_trades_loop():
                             for p in pos_data_list:
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_q = abs(float(p.get('positionAmt', 0)))
-                                    p_entry = float(p.get('averagePrice') or p.get('entryPrice') or p.get('holdAvgPrice') or 0)
+                                p_entry = float(
+                                    p.get('avgPrice') or 
+                                    p.get('averagePrice') or 
+                                    p.get('entryPrice') or 
+                                    p.get('holdAvgPrice') or 
+                                    p.get('price') or 
+                                    0
+                                )
                                     if p_entry > 0:
                                         entry_price = p_entry
                                     break
