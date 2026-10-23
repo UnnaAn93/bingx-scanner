@@ -271,7 +271,7 @@ async def analyze_market(symbol):
             h_lower_wick = min(h_open, h_close) - h_low
         
         # Якщо верхня або нижня тінь більша за 55% від загального діапазону годинної свічки — це шпилька
-         if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
+        if h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55:
             return None, True, "Велика шпилька/тінь на 1г свічці"
 
 
