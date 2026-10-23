@@ -661,18 +661,17 @@ async def monitor_trades_loop():
                             for p in pos_data_list:
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_q = abs(float(p.get('positionAmt', 0)))
-                                p_entry = float(
-                                    p.get('avgPrice') or 
-                                    p.get('averagePrice') or 
-                                    p.get('entryPrice') or 
-                                    p.get('holdAvgPrice') or 
-                                    p.get('price') or 
-                                    0
-                                )
+                                    p_entry = float(
+                                        p.get('avgPrice') or 
+                                        p.get('averagePrice') or 
+                                        p.get('entryPrice') or 
+                                        p.get('holdAvgPrice') or 
+                                        p.get('price') or 
+                                        0
+                                    )
                                     if p_entry > 0:
                                         entry_price = p_entry
-                                    break
-
+                                        break
                             if exact_q == 0:
                                 exact_q = abs(float(current_qty))
 
