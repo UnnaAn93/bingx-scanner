@@ -324,7 +324,12 @@ async def analyze_market(symbol):
             # Перевірка віддаленості від EMA
             if (current_price - ema_50_15m) > max_distance_from_ema:
                 return None, True, "Занадто далеко від EMA (для лонга)"
-                
+            # Фільтр «пилки»: ціна не повинна перетинати EMA50 або чіпати її знизу на останніх свічках
+            recent_crossed_ema = any(
+                float(c['low']) <= ema_50_15m for c in closed_candles[-3:]
+            )
+            if recent_crossed_ema:
+                return None, True, "Ціна пиляє або перетинає EMA50 знизу (флет)"
             # Перевірка наявності необхідної нижньої тіні за останні 4 свічки
             if not has_required_lower_wick:
                 return None, True, "Немає необхідної нижньої тіні"
@@ -362,6 +367,12 @@ async def analyze_market(symbol):
             # Перевірка віддаленості від EMA
             if (ema_50_15m - current_price) > max_distance_from_ema:
                 return None, True, "Занадто далеко від EMA (для шорта)"
+            # Фільтр «пилки»: ціна не повинна перетинати EMA50 або чіпати її зверху на останніх свічках
+            recent_crossed_ema = any(
+                float(c['high']) >= ema_50_15m for c in closed_candles[-3:]
+            )
+            if recent_crossed_ema:
+                return None, True, "Ціна пиляє або перетинає EMA50 зверху (флет)"
                 
             # Перевірка наявності необхідної верхньої тіні за останні 4 свічки
             if not has_required_upper_wick:
