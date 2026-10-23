@@ -573,7 +573,7 @@ async def monitor_trades_loop():
                         print(f"[INFO] Відновлено позицію без історії у файлі: {sym} ({status_text})", flush=True)
 
             for symbol, data in list(active_trade_monitors.items()):
-                current_pos_data = next((p for p in positions if p.get('symbol'] == symbol), None)
+                current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
                 
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
                     if data.get('tp3_hit', False):
