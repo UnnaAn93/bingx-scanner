@@ -313,26 +313,25 @@ def calculate_sar(candles, step=0.02, max_step=0.2):
 # --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД 8.0 ATR) ---
 async def analyze_market(symbol):
     try:
-        raw_1m = await get_klines(symbol, "1m", 30)
-        raw_15m = await get_klines(symbol, "15m", 100)
+        # Отримуємо дані з біржі: 1хв для об'ємів, 15хв для техніки
+        raw_1m = await get_klines(symbol, '1m', 30)
+        raw_15m = await get_klines(symbol, '15m', 100)
 
         if len(raw_1m) < 30 or len(raw_15m) < 100:
             return None, False, "Недостатньо історичних даних"
 
-        klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
-                      'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1m]
-        
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
-                       'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
+        klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1m]
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
 
-        # 1. Перевірка сплеску об'єму на 1 хв (>= 2.0х)
+        # 1. Перевірка сплеску об'єму на 1хв ( >= 3.0x від середнього за попередні 10 свічок)
         avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-20:-10]) / 10
         has_volume_spike_1m = any(
-            float(x.get('volume', 0)) >= avg_volume_1m * 2.0
+            float(x.get('volume', 0)) >= avg_volume_1m * 3.0
             for x in klines_1m[-10:]
         )
+        
         if not has_volume_spike_1m:
-            return None, False, "Немає всплеску об'єму на 1х (>= 2.0х)"
+            return None, False, "Немає сплеску об'єму на 1хв (>= 3.0x)"
 
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
@@ -341,96 +340,134 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
 
-        # Розрахунок EMA 50 та жорсткий критерій контртренду (8.0 * ATR)
+        # Розрахунок EMA 50 та критерію контртренду
         ema_50_15m = calculate_ema(closed_candles, period=50)
         if ema_50_15m is None:
             return None, True, "Недостатньо даних для EMA 50"
 
         distance_from_ema = abs(current_price - ema_50_15m)
-        is_far_from_ema = distance_from_ema > (atr_15m * 8.0)  # Справжній екстремальний контртренд від 8 ATR
+        is_far_from_ema = distance_from_ema > (atr_15m * 2.0)
 
-        # 2. Розрахунок KDJ та ЖОРСТКА перевірка екстремальної J-зони + перетину
+        # --- АНАЛІЗ КРАПОК SAR (Перевірка останніх 6 свічок) ---
+        sar_results = calculate_sar(closed_candles)
+        sar_above_count = 0
+        sar_below_count = 0
+
+        if len(sar_results) >= 6:
+            for item in sar_results[-6:]:
+                if item['is_above']:
+                    sar_above_count += 1
+                else:
+                    sar_below_count += 1
+
+        # 2. Розрахунок KDJ та перевірка зон 10 / 90 + перетину ліній
         k_vals, d_vals, j_vals = calculate_kd(closed_candles)
         if len(k_vals) < 2 or len(j_vals) < 12:
             return None, True, "Недостатньо даних для KDJ"
 
         cur_k, cur_d = k_vals[-1], d_vals[-1]
         prev_k, prev_d = k_vals[-2], d_vals[-2]
-        
-        recent_j = j_vals[-12:]
-        j_was_oversold = any(val < 10 for val in recent_j)   # J реально була нижче 10 для лонга
-        j_was_overbought = any(val > 90 for val in recent_j) # J реально була вище 90 для шорта
 
-        kdj_long_signal = (prev_k <= prev_d and cur_k > cur_d) and j_was_oversold
-        kdj_short_signal = (prev_k >= prev_d and cur_k < cur_d) and j_was_overbought
+        recent_j = j_vals[-12:]
+        j_was_oversold = any(val < 10 for val in recent_j)     # Суворо 10 для лонгу
+        j_was_overbought = any(val > 90 for val in recent_j)   # Суворо 90 для шорту
+
+        kdj_long_signal = (prev_k < prev_d and cur_k > cur_d) and j_was_oversold
+        kdj_short_signal = (prev_k > prev_d and cur_k < cur_d) and j_was_overbought
 
         if not kdj_long_signal and not kdj_short_signal:
-            return None, True, "Відсутній справжній сигнал KDJ (не було виходу J у зону <10 або >90)"
+            return None, True, "Відсутній справжній сигнал KDJ (не було виходу у зону <10 або >90)"
 
-        # 3. Перевірка тіней на 15m свічках
+        # --- 3. Перевірка тіней на 15м свічках ---
         has_required_lower_wick = any(
-            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5
+            (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close'])))
             for c in closed_candles[-3:-1]
             if (float(c['high']) - float(c['low'])) > 0
         )
 
         has_required_upper_wick = any(
-            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) * 2.5
+            (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low']))
             for c in closed_candles[-3:-1]
             if (float(c['high']) - float(c['low'])) > 0
         )
 
-        # --- Логіка входу для LONG (За трендом біля EMA АБО Контртренд, якщо відстань > 8 ATR) ---
+        # --- Логіка входу для LONG ---
         can_take_long = (current_price >= ema_50_15m) or (current_price < ema_50_15m and is_far_from_ema)
+        
+        # ЗАБОРОНА ЛОНГУ: Якщо є рівно 6 або більше крапок зверху із 6 останніх
+        long_blocked_by_sar = False
+        if sar_above_count >= 6:
+            can_take_long = False
+            long_blocked_by_sar = True
 
-        if kdj_long_signal and has_required_lower_wick and can_take_long:
+        if kdj_long_signal:
+            if long_blocked_by_sar:
+                return None, True, f"Заборона LONG: знайдено {sar_above_count} крапок SAR зверху (>=6)"
+            if not has_required_lower_wick:
+                return None, True, "Відхилено LONG: немає потрібної нижньої тіні"
+            if not can_take_long:
+                return None, True, "Відхилено LONG: не пройдено фільтр EMA/контртренду"
+
             stop_loss = round(current_price - (atr_15m * 2.0), 6)
             tp1 = round(current_price + (atr_15m * 3.0), 6)
             tp2 = round(tp1 + (atr_15m * 2.0), 6)
             tp3 = round(tp2 + (atr_15m * 2.0), 6)
-            
+
             risk = current_price - stop_loss
             reward = tp1 - current_price
-            
+
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far > 8 ATR)"
+                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far > 2 ATR)"
                 return (
                     {
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
                     },
-                    True, f"ОК ({entry_label})"
+                    True, f"OK ({entry_label})"
                 )
 
-        # --- Логіка входу для SHORT (За трендом біля EMA АБО Контртренд, якщо відстань > 8 ATR) ---
-        can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
+        # --- Логіка входу для SHORT ---
+        can_take_short = (current_price < ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
+        
+        # ЗАБОРОНА ШОРТУ: Якщо є рівно 6 або більше крапок знизу із 6 останніх
+        short_blocked_by_sar = False
+        if sar_below_count >= 6:
+            can_take_short = False
+            short_blocked_by_sar = True
 
-        if kdj_short_signal and has_required_upper_wick and can_take_short:
+        if kdj_short_signal:
+            if short_blocked_by_sar:
+                return None, True, f"Заборона SHORT: знайдено {sar_below_count} крапок SAR знизу (>=6)"
+            if not has_required_upper_wick:
+                return None, True, "Відхилено SHORT: немає потрібної верхньої тіні"
+            if not can_take_short:
+                return None, True, "Відхилено SHORT: не пройдено фільтр EMA/контртренду"
+
             stop_loss = round(current_price + (atr_15m * 2.0), 6)
             tp1 = round(current_price - (atr_15m * 3.0), 6)
             tp2 = round(tp1 - (atr_15m * 2.0), 6)
             tp3 = round(tp2 - (atr_15m * 2.0), 6)
-            
+
             risk = stop_loss - current_price
-            reward = current_price - tp1
-            
+            reward = tp1 - current_price
+
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far > 8 ATR)"
+                entry_label = "Trend Short" if current_price < ema_50_15m else "Counter-Trend Short (Far > 2 ATR)"
                 return (
                     {
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
                     },
-                    True, f"ОК ({entry_label})"
+                    True, f"OK ({entry_label})"
                 )
 
-        return None, True, "Умови за трендом/контртрендом, KDJ чи тінями не збіглися"
+        return None, True, f"Умови не збіглися (SAR зверху: {sar_above_count}, знизу: {sar_below_count})"
 
-    except Exception as e:
-        return None, True, f"Помилка аналізу: {str(e)}"
-        
+    except Exception as ex:
+        return None, True, f"Помилка аналізу: {str(ex)}"
+                
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
     try:
