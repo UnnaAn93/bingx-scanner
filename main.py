@@ -549,11 +549,13 @@ async def monitor_trades_loop():
                                 is_be = True
 
                         existing_data = active_trade_monitors.get(sym, {})
+                        saved_original_qty = existing_data.get('original_qty', current_qty)
 
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
                             'stop_loss': found_stop_price,
                             'initial_qty': existing_data.get('initial_qty', current_qty),
+                            'original_qty': saved_original_qty,
                             'in_breakeven': is_be or existing_data.get('tp1_hit', False) or existing_data.get('in_breakeven', False),
                             'tp1_hit': existing_data.get('tp1_hit', False) or is_be,
                             'tp2_hit': existing_data.get('tp2_hit', False),
@@ -592,14 +594,15 @@ async def monitor_trades_loop():
                 initial_qty = data['initial_qty']
 
                 if current_qty < initial_qty:
-                    ratio = current_qty / initial_qty
                     side_val = data.get('side', 'LONG').upper()
 
+                    orig_qty = float(data.get('original_qty', initial_qty))
+                    total_ratio = current_qty / orig_qty if orig_qty > 0 else 1.0
+
                     # TP1 (з перенесенням стопу в Безубиток)
-                    if not data.get('tp1_hit', False) and ratio <= 0.55:
+                    if not data.get('tp1_hit', False) and total_ratio <= 0.55:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
                         await send_telegram(f"🔵 **TP1 досягнуто!** Монета: {symbol} | Стоп-лос успішно перенесено в БУ.")
 
@@ -683,16 +686,14 @@ async def monitor_trades_loop():
                             await send_telegram(err_msg)
 
                     # TP2
-                    if not data.get('tp2_hit', False) and ratio <= 0.30:
+                    if not data.get('tp2_hit', False) and total_ratio <= 0.30:
                         data['tp2_hit'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
                         await send_telegram(f"🟡 **TP2 досягнуто!** Монета: {symbol}")
 
                     # TP3
-                    if not data.get('tp3_hit', False) and ratio <= 0.05:
+                    if not data.get('tp3_hit', False) and total_ratio <= 0.05:
                         data['tp3_hit'] = True
-                        data['initial_qty'] = current_qty
                         save_trades_state(active_trade_monitors)
                         await send_telegram(f"🟢 **TP3 досягнуто!** Всі цілі відпрацьовано по {symbol}")
 
@@ -700,6 +701,7 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
 
         await asyncio.sleep(60)
+                                
         
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
