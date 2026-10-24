@@ -559,11 +559,11 @@ async def monitor_trades_loop():
                         }
                         save_trades_state(active_trade_monitors)
 
-                        status_text = "В безубитку (БУ)" if is_be else "Ризикова"
-                        print(f"[INFO] Моніторинг {sym} | Сторона: {pos_side} | ТВХ: {entry_p} | Стоп: {found_stop_price} | Статус: {status_text}", flush=True)
-
-            for symbol, data in list(active_trade_monitors.items()):
-                current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
+                # Ось тут починається цикл моніторингу, куди треба перенести виведення логу:
+                for symbol, data in list(active_trade_monitors.items()):
+                    status_text = "В безубитку (БУ)" if data.get('in_breakeven', False) else "Ризикова"
+                    print(f"[INFO] Моніторинг {symbol} | Сторона: {data.get('side')} | ТВХ: {data.get('entry')} | Стоп: {data.get('stop_loss')} | Статус: {status_text}")
+                    current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
 
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
                     if data.get('tp3_hit', False):
