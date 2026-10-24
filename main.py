@@ -422,7 +422,7 @@ async def analyze_market(symbol):
                     {
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
+                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})",
                         "sar_info": f"SAR зверху: {sar_above_count}, знизу: {sar_below_count}"
                     },
                     True, f"OK ({entry_label})"
