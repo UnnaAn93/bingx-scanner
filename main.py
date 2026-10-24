@@ -259,7 +259,7 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
     except Exception:
         return [50.0], [50.0], [50.0]
         
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД 8.0 ATR) ---
 async def analyze_market(symbol):
     try:
         raw_1m = await get_klines(symbol, "1m", 30)
@@ -290,31 +290,31 @@ async def analyze_market(symbol):
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
 
-        # Розрахунок EMA 50 та відхилення від неї
+        # Розрахунок EMA 50 та жорсткий критерій контртренду (8.0 * ATR)
         ema_50_15m = calculate_ema(closed_candles, period=50)
         if ema_50_15m is None:
             return None, True, "Недостатньо даних для EMA 50"
 
         distance_from_ema = abs(current_price - ema_50_15m)
-        is_far_from_ema = distance_from_ema > (atr_15m * 2.5)  # Критерій "далеко від EMA"
+        is_far_from_ema = distance_from_ema > (atr_15m * 8.0)  # Справжній екстремальний контртренд від 8 ATR
 
-        # 2. Розрахунок KDJ та перевірка J-зони + перетину
+        # 2. Розрахунок KDJ та ЖОРСТКА перевірка екстремальної J-зони + перетину
         k_vals, d_vals, j_vals = calculate_kd(closed_candles)
-        if len(k_vals) < 2 or len(j_vals) < 6:
+        if len(k_vals) < 2 or len(j_vals) < 12:
             return None, True, "Недостатньо даних для KDJ"
 
         cur_k, cur_d = k_vals[-1], d_vals[-1]
         prev_k, prev_d = k_vals[-2], d_vals[-2]
         
-        recent_j = j_vals[-6:-1]
-        j_was_oversold = any(val < 10 for val in recent_j)   # J < 10 для лонга
-        j_was_overbought = any(val > 90 for val in recent_j) # J > 90 для шорта
+        recent_j = j_vals[-12:]
+        j_was_oversold = any(val < 10 for val in recent_j)   # J реально була нижче 10 для лонга
+        j_was_overbought = any(val > 90 for val in recent_j) # J реально була вище 90 для шорта
 
         kdj_long_signal = (prev_k <= prev_d and cur_k > cur_d) and j_was_oversold
         kdj_short_signal = (prev_k >= prev_d and cur_k < cur_d) and j_was_overbought
 
         if not kdj_long_signal and not kdj_short_signal:
-            return None, True, "Відсутній сигнал KDJ (J-зона + перетин)"
+            return None, True, "Відсутній справжній сигнал KDJ (не було виходу J у зону <10 або >90)"
 
         # 3. Перевірка тіней на 15m свічках
         has_required_lower_wick = any(
@@ -329,7 +329,7 @@ async def analyze_market(symbol):
             if (float(c['high']) - float(c['low'])) > 0
         )
 
-        # --- Логіка входу для LONG (За трендом біля EMA АБО Контртренд, якщо далеко знизу) ---
+        # --- Логіка входу для LONG (За трендом біля EMA АБО Контртренд, якщо відстань > 8 ATR) ---
         can_take_long = (current_price >= ema_50_15m) or (current_price < ema_50_15m and is_far_from_ema)
 
         if kdj_long_signal and has_required_lower_wick and can_take_long:
@@ -342,7 +342,7 @@ async def analyze_market(symbol):
             reward = tp1 - current_price
             
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far from EMA)"
+                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far > 8 ATR)"
                 return (
                     {
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
@@ -352,7 +352,7 @@ async def analyze_market(symbol):
                     True, f"ОК ({entry_label})"
                 )
 
-        # --- Логіка входу для SHORT (За трендом біля EMA АБО Контртренд, якщо далеко зверху) ---
+        # --- Логіка входу для SHORT (За трендом біля EMA АБО Контртренд, якщо відстань > 8 ATR) ---
         can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
 
         if kdj_short_signal and has_required_upper_wick and can_take_short:
@@ -365,7 +365,7 @@ async def analyze_market(symbol):
             reward = current_price - tp1
             
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far from EMA)"
+                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far > 8 ATR)"
                 return (
                     {
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
@@ -379,7 +379,6 @@ async def analyze_market(symbol):
 
     except Exception as e:
         return None, True, f"Помилка аналізу: {str(e)}"
-        
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
