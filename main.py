@@ -423,6 +423,7 @@ async def analyze_market(symbol):
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
+                        "sar_info": f"SAR зверху: {sar_above_count}, знизу: {sar_below_count}"
                     },
                     True, f"OK ({entry_label})"
                 )
@@ -459,6 +460,7 @@ async def analyze_market(symbol):
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
+                        "sar_info": f"SAR зверху: {sar_above_count}, знизу: {sar_below_count}"
                     },
                     True, f"OK ({entry_label})"
                 )
@@ -556,6 +558,7 @@ async def open_position(setup):
         msg = (f"🚀 Відкрито позицію ({setup['signal']}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {setup['symbol']}\n"
                f"📌 Тип входу: {entry_type_str}\n"
+               f"▪️ {sar_info}\n"
                f"📍 Вхід: {setup['entry']:.6f}\n"
                f"🛑 Стоп: {setup['stop_loss']:.6f}\n"
                f"🎯 TP1 (50%): {setup['tp1']:.6f}\n"
