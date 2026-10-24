@@ -536,10 +536,10 @@ async def monitor_trades_loop():
                                     if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
                                         found_stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
                                         if found_stop_price > 0 and entry_p > 0:
-                                            if pos_side == 'LONG' and found_stop_price >= (entry_p - 0.01):
+                                            if pos_side == 'LONG' and found_stop_price >= entry_p:
                                                 is_be = True
                                                 break
-                                            elif pos_side == 'SHORT' and found_stop_price <= (entry_p + 0.01):
+                                            elif pos_side == 'SHORT' and found_stop_price <= entry_p:
                                                 is_be = True
                                                 break
                         except Exception as ex:
