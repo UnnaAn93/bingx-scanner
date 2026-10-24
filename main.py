@@ -661,12 +661,16 @@ async def monitor_trades_loop():
                 current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
 
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
-                    if data.get('tp3_hit', False):
-                        await send_telegram(f"🏁 **Всі цілі (ТР3) досягнуто!** Позиція по {symbol} повністю закрита.")
-                    elif data.get('in_breakeven', False):
-                        await send_telegram(f"🛡 **Безубиток!** Позиція по {symbol} закрито в БУ.")
-                    else:
-                        await send_telegram(f"🔴 **Стоп по позиції!** Позиція по {symbol} закрито за стоп-лоссом.")
+                  if data.get('tp3_hit', False):
+                      await send_telegram(f"🏁 **Всі цілі (TP3) досягнуто!** Позиція по {symbol} повністю закрита.")
+                  elif data.get('tp2_hit', False):
+                      await send_telegram(f"🟡 **TP2 досягнуто!** Позиція по {symbol} закрита.")
+                  elif data.get('tp1_hit', False):
+                      await send_telegram(f"🔵 **TP1 досягнуто!** Позиція по {symbol} закрита.")
+                  elif data.get('in_breakeven', False):
+                      await send_telegram(f"🛡️ **Безубиток!** Позиція по {symbol} закрито в БУ.")
+                  else:
+                      await send_telegram(f"🔴 **Стоп по позиції!** Позиція по {symbol} закрито за стоп-лоссом.")
 
                     del active_trade_monitors[symbol]
                     save_trades_state(active_trade_monitors)
