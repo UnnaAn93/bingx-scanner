@@ -259,7 +259,7 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
     except Exception:
         return [50.0], [50.0], [50.0]
         
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД) ---
 async def analyze_market(symbol):
     try:
         raw_1m = await get_klines(symbol, "1m", 30)
@@ -289,6 +289,14 @@ async def analyze_market(symbol):
 
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
+
+        # Розрахунок EMA 50 та відхилення від неї
+        ema_50_15m = calculate_ema(closed_candles, period=50)
+        if ema_50_15m is None:
+            return None, True, "Недостатньо даних для EMA 50"
+
+        distance_from_ema = abs(current_price - ema_50_15m)
+        is_far_from_ema = distance_from_ema > (atr_15m * 2.5)  # Критерій "далеко від EMA"
 
         # 2. Розрахунок KDJ та перевірка J-зони + перетину
         k_vals, d_vals, j_vals = calculate_kd(closed_candles)
@@ -321,8 +329,10 @@ async def analyze_market(symbol):
             if (float(c['high']) - float(c['low'])) > 0
         )
 
-        # --- Формування сигналу LONG ---
-        if kdj_long_signal and has_required_lower_wick:
+        # --- Логіка входу для LONG (За трендом біля EMA АБО Контртренд, якщо далеко знизу) ---
+        can_take_long = (current_price >= ema_50_15m) or (current_price < ema_50_15m and is_far_from_ema)
+
+        if kdj_long_signal and has_required_lower_wick and can_take_long:
             stop_loss = round(current_price - (atr_15m * 2.0), 6)
             tp1 = round(current_price + (atr_15m * 3.0), 6)
             tp2 = round(tp1 + (atr_15m * 2.0), 6)
@@ -332,17 +342,20 @@ async def analyze_market(symbol):
             reward = tp1 - current_price
             
             if risk > 0 and (reward / risk) >= 1.3:
+                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far from EMA)"
                 return (
                     {
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": "KDJ Розворот (Long)"
+                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
                     },
-                    True, "ОК (KDJ Long Signal)"
+                    True, f"ОК ({entry_label})"
                 )
 
-        # --- Формування сигналу SHORT ---
-        elif kdj_short_signal and has_required_upper_wick:
+        # --- Логіка входу для SHORT (За трендом біля EMA АБО Контртренд, якщо далеко зверху) ---
+        can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
+
+        if kdj_short_signal and has_required_upper_wick and can_take_short:
             stop_loss = round(current_price + (atr_15m * 2.0), 6)
             tp1 = round(current_price - (atr_15m * 3.0), 6)
             tp2 = round(tp1 - (atr_15m * 2.0), 6)
@@ -352,16 +365,17 @@ async def analyze_market(symbol):
             reward = current_price - tp1
             
             if risk > 0 and (reward / risk) >= 1.3:
+                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far from EMA)"
                 return (
                     {
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": "KDJ Розворот (Short)"
+                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})"
                     },
-                    True, "ОК (KDJ Short Signal)"
+                    True, f"ОК ({entry_label})"
                 )
 
-        return None, True, "Умови за тінями та KDJ не збіглися"
+        return None, True, "Умови за трендом/контртрендом, KDJ чи тінями не збіглися"
 
     except Exception as e:
         return None, True, f"Помилка аналізу: {str(e)}"
