@@ -258,7 +258,58 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
         return k_list, d_list, j_list
     except Exception:
         return [50.0], [50.0], [50.0]
+
+def calculate_sar(candles, step=0.02, max_step=0.2):
+    """Розраховує Parabolic SAR на основі свічок з біржі"""
+    if not candles or len(candles) < 3:
+        return []
+    
+    sar_list = []
+    is_long = float(candles[1]['close']) > float(candles[0]['close'])
+    sar = float(candles[0]['low']) if is_long else float(candles[0]['high'])
+    ep = float(candles[0]['high']) if is_long else float(candles[0]['low'])
+    af = step
+
+    for i in range(len(candles)):
+        high = float(candles[i]['high'])
+        low = float(candles[i]['low'])
+        close = float(candles[i]['close'])
         
+        sar = sar + af * (ep - sar)
+        
+        if is_long:
+            if i > 0 and sar > float(candles[i-1]['low']):
+                sar = float(candles[i-1]['low'])
+            if i > 1 and sar > float(candles[i-2]['low']):
+                sar = float(candles[i-2]['low'])
+            if high > ep:
+                ep = high
+                af = min(af + step, max_step)
+            if low < sar:
+                is_long = False
+                sar = ep
+                ep = low
+                af = step
+        else:
+            if i > 0 and sar < float(candles[i-1]['high']):
+                sar = float(candles[i-1]['high'])
+            if i > 1 and sar < float(candles[i-2]['high']):
+                sar = float(candles[i-2]['high'])
+            if low < ep:
+                ep = low
+                af = min(af + step, max_step)
+            if high > sar:
+                is_long = True
+                sar = ep
+                ep = high
+                af = step
+                
+        sar_list.append({
+            'sar': sar,
+            'is_above': sar > close  # True, якщо крапка зверху над свічкою
+        })
+    return sar_list
+    
 # --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД 8.0 ATR) ---
 async def analyze_market(symbol):
     try:
