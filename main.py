@@ -492,20 +492,19 @@ async def monitor_trades_loop():
                     sym = p['symbol']
                     if sym not in active_trade_monitors:
                         pos_side = p.get('positionSide') or ('LONG' if float(p.get('positionAmt', 0)) > 0 else 'SHORT')
-                        
+
                         entry_p = float(
-                            p.get('avgPrice') or 
-                            p.get('averagePrice') or 
-                            p.get('entryPrice') or 
-                            p.get('holdAvgPrice') or 
-                            p.get('price') or 
+                            p.get('avgPrice') or
+                            p.get('averagePrice') or
+                            p.get('entryPrice') or
+                            p.get('holdAvgPrice') or
+                            p.get('price') or
                             0
                         )
-                        
-                        # Якщо біржа в positions ще не оновила і віддає 0, беремо з історії ордерів
+
                         if entry_p <= 0:
                             try:
-                                trades_res = await bingx_request('GET', '/openApi/swap/v2/trade/fillHistory', {'symbol': sym, 'limit': 1})
+                                trades_res = await bingx_request('GET', '/openApi/swap/v2/trade/fillHistory', {'symbol': sym})
                                 if isinstance(trades_res, dict) and trades_res.get('code') == 0:
                                     trades_data = trades_res.get('data', [])
                                     if trades_data and isinstance(trades_data, list):
@@ -515,8 +514,9 @@ async def monitor_trades_loop():
 
                         current_qty = abs(float(p.get('positionAmt', 0)))
 
-                        found_stop_price = 0.0
+                        found_stop_price = float(p.get('stopLoss', 0) or p.get('stopLossPrice', 0) or 0)
                         is_be = False
+
                         try:
                             ord_res = await bingx_request('GET', '/openApi/swap/v2/trade/openOrders', {'symbol': sym})
                             orders_list = []
@@ -528,50 +528,55 @@ async def monitor_trades_loop():
                                     orders_list = ord_data
                                 elif isinstance(ord_data, dict):
                                     orders_list = ord_data.get('orders', [])
-                                elif 'orders' in ord_res:
-                                    orders_list = ord_res.get('orders', [])
+                                elif 'orders' in ord_data:
+                                    orders_list = ord_data.get('orders', [])
 
-                            for e in orders_list:
-                                if isinstance(e, dict):
-                                    if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
-                                        found_stop_price = float(e.get('stopPrice') or e.get('triggerPrice', 0))
-                                        if found_stop_price > 0 and entry_p > 0:
-                                            if pos_side == 'LONG' and found_stop_price >= entry_p:
-                                                is_be = True
-                                                break
-                                            elif pos_side == 'SHORT' and found_stop_price <= entry_p:
-                                                is_be = True
+                            if found_stop_price <= 0:
+                                for e in orders_list:
+                                    if isinstance(e, dict):
+                                        if e.get('type') in ['STOP_MARKET', 'STOP', 'TRIGGER']:
+                                            s_val = float(e.get('stopPrice') or e.get('triggerPrice', 0))
+                                            if s_val > 0:
+                                                found_stop_price = s_val
                                                 break
                         except Exception as ex:
                             pass
 
+                        if found_stop_price > 0 and entry_p > 0:
+                            if pos_side == 'LONG' and found_stop_price >= entry_p:
+                                is_be = True
+                            elif pos_side == 'SHORT' and found_stop_price <= entry_p:
+                                is_be = True
+
+                        existing_data = active_trade_monitors.get(sym, {})
+
                         active_trade_monitors[sym] = {
                             'entry': entry_p,
                             'stop_loss': found_stop_price,
-                            'initial_qty': current_qty,
-                            'in_breakeven': is_be,
-                            'tp1_hit': is_be,
-                            'tp2_hit': False,
-                            'tp3_hit': False,
+                            'initial_qty': existing_data.get('initial_qty', current_qty),
+                            'in_breakeven': is_be or existing_data.get('tp1_hit', False) or existing_data.get('in_breakeven', False),
+                            'tp1_hit': existing_data.get('tp1_hit', False) or is_be,
+                            'tp2_hit': existing_data.get('tp2_hit', False),
+                            'tp3_hit': existing_data.get('tp3_hit', False),
                             'side': pos_side,
-                            'app_volume_count': 0,
-                            'last_opp_alert_time': 0
+                            'app_volume_count': existing_data.get('app_volume_count', 0),
+                            'last_opp_alert_time': existing_data.get('last_opp_alert_time', 0)
                         }
                         save_trades_state(active_trade_monitors)
 
-                # Ось тут починається цикл моніторингу, куди треба перенести виведення логу:
-                for symbol, data in list(active_trade_monitors.items()):
-                    status_text = "В безубитку (БУ)" if data.get('in_breakeven', False) else "Ризикова"
-                    print(f"[INFO] Моніторинг {symbol} | Сторона: {data.get('side')} | ТВХ: {data.get('entry')} | Стоп: {data.get('stop_loss')} | Статус: {status_text}")
-                    current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
+            for symbol, data in list(active_trade_monitors.items()):
+                status_text = "В безубитку (БУ)" if data.get('in_breakeven', False) else "Ризикова"
+                print(f"[INFO] Моніторинг {symbol} | Сторона: {data.get('side')} | ТВХ: {data.get('entry')} | Стоп: {data.get('stop_loss')} | Статус: {status_text}", flush=True)
+                
+                current_pos_data = next((p for p in positions if p.get('symbol') == symbol), None)
 
                 if symbol not in active_symbols or not current_pos_data or float(current_pos_data.get('positionAmt', 0)) == 0:
                     if data.get('tp3_hit', False):
-                        await send_telegram(f"🟢 **Всі цілі (TP3) досягнуто!** Позиція по {symbol} повністю закрита.")
+                        await send_telegram(f"🏁 **Всі цілі (ТР3) досягнуто!** Позиція по {symbol} повністю закрита.")
                     elif data.get('in_breakeven', False):
-                        await send_telegram(f"🛡 **Безубиток!** Позицію по {symbol} закрито в БУ.")
+                        await send_telegram(f"🛡 **Безубиток!** Позиція по {symbol} закрито в БУ.")
                     else:
-                        await send_telegram(f"🛑 **Стоп по позиції!** Позицію по {symbol} закрито за стоп-лоссом.")
+                        await send_telegram(f"🔴 **Стоп по позиції!** Позиція по {symbol} закрито за стоп-лоссом.")
 
                     del active_trade_monitors[symbol]
                     save_trades_state(active_trade_monitors)
@@ -590,7 +595,7 @@ async def monitor_trades_loop():
                     ratio = current_qty / initial_qty
                     side_val = data.get('side', 'LONG').upper()
 
-                    # TP1 (з перенесенням стопу в безубиток)
+                    # TP1 (з перенесенням стопу в Безубиток)
                     if not data.get('tp1_hit', False) and ratio <= 0.55:
                         data['tp1_hit'] = True
                         data['in_breakeven'] = True
@@ -609,14 +614,14 @@ async def monitor_trades_loop():
                                     orders_list = ord_data
                                 elif isinstance(ord_data, dict):
                                     orders_list = ord_data.get('orders', [])
-                                elif 'orders' in ord_res:
-                                    orders_list = ord_res.get('orders', [])
+                                elif 'orders' in ord_data:
+                                    orders_list = ord_data.get('orders', [])
 
                             for ord_item in orders_list:
                                 if isinstance(ord_item, dict) and ord_item.get('type') == 'STOP_MARKET':
                                     ord_id = ord_item.get('orderId')
                                     if ord_id:
-                                        await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': ord_id})
+                                        await bingx_request('DELETE', '/openApi/swap/v2/trade/order', {'symbol': symbol, 'orderId': str(ord_id)})
 
                             pos_res = await bingx_request('GET', '/openApi/swap/v2/user/positions', {'symbol': symbol})
                             pos_data_list = []
@@ -636,16 +641,17 @@ async def monitor_trades_loop():
                                 if isinstance(p, dict) and float(p.get('positionAmt', 0)) != 0:
                                     exact_q = abs(float(p.get('positionAmt', 0)))
                                     p_entry = float(
-                                        p.get('avgPrice') or 
-                                        p.get('averagePrice') or 
-                                        p.get('entryPrice') or 
-                                        p.get('holdAvgPrice') or 
-                                        p.get('price') or 
+                                        p.get('avgPrice') or
+                                        p.get('averagePrice') or
+                                        p.get('entryPrice') or
+                                        p.get('holdAvgPrice') or
+                                        p.get('price') or
                                         0
                                     )
                                     if p_entry > 0:
                                         entry_price = p_entry
                                         break
+
                             if exact_q == 0:
                                 exact_q = abs(float(current_qty))
 
@@ -694,7 +700,7 @@ async def monitor_trades_loop():
             print(f"[LOG ERROR] Помилка в моніторингу угоди: {ex}", flush=True)
 
         await asyncio.sleep(60)
-
+        
 # --- 15-ХВИЛИННИЙ ЗВІТ ---
 async def report_loop():
     while True:
