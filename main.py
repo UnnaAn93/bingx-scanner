@@ -555,10 +555,11 @@ async def open_position(setup):
         save_trades_state(active_trade_monitors)
         
         entry_type_str = setup.get('entry_type', 'Стандартний')
+        sar_text = setup.get('sar_info', '')
         msg = (f"🚀 Відкрито позицію ({setup['signal']}) з 3 TP (50/25/25)\n"
                f"📌 Монета: {setup['symbol']}\n"
                f"📌 Тип входу: {entry_type_str}\n"
-               f"▪️ {sar_info}\n"
+               f"▪️ {sar_text}\n"
                f"📍 Вхід: {setup['entry']:.6f}\n"
                f"🛑 Стоп: {setup['stop_loss']:.6f}\n"
                f"🎯 TP1 (50%): {setup['tp1']:.6f}\n"
