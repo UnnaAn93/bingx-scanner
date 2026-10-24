@@ -672,9 +672,9 @@ async def monitor_trades_loop():
                   else:
                       await send_telegram(f"🔴 **Стоп по позиції!** Позиція по {symbol} закрито за стоп-лоссом.")
 
-                    del active_trade_monitors[symbol]
-                    save_trades_state(active_trade_monitors)
-                    continue
+                  del active_trade_monitors[symbol]
+                  save_trades_state(active_trade_monitors)
+                  continue
 
                 current_qty = abs(float(current_pos_data.get('positionAmt', 0)))
 
