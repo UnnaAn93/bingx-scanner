@@ -260,7 +260,7 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
         return [50.0], [50.0], [50.0]
 
 def calculate_sar(candles, step=0.02, max_step=0.2):
-    """Розраховує Parabolic SAR на основі свічок з біржі"""
+   # """Розраховує Parabolic SAR на основі свічок з біржі"""
     if not candles or len(candles) < 3:
         return []
     
