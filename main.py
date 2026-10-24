@@ -214,15 +214,58 @@ def find_last_two_fractals(candles, fractal_type='high'):
                     return found
     return []
 
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (ВКЛЮЧНО ТРЕНД) ---
+# --- ДОДАЙТЕ ЦЮ ФУНКЦІЮ ДО МАТЕМАТИЧНИХ ФУНКЦІЙ ---
+def calculate_kd(candles, n=9, m1=3, m2=3):
+    try:
+        if not candles or len(candles) < n: 
+            return [50.0], [50.0], [50.0]
+        
+        closes = [float(x['close']) for x in candles]
+        lows = [float(x['low']) for x in candles]
+        highs = [float(x['high']) for x in candles]
+        
+        rsv_list = []
+        for i in range(len(candles)):
+            if i < n - 1:
+                continue
+            sub_lows = lows[i - n + 1 : i + 1]
+            sub_highs = highs[i - n + 1 : i + 1]
+            l_val = min(sub_lows)
+            h_val = max(sub_highs)
+            c_val = closes[i]
+            
+            if h_val - l_val == 0:
+                rsv = 50.0
+            else:
+                rsv = (c_val - l_val) / (h_val - l_val) * 100.0
+            rsv_list.append(rsv)
+            
+        if not rsv_list:
+            return [50.0], [50.0], [50.0]
+
+        k_list, d_list, j_list = [], [], []
+        k = rsv_list[0]
+        d = rsv_list[0]
+        
+        for rsv in rsv_list:
+            k = (2.0 / 3.0) * k + (1.0 / 3.0) * rsv
+            d = (2.0 / 3.0) * d + (1.0 / 3.0) * k
+            j = 3.0 * k - 2.0 * d
+            k_list.append(k)
+            d_list.append(d)
+            j_list.append(j)
+            
+        return k_list, d_list, j_list
+    except Exception:
+        return [50.0], [50.0], [50.0]
+        
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ) ---
 async def analyze_market(symbol):
     try:
-        # 1. Завантаження даних з потрібних таймфреймів (1m, 15m, 1h)
         raw_1m = await get_klines(symbol, "1m", 30)
         raw_15m = await get_klines(symbol, "15m", 100)
-        raw_1h = await get_klines(symbol, "1h", 60)
 
-        if len(raw_1m) < 30 or len(raw_15m) < 100 or len(raw_1h) < 60:
+        if len(raw_1m) < 30 or len(raw_15m) < 100:
             return None, False, "Недостатньо історичних даних"
 
         klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
@@ -230,11 +273,8 @@ async def analyze_market(symbol):
         
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
                        'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
-        
-        klines_1h = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']),
-                      'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h]
 
-        # 2. Перевірка сплеску об'єму на 1 хв (>= 2.0х за останні 10 свічок)
+        # 1. Перевірка сплеску об'єму на 1 хв (>= 2.0х)
         avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-20:-10]) / 10
         has_volume_spike_1m = any(
             float(x.get('volume', 0)) >= avg_volume_1m * 2.0
@@ -246,102 +286,45 @@ async def analyze_market(symbol):
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
         current_price = klines_15m[-1]['close']
-        last_candle = klines_15m[-1]
 
         if atr_15m == 0:
             return None, True, "Нульовий ATR"
+
+        # 2. Розрахунок KDJ та перевірка J-зони + перетину
+        k_vals, d_vals, j_vals = calculate_kd(closed_candles)
+        if len(k_vals) < 2 or len(j_vals) < 6:
+            return None, True, "Недостатньо даних для KDJ"
+
+        cur_k, cur_d = k_vals[-1], d_vals[-1]
+        prev_k, prev_d = k_vals[-2], d_vals[-2]
         
-        # 3. Визначення тренду на годині (1h EMA 50)
-        closed_candles_h = klines_1h[:-1]
-        ema_50_1h = calculate_ema(closed_candles_h, period=50)
-        if ema_50_1h is None:
-            return None, False, "Недостатньо даних для EMA 50 на 1г"
+        recent_j = j_vals[-6:-1]
+        j_was_oversold = any(val < 10 for val in recent_j)   # J < 10 для лонга
+        j_was_overbought = any(val > 90 for val in recent_j) # J > 90 для шорта
 
-        # Перевірка на великі шпильки/тіні на останній закритій годинній свічці (з виправленою ініціалізацією)
-        last_candle_h = closed_candles_h[-1]
-        h_high = float(last_candle_h['high'])
-        h_low = float(last_candle_h['low'])
-        h_open = float(last_candle_h['open'])
-        h_close = float(last_candle_h['close'])
-        h_range = h_high - h_low
-    
-        h_upper_wick = 0.0
-        h_lower_wick = 0.0
+        kdj_long_signal = (prev_k <= prev_d and cur_k > cur_d) and j_was_oversold
+        kdj_short_signal = (prev_k >= prev_d and cur_k < cur_d) and j_was_overbought
 
-        if h_range > 0:
-            h_upper_wick = h_high - max(h_open, h_close)
-            h_lower_wick = min(h_open, h_close) - h_low
-        
-        # Якщо верхня або нижня тінь більша за 55% від загального діапазону годинної свічки — це шпилька
-        h_body = abs(h_close - h_open)
-        # Якщо верхня або нижня тінь більша за тіло свічки (наприклад, у 1.2 рази), або перевищує 55% від розмаху
-        if (h_body > 0 and (h_upper_wick > h_body * 1.2 or h_lower_wick > h_body * 1.2)) or \
-           (h_upper_wick > h_range * 0.55 or h_lower_wick > h_range * 0.55):
-            return None, True, "Велика шпилька/тінь на 1г свічці"
+        if not kdj_long_signal and not kdj_short_signal:
+            return None, True, "Відсутній сигнал KDJ (J-зона + перетин)"
 
-        ema_50_15m = calculate_ema(closed_candles, period=50)
-        ema_current = calculate_ema(closed_candles, period=50)
-        ema_past = calculate_ema(closed_candles[:-8], period=50) 
-    
-        slope = (ema_current - ema_past) / ema_past if ema_past else 0
-        min_slope = 0.0005  
-
-        ema_is_up = (ema_50_15m > ema_past) and (slope > min_slope)
-        ema_is_down = (ema_50_15m < ema_past) and (slope < -min_slope)
-
-        if abs(slope) < min_slope:
-            return None, True, f"Слабкий нахил EMA (slope: {slope:.6f})"
-
-        # Фільтр затиснутої ціни у флеті
-        recent_candles = closed_candles[-6:]
-        highest_in_range = max(float(c['high']) for c in recent_candles)
-        lowest_in_range = min(float(c['low']) for c in recent_candles)
-        range_span = highest_in_range - lowest_in_range
-    
-        if range_span < atr_15m * 1.8:
-            return None, True, f"Занадто вузький діапазон флету (range: {range_span:.5f})"
-         
-        # 4. Тіні: перевірка на 2 останніх закритих свічках
+        # 3. Перевірка тіней на 15m свічках
         has_required_lower_wick = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close']))) * 2.5
-            and (min(float(c['open']), float(c['close'])) - float(c['low'])) > (max(float(c['open']), float(c['close'])) - min(float(c['open']), float(c['close'])))
             for c in closed_candles[-3:-1]
             if (float(c['high']) - float(c['low'])) > 0
         )
 
         has_required_upper_wick = any(
             (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low'])) * 2.5
-            and (float(c['high']) - max(float(c['open']), float(c['close']))) > (max(float(c['open']), float(c['close'])) - min(float(c['open']), float(c['close'])))
             for c in closed_candles[-3:-1]
             if (float(c['high']) - float(c['low'])) > 0
         )
 
-        # ============= ТРЕНДОВА ЛОГІКА (15m за 1h трендом) =============
-        max_distance_from_ema = atr_15m * 4.0
-
-        # --- Висхідний тренд (LONG) за 1h EMA50 ---
-        if current_price > ema_50_1h and ema_is_up and float(last_candle['close']) > ema_50_15m:
-            breakout_threshold = ema_50_15m - (atr_15m * 0.5)
-            if float(last_candle['close']) < breakout_threshold:
-                return None, True, "Ціна пробила 15m EMA з закриттям нижче допустимого люфту ATR"
-
-            if (current_price - ema_50_15m) > max_distance_from_ema:
-                return None, True, "Занадто далеко від EMA (для лонга)"
-
-            recent_crossed_ema = any(
-                float(c['low']) <= ema_50_15m for c in closed_candles[-3:]
-            )
-            if recent_crossed_ema:
-                return None, True, "Ціна пиляє або перетинає EMA50 знизу (флет)"
-
-            if not has_required_lower_wick:
-                return None, True, "Немає необхідної нижньої тіні"
-                
-            entry_type = "Від EMA"
-            stop_loss = round(ema_50_15m - (atr_15m * 2.0), 6)
-            
-            tp1_distance = atr_15m * 3.0
-            tp1 = round(current_price + tp1_distance, 6)
+        # --- Формування сигналу LONG ---
+        if kdj_long_signal and has_required_lower_wick:
+            stop_loss = round(current_price - (atr_15m * 2.0), 6)
+            tp1 = round(current_price + (atr_15m * 3.0), 6)
             tp2 = round(tp1 + (atr_15m * 2.0), 6)
             tp3 = round(tp2 + (atr_15m * 2.0), 6)
             
@@ -353,36 +336,15 @@ async def analyze_market(symbol):
                     {
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": entry_type
+                        "atr": atr_15m, "entry_type": "KDJ Розворот (Long)"
                     },
-                    True, f"ОК (1h Trend Long - Від EMA)"
+                    True, "ОК (KDJ Long Signal)"
                 )
-            else:
-                return None, True, "Тренд лонг: R:R менше 1.3"
 
-        # --- Низхідний тренд (SHORT) за 1h EMA50 ---
-        elif current_price < ema_50_1h and ema_is_down and float(last_candle['close']) < ema_50_15m:
-            breakout_threshold = ema_50_15m + (atr_15m * 0.5)
-            if float(last_candle['close']) > breakout_threshold:
-                return None, True, "Ціна пробила 15m EMA з закриттям вище допустимого люфту ATR"
-
-            if (ema_50_15m - current_price) > max_distance_from_ema:
-                return None, True, "Занадто далеко від EMA (для шорта)"
-
-            recent_crossed_ema = any(
-                float(c['high']) >= ema_50_15m for c in closed_candles[-3:]
-            )
-            if recent_crossed_ema:
-                return None, True, "Ціна пиляє або перетинає EMA50 зверху (флет)"
-                
-            if not has_required_upper_wick:
-                return None, True, "Немає необхідної верхньої тіні"
-                
-            entry_type = "Від EMA"
-            stop_loss = round(ema_50_15m + (atr_15m * 2.0), 6)
-            
-            tp1_distance = atr_15m * 3.0
-            tp1 = round(current_price - tp1_distance, 6)
+        # --- Формування сигналу SHORT ---
+        elif kdj_short_signal and has_required_upper_wick:
+            stop_loss = round(current_price + (atr_15m * 2.0), 6)
+            tp1 = round(current_price - (atr_15m * 3.0), 6)
             tp2 = round(tp1 - (atr_15m * 2.0), 6)
             tp3 = round(tp2 - (atr_15m * 2.0), 6)
             
@@ -394,17 +356,16 @@ async def analyze_market(symbol):
                     {
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": entry_type
+                        "atr": atr_15m, "entry_type": "KDJ Розворот (Short)"
                     },
-                    True, f"ОК (1h Trend Short - Від EMA)"
+                    True, "ОК (KDJ Short Signal)"
                 )
-            else:
-                return None, True, "Тренд шорт: R:R менше 1.3"
-                
-        return None, True, "Умови тренду на 1h не виконано"
+
+        return None, True, "Умови за тінями та KDJ не збіглися"
 
     except Exception as e:
         return None, True, f"Помилка аналізу: {str(e)}"
+        
         
 # --- ВІДКРИТТЯ ПОЗИЦІЇ ---
 async def open_position(setup):
