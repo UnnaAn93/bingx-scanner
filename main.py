@@ -443,13 +443,12 @@ async def analyze_market(symbol):
                         "symbol": symbol, "signal": "LONG", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})",
-                        "sar_info": f"SAR зверху: {sar_above_count}, знизу: {sar_below_count}"
+                        "sar_info": f"SAR остання зверху: {last_sar_is_above}",
                     },
                     True, f"OK ({entry_label})"
                 )
                 
-            return None, True, f"Умови не збіглися (SAR зверху: {sar_above_count}, знизу: {sar_below_count})"
-
+            return None, True, f"Умови не збіглися (SAR останній зверху: {last_sar_is_above})"
         # --- Логіка входу для SHORT ---
         can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
         
@@ -484,13 +483,12 @@ async def analyze_market(symbol):
                         "symbol": symbol, "signal": "SHORT", "entry": current_price,
                         "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                         "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})",
-                        "sar_info": f"SAR зверху: {sar_above_count}, знизу: {sar_below_count}"
+                        "sar_info": f"SAR остання зверху: {last_sar_is_above}",
                     },
                     True, f"OK ({entry_label})"
                 )
                 
-            return None, True, f"Умови не збіглися (SAR зверху: {sar_above_count}, знизу: {sar_below_count})"
-
+            return None, True, f"Умови не збіглися (SAR останній зверху: {last_sar_is_above})"
     except Exception as ex:
         return None, True, f"Помилка аналізу: {str(ex)}"
         
