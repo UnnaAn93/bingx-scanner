@@ -403,7 +403,7 @@ async def analyze_market(symbol):
         has_valid_long_wicks = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
             and (float(c['high']) - max(float(c['open']), float(c['close']))) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in closed_candles[-5:-1]
+            for c in closed_candles[-5:]
         )
 
         if kdj_long_signal:
@@ -446,7 +446,7 @@ async def analyze_market(symbol):
         has_valid_short_wicks = any(
             (float(c['high']) - max(float(c['open']), float(c['close']))) >= (abs(float(c['close']) - float(c['open'])) * 0.5)
             and (min(float(c['open']), float(c['close'])) - float(c['low'])) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in closed_candles[-5:-1]
+            for c in closed_candles[-5:]
                    )
 
         if kdj_short_signal:
