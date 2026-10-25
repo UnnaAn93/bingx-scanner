@@ -306,7 +306,7 @@ def calculate_sar(candles, step=0.02, max_step=0.2):
                 
         sar_list.append({
             'sar': sar,
-            'is_above': sar > close  # True, якщо крапка зверху над свічкою
+            'is_above': not is_long
         })
     return sar_list
     
