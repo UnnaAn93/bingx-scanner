@@ -416,10 +416,11 @@ async def analyze_market(symbol):
         # --- Логіка входу для LONG ---
         can_take_long = (current_price >= ema_50_15m) or (current_price < ema_50_15m and is_far_from_ema)
         
+        long_zone = closed_candles[max(0, last_os_idx - 2):last_os_idx + 3] if 'last_os_idx' in locals() else closed_candles[-5:]
         has_valid_long_wicks = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
             and (float(c['high']) - max(float(c['open']), float(c['close']))) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in closed_candles[-3:]
+            for c in long_zone
         )
         
         if kdj_long_signal:
@@ -458,10 +459,11 @@ async def analyze_market(symbol):
         # --- Логіка входу для SHORT ---
         can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
         
+        short_zone = closed_candles[max(0, last_eb_idx - 2):last_eb_idx + 3] if 'last_eb_idx' in locals() else closed_candles[-5:]
         has_valid_short_wicks = any(
             (float(c['high']) - max(float(c['open']), float(c['close']))) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
             and (min(float(c['open']), float(c['close'])) - float(c['low'])) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in closed_candles[-3:]
+            for c in short_zone
         )
         
         if kdj_short_signal:
