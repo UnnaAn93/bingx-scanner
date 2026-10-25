@@ -323,7 +323,7 @@ async def analyze_market(symbol):
         # Відсіювання монет із нульовою волатильністю на 1хв (завмерлі свічки поспіль)
         zero_volatility_count = sum(1 for k in raw_1m[-10:] if float(k['high']) == float(k['low']))
         if zero_volatility_count >= 3:
-            return None, False, f"Нульова волатильність на 1хв ({zero_volatility_count} свічок)"
+            return None, False, None
             
         klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_1m]
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_15m]
@@ -353,19 +353,9 @@ async def analyze_market(symbol):
         distance_from_ema = abs(current_price - ema_50_15m)
         is_far_from_ema = distance_from_ema > (atr_15m * 2.0)
         
-        # --- АНАЛІЗ КРАПОК SAR (Перевірка останніх 6 свічок та найближчої) ---
+        # --- АНАЛІЗ КРАПОК SAR  ---
         sar_results = calculate_sar(closed_candles)
-        sar_above_count = 0
-        sar_below_count = 0
         
-        if len(sar_results) >= 6:
-            recent_sar_window = sar_results[-6:]
-            for item in recent_sar_window:
-                if item['is_above']:
-                    sar_above_count += 1
-                else:
-                    sar_below_count += 1
-                    
         # Статус найближчої (останньої) крапки SAR
         last_sar_is_above = sar_results[-1]['is_above'] if sar_results else True
 
