@@ -310,68 +310,62 @@ def calculate_sar(candles, step=0.02, max_step=0.2):
         })
     return sar_list
     
-# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД 8.0 ATR) ---
+# --- ОСНОВНИЙ АНАЛІЗ РИНКУ (KDJ + ТІНІ + EMA 50 ТРЕНД/КОНТРТРЕНД 8 ATR) ---
 async def analyze_market(symbol):
     try:
         # Отримуємо дані з біржі: 1хв для об'ємів, 15хв для техніки
         raw_1m = await get_klines(symbol, '1m', 30)
         raw_15m = await get_klines(symbol, '15m', 100)
-        
+
         if len(raw_1m) < 30 or len(raw_15m) < 100:
             return None, False, "Недостатньо історичних даних"
 
-        # Відсіювання монет із нульовою волатильністю на 1хв (завмерлі свічки поспіль)
+        # Відсіювання монет із нульовою волатильністю на 1хв
         zero_volatility_count = sum(1 for k in raw_1m[-10:] if float(k['high']) == float(k['low']))
         if zero_volatility_count >= 3:
-            return None, False, None
-            
-        klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_1m]
-        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_15m]
-        
-        # 1. Перевірка сплеску об'єму на 1хв (>= 3.0х від середнього за попередні 10 свічок)
+            return None, False, "Нульова волатильність"
+
+        klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1m]
+        klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m]
+
+        # 1. Перевірка сплеску об'єму на 1хв (>= 3.0x від середнього за попередні 10 свічок)
         avg_volume_1m = sum(float(x.get('volume', 0)) for x in klines_1m[-20:-10]) / 10
         has_volume_spike_1m = any(
             float(x.get('volume', 0)) >= avg_volume_1m * 3.0
             for x in klines_1m[-10:]
         )
-        
+
         if not has_volume_spike_1m:
-            return None, False, "Немає сплеску об'єму на 1хв (>= 3.0х)"
-            
+            return None, False, "Немає сплеску об'єму на 1хв (>= 3.0x)"
+
         closed_candles = klines_15m[:-1]
         atr_15m = calculate_atr(closed_candles, period=14)
-        current_price = klines_15m[-1]['close']
-        
+        current_price = closed_candles[-1]['close']
+
         if atr_15m == 0:
             return None, True, "Нульовий АТР"
-            
-        # Розрахунок ЕМА 50 та критеріїв контренду
+
+        # Розрахунок EMA 50 та критеріїв контренду (поріг 8.0 ATR)
         ema_50_15m = calculate_ema(closed_candles, period=50)
         if ema_50_15m is None:
-            return None, True, "Недостатньо даних для ЕМА 50"
-            
-        distance_from_ema = abs(current_price - ema_50_15m)
-        is_far_from_ema = distance_from_ema > (atr_15m * 2.0)
-        
-        # --- АНАЛІЗ КРАПОК SAR  ---
-        sar_results = calculate_sar(closed_candles)
-        
-        # Статус найближчої (останньої) крапки SAR
-        last_sar_is_above = sar_results[-1]['is_above'] if sar_results else True
+            return None, True, "Недостатньо даних для EMA 50"
 
-        # 2. Розрахунок KDJ та перевірка зон 10 / 90 + фільтр "пили" (рівно один перетин)
+        distance_from_ema = abs(current_price - ema_50_15m)
+        is_far_from_ema = distance_from_ema > (atr_15m * 8.0)
+
+        # 2. Розрахунок KDJ та перевірка зон 10 / 90 на останніх 5 свічках
         k_vals, d_vals, j_vals = calculate_kd(closed_candles)
-        if len(k_vals) < 2 or len(j_vals) < 12:
+        if len(k_vals) < 2 or len(j_vals) < 5:
             return None, True, "Недостатньо даних для KDJ"
-            
-        recent_k = k_vals[-12:]
-        recent_d = d_vals[-12:]
-        recent_j = j_vals[-12:]
-        
+
+        recent_k = k_vals[-5:]
+        recent_d = d_vals[-5:]
+        recent_j = j_vals[-5:]
+
         oversold_indices = [i for i, val in enumerate(recent_j) if val < 10]
         overbought_indices = [i for i, val in enumerate(recent_j) if val > 90]
-        
-        # Умова для LONG: вихід з < 10 і рівно один чистий перетин без подальшої пили
+
+        # Умова для LONG: вихід з < 10 і рівно один чистий перетин на останніх 5 свічках
         kdj_long_signal = False
         if oversold_indices:
             last_os_idx = oversold_indices[-1]
@@ -382,7 +376,7 @@ async def analyze_market(symbol):
                 if crossings == 1 and sub_k[-1] > sub_d[-1]:
                     kdj_long_signal = True
 
-        # Умова для SHORT: вихід з > 90 і рівно один чистий перетин без подальшої пили
+        # Умова для SHORT: вихід з > 90 і рівно один чистий перетин на останніх 5 свічках
         kdj_short_signal = False
         if overbought_indices:
             last_ob_idx = overbought_indices[-1]
@@ -394,15 +388,15 @@ async def analyze_market(symbol):
                     kdj_short_signal = True
 
         if not kdj_long_signal and not kdj_short_signal:
-            return None, True, "Відсутній справжній сигнал KDJ (не було чиститкого виходу та єдиного перетину)"
-            
-        # --- 3. Перевірка тіней на 15хв свічках (включно з останньою закритою `[-5:]`) ---
+            return None, True, "Відсутній справжній сигнал KDJ на 5 свічках"
+
+        # 3. Перевірка тіней на 15хв свічках
         has_required_lower_wick = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close'])))
             for c in closed_candles[-3:]
             if (float(c['high']) - float(c['low'])) > 0
         )
-        
+
         has_required_upper_wick = any(
             (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low']))
             for c in closed_candles[-3:]
@@ -412,73 +406,86 @@ async def analyze_market(symbol):
         # --- Логіка входу для LONG ---
         can_take_long = (current_price >= ema_50_15m) or (current_price < ema_50_15m and is_far_from_ema)
         
-        long_zone = closed_candles[max(0, last_os_idx - 2):last_os_idx + 3] if 'last_os_idx' in locals() else closed_candles[-5:]
-        has_valid_long_wicks = any(
-            (min(float(c['open']), float(c['close'])) - float(c['low'])) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
-            and (float(c['high']) - max(float(c['open']), float(c['close']))) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in long_zone
-        )
-        
         if kdj_long_signal:
-                
+            if not has_required_lower_wick:
+                return None, True, "Відхилено LONG: немає потрібної нижньої тіні"
+            if not can_take_long:
+                return None, True, "Відхилено LONG: не пройдено фільтр EMA/контренду (менше 8 ATR)"
+
             stop_loss = round(current_price - (atr_15m * 2.0), 6)
             tp1 = round(current_price + (atr_15m * 3.0), 6)
             tp2 = round(tp1 + (atr_15m * 2.0), 6)
             tp3 = round(tp2 + (atr_15m * 2.0), 6)
-            
+
             risk = stop_loss - current_price
             reward = tp1 - current_price
-            
+
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far > 2 ATR)"
+                entry_label = "Trend Long" if current_price >= ema_50_15m else "Counter-Trend Long (Far > 8 ATR)"
                 return (
                     {
-                        "symbol": symbol, "signal": "LONG", "entry": current_price,
-                        "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})",
-                        "sar_info": f"SAR остання зверху: {last_sar_is_above}",
+                        "symbol": symbol, 
+                        "signal": "LONG", 
+                        "entry": current_price,
+                        "stop_loss": stop_loss, 
+                        "tp1": tp1, 
+                        "tp2": tp2, 
+                        "tp3": tp3,
+                        "atr": atr_15m, 
+                        "entry_type": f"KDJ Розворот ({entry_label})",
+                        "ema_50": ema_50_15m,
+                        "dist_atr": distance_from_ema / atr_15m if atr_15m > 0 else 0,
+                        "is_far_from_ema": is_far_from_ema
                     },
-                    True, f"OK ({entry_label})"
+                    True, 
+                    f"OK ({entry_label})"
                 )
-                
-            return None, True, f"Умови не збіглися (SAR останній зверху: {last_sar_is_above})"
+
         # --- Логіка входу для SHORT ---
         can_take_short = (current_price <= ema_50_15m) or (current_price > ema_50_15m and is_far_from_ema)
-        
-        short_zone = closed_candles[max(0, last_eb_idx - 2):last_eb_idx + 3] if 'last_eb_idx' in locals() else closed_candles[-5:]
-        has_valid_short_wicks = any(
-            (float(c['high']) - max(float(c['open']), float(c['close']))) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
-            and (min(float(c['open']), float(c['close'])) - float(c['low'])) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
-            for c in short_zone
-        )
-        
+
         if kdj_short_signal:
-            
+            if not has_required_upper_wick:
+                return None, True, "Відхилено SHORT: немає потрібної верхньої тіні"
+            if not can_take_short:
+                return None, True, "Відхилено SHORT: не пройдено фільтр EMA/контренду (менше 8 ATR)"
+
             stop_loss = round(current_price + (atr_15m * 2.0), 6)
             tp1 = round(current_price - (atr_15m * 3.0), 6)
             tp2 = round(tp1 - (atr_15m * 2.0), 6)
             tp3 = round(tp2 - (atr_15m * 2.0), 6)
-            
+
             risk = stop_loss - current_price
             reward = tp1 - current_price
-            
+
             if risk > 0 and (reward / risk) >= 1.3:
-                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far > 2 ATR)"
+                entry_label = "Trend Short" if current_price <= ema_50_15m else "Counter-Trend Short (Far > 8 ATR)"
                 return (
                     {
-                        "symbol": symbol, "signal": "SHORT", "entry": current_price,
-                        "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                        "atr": atr_15m, "entry_type": f"KDJ Розворот ({entry_label})",
-                        "sar_info": f"SAR остання зверху: {last_sar_is_above}",
+                        "symbol": symbol, 
+                        "signal": "SHORT", 
+                        "entry": current_price,
+                        "stop_loss": stop_loss, 
+                        "tp1": tp1, 
+                        "tp2": tp2, 
+                        "tp3": tp3,
+                        "atr": atr_15m, 
+                        "entry_type": f"KDJ Розворот ({entry_label})",
+                        "ema_50": ema_50_15m,
+                        "dist_atr": distance_from_ema / atr_15m if atr_15m > 0 else 0,
+                        "is_far_from_ema": is_far_from_ema
                     },
-                    True, f"OK ({entry_label})"
+                    True, 
+                    f"OK ({entry_label})"
                 )
-                
-            return None, True, f"Умови не збіглися (SAR останній зверху: {last_sar_is_above})"
+
+        return None, True, "Умови не збіглися (немає сигналу KDJ на 5 свічках)"
+
     except Exception as ex:
         return None, True, f"Помилка аналізу: {str(ex)}"
-        
-# --- ВСТАНОВЛЕННЯ ТЕЙКІВ ТА СТОПУ--
+
+
+# --- ВСТАНОВЛЕННЯ ТЕЙКІВ ТА СТОПУ ---
 async def send_signal_notification(setup):
     try:
         entry_type_str = setup.get('entry_type', 'Стандартний')
@@ -486,7 +493,7 @@ async def send_signal_notification(setup):
         dist_atr = setup.get('dist_atr', 0.0)
         is_far = setup.get('is_far_from_ema', False)
         
-        zone_status = "Далеко від EMA (> 2 ATR)" if is_far else "Близько до EMA"
+        zone_status = "Далеко від EMA (> 8 ATR)" if is_far else "Близько до EMA"
         
         msg = (
             f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
@@ -507,8 +514,7 @@ async def send_signal_notification(setup):
     except Exception as e:
         await log_and_alert("Помилка відправки сигналу", str(e), setup.get('symbol', 'UNKNOWN'))
         raise e
-
-
+        
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
     while True:
