@@ -423,8 +423,6 @@ async def analyze_market(symbol):
             # Жорстка заборона, якщо найближча крапка SAR все ще зверху
             if last_sar_is_above:
                 return None, True, "Відхилено LONG: найближча крапка SAR все ще зверху"
-            if sar_above_count >= 6:
-                return None, True, f"Заборона LONG: знайдено {sar_above_count} крапок SAR зверху (>=6)"
             if not has_valid_long_wicks:
                 return None, True, "Відхилено LONG: немає потрібної нижньої тіні"
             if not can_take_long:
@@ -466,8 +464,6 @@ async def analyze_market(symbol):
             # Жорстка заборона, якщо найближча крапка SAR все ще знизу
             if not last_sar_is_above:
                 return None, True, "Відхилено SHORT: найближча крапка SAR все ще знизу"
-            if sar_below_count >= 6:
-                return None, True, f"Заборона SHORT: знайдено {sar_below_count} крапок SAR знизу (>=6)"
             if not has_valid_short_wicks:
                 return None, True, "Відхилено SHORT: немає потрібної верхньої тіні"
             if not can_take_short:
