@@ -354,7 +354,8 @@ async def analyze_market(symbol):
         sar_below_count = 0
         
         if len(sar_results) >= 6:
-            for item in sar_results[-7:-1]:
+            recent_sar_window = sar_results[-6:]
+            for item in recent_sar_window:
                 if item['is_above']:
                     sar_above_count += 1
                 else:
