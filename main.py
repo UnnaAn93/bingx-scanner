@@ -420,13 +420,6 @@ async def analyze_market(symbol):
         )
         
         if kdj_long_signal:
-            # Жорстка заборона, якщо найближча крапка SAR все ще зверху
-            if last_sar_is_above:
-                return None, True, "Відхилено LONG: найближча крапка SAR все ще зверху"
-            if not has_valid_long_wicks:
-                return None, True, "Відхилено LONG: немає потрібної нижньої тіні"
-            if not can_take_long:
-                return None, True, "Відхилено LONG: не пройдено фільтр ЕМА/контренду"
                 
             stop_loss = round(current_price - (atr_15m * 2.0), 6)
             tp1 = round(current_price + (atr_15m * 3.0), 6)
@@ -460,14 +453,7 @@ async def analyze_market(symbol):
         )
         
         if kdj_short_signal:
-            # Жорстка заборона, якщо найближча крапка SAR все ще знизу
-            if not last_sar_is_above:
-                return None, True, "Відхилено SHORT: найближча крапка SAR все ще знизу"
-            if not has_valid_short_wicks:
-                return None, True, "Відхилено SHORT: немає потрібної верхньої тіні"
-            if not can_take_short:
-                return None, True, "Відхилено SHORT: не пройдено фільтр ЕМА/контренду"
-                
+            
             stop_loss = round(current_price + (atr_15m * 2.0), 6)
             tp1 = round(current_price - (atr_15m * 3.0), 6)
             tp2 = round(tp1 - (atr_15m * 2.0), 6)
@@ -496,13 +482,17 @@ async def analyze_market(symbol):
 async def send_signal_notification(setup):
     try:
         entry_type_str = setup.get('entry_type', 'Стандартний')
-        sar_text = setup.get('sar_info', '')
+        ema_val = setup.get('ema_50', 0.0)
+        dist_atr = setup.get('dist_atr', 0.0)
+        is_far = setup.get('is_far_from_ema', False)
+        
+        zone_status = "Далеко від EMA (> 2 ATR)" if is_far else "Близько до EMA"
         
         msg = (
             f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
             f"🪙 Монета: `{setup['symbol']}`\n"
-            f"📊 Тип входу: {entry_type_str}\n"
-            f"📌 {sar_text}\n\n"
+            f"📊 Тип: {entry_type_str}\n"
+            f"📈 EMA 50: `{ema_val:.6f}` ({zone_status}, відступ: `{dist_atr:.1f} ATR`)\n\n"
             f"🟢 Вхід (орієнтир): `{setup['entry']:.6f}`\n"
             f"🔴 Стоп: `{setup['stop_loss']:.6f}`\n"
             f"🎯 TP1 (50%): `{setup['tp1']:.6f}`\n"
@@ -517,7 +507,7 @@ async def send_signal_notification(setup):
     except Exception as e:
         await log_and_alert("Помилка відправки сигналу", str(e), setup.get('symbol', 'UNKNOWN'))
         raise e
-        
+
 
 # --- МОНІТОРИНГ УГОД ---
 async def monitor_trades_loop():
