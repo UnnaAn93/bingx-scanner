@@ -399,6 +399,12 @@ async def analyze_market(symbol):
         if sar_above_count >= 6:
             can_take_long = False
             long_blocked_by_sar = True
+        # 1. Перевірка наявності нормальної нижньої тіні та відсутності зайвої верхньої тіні на останніх свічках
+        has_valid_long_wicks = any(
+            (min(float(c['open']), float(c['close'])) - float(c['low'])) >= (abs(float(c['close']) - float(c['open'])) * 0.5) 
+            and (float(c['high']) - max(float(c['open']), float(c['close']))) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
+            for c in closed_candles[-5:-1]
+        )
 
         if kdj_long_signal:
             if long_blocked_by_sar:
