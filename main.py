@@ -319,6 +319,11 @@ async def analyze_market(symbol):
         
         if len(raw_1m) < 30 or len(raw_15m) < 100:
             return None, False, "Недостатньо історичних даних"
+
+        # Відсіювання монет із нульовою волатильністю на 1хв (завмерлі свічки поспіль)
+        zero_volatility_count = sum(1 for k in raw_1m[-10:] if float(k['high']) == float(k['low']))
+        if zero_volatility_count >= 3:
+            return None, False, f"Нульова волатильність на 1хв ({zero_volatility_count} свічок)"
             
         klines_1m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_1m]
         klines_15m = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume']) } for k in raw_15m]
