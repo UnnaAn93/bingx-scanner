@@ -442,11 +442,17 @@ async def analyze_market(symbol):
         if sar_below_count >= 6:
             can_take_short = False
             short_blocked_by_sar = True
+        # Перевірка наявності нормальної верхньої тіні та відсутності зайвої нижньої тіні для шортів
+        has_valid_short_wicks = any(
+            (float(c['high']) - max(float(c['open']), float(c['close']))) >= (abs(float(c['close']) - float(c['open'])) * 0.5)
+            and (min(float(c['open']), float(c['close'])) - float(c['low'])) <= (abs(float(c['close']) - float(c['open'])) * 0.3)
+            for c in closed_candles[-5:-1]
+                   )
 
         if kdj_short_signal:
             if short_blocked_by_sar:
                 return None, True, f"Заборона SHORT: знайдено {sar_below_count} крапок SAR знизу (>=6)"
-            if not has_required_upper_wick:
+            if not has_valid_short_wicks:
                 return None, True, "Відхилено SHORT: немає потрібної верхньої тіні"
             if not can_take_short:
                 return None, True, "Відхилено SHORT: не пройдено фільтр EMA/контртренду"
