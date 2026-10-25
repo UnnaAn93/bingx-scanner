@@ -409,7 +409,7 @@ async def analyze_market(symbol):
         if kdj_long_signal:
             if long_blocked_by_sar:
                 return None, True, f"Заборона LONG: знайдено {sar_above_count} крапок SAR зверху (>=6)"
-            if not has_required_lower_wick:
+            if not has_valid_long_wicks:
                 return None, True, "Відхилено LONG: немає потрібної нижньої тіні"
             if not can_take_long:
                 return None, True, "Відхилено LONG: не пройдено фільтр EMA/контртренду"
