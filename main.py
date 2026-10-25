@@ -403,13 +403,13 @@ async def analyze_market(symbol):
         # --- 3. Перевірка тіней на 15хв свічках (включно з останньою закритою `[-5:]`) ---
         has_required_lower_wick = any(
             (min(float(c['open']), float(c['close'])) - float(c['low'])) > (float(c['high']) - max(float(c['open']), float(c['close'])))
-            for c in closed_candles[-3:-1]
+            for c in closed_candles[-3:]
             if (float(c['high']) - float(c['low'])) > 0
         )
         
         has_required_upper_wick = any(
             (float(c['high']) - max(float(c['open']), float(c['close']))) > (min(float(c['open']), float(c['close'])) - float(c['low']))
-            for c in closed_candles[-3:-1]
+            for c in closed_candles[-3:]
             if (float(c['high']) - float(c['low'])) > 0
         )
 
