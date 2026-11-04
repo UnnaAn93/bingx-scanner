@@ -10,13 +10,18 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 BINGX_BASE_URL = "https://open-api.bingx.com"
 
-# Простий HTTP-сервер для підтримання активності на Render (Health Check)
+# --- HTTP-СЕРВЕР ДЛЯ RENDER (Health Check) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Daily Sweep Bot is alive and running!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -149,4 +154,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
