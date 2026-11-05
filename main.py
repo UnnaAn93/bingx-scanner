@@ -128,6 +128,11 @@ async def scan_daily_sweeps():
         await send_telegram(f"⚠️ *Помилка сканера свіпів:* `{e}`")
 
 async def daily_sweep_loop():
+    # 1. Робимо звіт одразу при запуску / перезавантаженні бота
+    print("[INFO] Виконується позаплановий звіт при стартові...", flush=True)
+    await scan_daily_sweeps()
+
+    # 2. Далі переходимо на звичний добовий цикл о 00:05 UTC
     while True:
         now = datetime.now(timezone.utc)
         target = now.replace(hour=0, minute=5, second=0, microsecond=0)
