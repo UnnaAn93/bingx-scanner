@@ -37,7 +37,7 @@ async def send_telegram(text: str):
 
 async def fetch_klines(session, symbol):
     url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
-    params = {"symbol": symbol, "interval": "1D", "limit": 5}
+    params = {"symbol": symbol, "interval": "1D", "limit": 6}
     try:
         async with session.get(url, params=params, timeout=5) as resp:
             if resp.status == 200:
@@ -49,7 +49,7 @@ async def fetch_klines(session, symbol):
 
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок швидкого паралельного сканування ринку...", flush=True)
+        print("[INFO] Початок сканування ринку по останніх свічках...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -59,12 +59,11 @@ async def scan_daily_sweeps():
 
         contracts_data = res if isinstance(res, list) else res.get("data", [])
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
-        print(f"[INFO] Завантажено контрактів: {len(symbols)}. Починаємо аналіз...", flush=True)
+        print(f"[INFO] Завантажено контрактів: {len(symbols)}. Аналізуємо...", flush=True)
 
         bullish_sweeps = []
         bearish_sweeps = []
 
-        # Обробляємо монети паралельними пачками по 40 штук для максимальної швидкості
         batch_size = 40
         async with aiohttp.ClientSession() as session:
             for i in range(0, len(symbols), batch_size):
@@ -73,40 +72,45 @@ async def scan_daily_sweeps():
                 results = await asyncio.gather(*tasks)
 
                 for symbol, klines_1d in results:
-                    if len(klines_1d) >= 3:
-                        candle_2 = klines_1d[-3]  # Орієнтир
-                        candle_1 = klines_1d[-2]  # Закрита свічка
+                    if len(klines_1d) >= 4:
+                        # Перевіряємо останні три закриті свічки (-4, -3, -2) відносно їх попередників
+                        for idx in [-2, -3]:
+                            candle_1 = klines_1d[idx]      фокусна свічка
+                            candle_2 = klines_1d[idx-1]  # орієнтир
 
-                        try:
-                            high_2 = float(candle_2['high'])
-                            low_2 = float(candle_2['low'])
-                            high_1 = float(candle_1['high'])
-                            low_1 = float(candle_1['low'])
-                            close_1 = float(candle_1['close'])
+                            try:
+                                high_2 = float(candle_2['high'])
+                                low_2 = float(candle_2['low'])
+                                high_1 = float(candle_1['high'])
+                                low_1 = float(candle_1['low'])
+                                close_1 = float(candle_1['close'])
 
-                            if "LSK" in symbol or "BCH" in symbol:
-                                print(f"[CHECK] {symbol} | C2 High:{high_2} Low:{low_2} || C1 High:{high_1} Low:{low_1} Close:{close_1}", flush=True)
-
-                            if high_1 > high_2 and close_1 < high_2:
-                                bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                            elif low_1 < low_2 and close_1 > low_2:
-                                bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
-                        except:
-                            continue
+                                # Ведмежий свіп (хай вище, закриття нижче)
+                                if high_1 > high_2 and close_1 < high_2:
+                                    bearish_sweeps.append(f"`{symbol}` (High Sweep)")
+                                    break  # знайшли свіп для цієї монети, переходимо до наступної
+                                
+                                # Бичачий свіп (лоу нижче, закриття вище)
+                                elif low_1 < low_2 and close_1 > low_2:
+                                    bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
+                                    break
+                            except:
+                                continue
 
                 await asyncio.sleep(0.02)
 
-        print(f"[INFO] Сканування завершено успішно! Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
+        print(f"[INFO] Знайдено біт-сигналів -> Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
 
-        # Формування та відправка звіту в Telegram
-        report = "🔔 *Щоденний звіт по свіпах (1D)*\n\n"
+        # Формування та обмеження звіту (топ-5 кожного типу для збереження читабельності)
+        report = "🔔 *Щоденний звіт по свіпах (Топ за останні свічки)*\n\n"
+        
         if bullish_sweeps:
-            report += "🟢 *Бичачі свіпи (Знято лой свічки 2 -> Лонг):*\n" + "\n".join(bullish_sweeps) + "\n\n"
+            report += "🟢 *Бичачі свіпи (Лонг):*\n" + "\n".join(bullish_sweeps[:5]) + "\n\n"
         if bearish_sweeps:
-            report += "🔴 *Ведмежі свіпи (Знято хай свічки 2 -> Шорт):*\n" + "\n".join(bearish_sweeps) + "\n\n"
+            report += "🔴 *Ведмежі свіпи (Шорт):*\n" + "\n".join(bearish_sweeps[:5]) + "\n\n"
         
         if not bullish_sweeps and not bearish_sweeps:
-            report += "ℹ️ За минулу добу чітких свіпів за заданими умовами не виявлено."
+            report += "ℹ️ За останні три свічки чітких свіпів за заданими умовами не виявлено."
 
         await send_telegram(report)
         print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
@@ -115,7 +119,7 @@ async def scan_daily_sweeps():
         print(f"[ERROR] Помилка у сканері: {e}", flush=True)
 
 async def daily_sweep_loop():
-    print("[INFO] Виконується позаплановий звіт при стартові...", flush=True)
+    print("[INFO] Виконується стартовий звіт...", flush=True)
     await scan_daily_sweeps()
     while True:
         now = datetime.now(timezone.utc)
@@ -124,13 +128,12 @@ async def daily_sweep_loop():
             target += timedelta(days=1)
         
         sleep_seconds = (target - now).total_seconds()
-        print(f"[INFO] Наступний звіт о 00:05 UTC (через {int(sleep_seconds // 3600)} год.)", flush=True)
         await asyncio.sleep(sleep_seconds)
         await scan_daily_sweeps()
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Швидкий сканер денних свіпів успішно запущено!")
+    await send_telegram("🚀 Оновлений сканер свіпів запущено!")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
