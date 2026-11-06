@@ -49,7 +49,7 @@ async def fetch_klines(session, symbol):
 
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок сканування ринку по останніх свічках...", flush=True)
+        print("[INFO] Початок сканування ринку...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -63,6 +63,7 @@ async def scan_daily_sweeps():
 
         bullish_sweeps = []
         bearish_sweeps = []
+        logged_samples = 0
 
         batch_size = 40
         async with aiohttp.ClientSession() as session:
@@ -73,40 +74,41 @@ async def scan_daily_sweeps():
 
                 for symbol, klines_1d in results:
                     if len(klines_1d) >= 4:
-                        for idx in [-2, -3]:
-                            candle_1 = klines_1d[idx]
-                            candle_2 = klines_1d[idx-1]
+                        # Беремо останню закриту свічку (-2) та її орієнтир (-3)
+                        candle_1 = klines_1d[-2]
+                        candle_2 = klines_1d[-3]
 
-                            try:
-                                high_2 = float(candle_2['high'])
-                                low_2 = float(candle_2['low'])
-                                high_1 = float(candle_1['high'])
-                                low_1 = float(candle_1['low'])
-                                close_1 = float(candle_1['close'])
+                        try:
+                            high_2 = float(candle_2['high'])
+                            low_2 = float(candle_2['low'])
+                            high_1 = float(candle_1['high'])
+                            low_1 = float(candle_1['low'])
+                            close_1 = float(candle_1['close'])
 
-                                if high_1 > high_2 and close_1 < high_2:
-                                    bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                                    break
-                                
-                                elif low_1 < low_2 and close_1 > low_2:
-                                    bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
-                                    break
-                            except:
-                                continue
+                            # Виведемо перші 5 пар у логи для перевірки цифр
+                            if logged_samples < 5:
+                                print(f"[DEBUG SAMPLE] {symbol} | C2(High:{high_2}, Low:{low_2}) vs C1(High:{high_1}, Low:{low_1}, Close:{close_1})", flush=True)
+                                logged_samples += 1
+
+                            if high_1 > high_2 and close_1 < high_2:
+                                bearish_sweeps.append(f"`{symbol}` (High Sweep)")
+                            elif low_1 < low_2 and close_1 > low_2:
+                                bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
+                        except:
+                            continue
 
                 await asyncio.sleep(0.02)
 
         print(f"[INFO] Знайдено сигналів -> Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
 
         report = "🔔 *Щоденний звіт по свіпах (Топ за останні свічки)*\n\n"
-        
         if bullish_sweeps:
             report += "🟢 *Бичачі свіпи (Лонг):*\n" + "\n".join(bullish_sweeps[:5]) + "\n\n"
         if bearish_sweeps:
             report += "🔴 *Ведмежі свіпи (Шорт):*\n" + "\n".join(bearish_sweeps[:5]) + "\n\n"
         
         if not bullish_sweeps and not bearish_sweeps:
-            report += "ℹ️ За останні три свічки чітких свіпів за заданими умовами не виявлено."
+            report += "ℹ️ За останні свічки чітких свіпів за заданими умовами не виявлено."
 
         await send_telegram(report)
         print("[INFO] Звіт успішно надіслано в Telegram!", flush=True)
@@ -129,7 +131,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Оновлений сканер свіпів запущено!")
+    await send_telegram("🚀 Сканер свіпів з відладкою запущено!")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
