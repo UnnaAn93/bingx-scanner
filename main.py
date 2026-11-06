@@ -36,25 +36,26 @@ async def send_telegram(text: str):
             pass
 
 async def fetch_klines(session, symbol):
-    # Виправляємо шлях на актуальний публічний ендпоінт свічок BingX
-    url = f"{BINGX_BASE_URL}/openApi/market/v1/market/klines"
+    # Повертаємося до офіційного ендпоінта ф'ючерсних свічок BingX Swap API
+    url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
     params = {"symbol": symbol, "interval": "1D", "limit": 6}
+    headers = {"Content-Type": "application/json"}
     try:
-        async with session.get(url, params=params, timeout=5) as resp:
-            text = await resp.text()
+        async with session.get(url, params=params, headers=headers, timeout=5) as resp:
             if resp.status == 200:
                 data = await resp.json()
+                # BingX swap зазвичай повертає дані у полі 'data' або безпосередньо масивом
                 klines = data.get("data", [])
+                if not klines and isinstance(data, list):
+                    klines = data
                 return symbol, klines
-            else:
-                print(f"[API ERROR] {symbol} статус {resp.status}: {text[:100]}", flush=True)
-    except Exception as e:
-        print(f"[API EXCEPTION] {symbol}: {e}", flush=True)
+    except:
+        pass
     return symbol, []
 
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок сканування ринку з новим ендпоінтом...", flush=True)
+        print("[INFO] Початок сканування ф'ючерсного ринку...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -64,7 +65,7 @@ async def scan_daily_sweeps():
 
         contracts_data = res if isinstance(res, list) else res.get("data", [])
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
-        print(f"[INFO] Загалом контрактів: {len(symbols)}", flush=True)
+        print(f"[INFO] Завантажено контрактів: {len(symbols)}. Аналізуємо...", flush=True)
 
         bullish_sweeps = []
         bearish_sweeps = []
@@ -88,6 +89,7 @@ async def scan_daily_sweeps():
                             low_1 = float(candle_1['low'])
                             close_1 = float(candle_1['close'])
 
+                            # Умови свіпу
                             if high_1 > high_2 and close_1 < high_2:
                                 bearish_sweeps.append(f"`{symbol}` (High Sweep)")
                             elif low_1 < low_2 and close_1 > low_2:
@@ -126,7 +128,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Сканер із виправленим API запущено.")
+    await send_telegram("🚀 Сканер ф'ючерсних свіпів запущено.")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
