@@ -40,11 +40,17 @@ async def fetch_klines(session, symbol):
     params = {"symbol": symbol, "interval": "1D", "limit": 6}
     try:
         async with session.get(url, params=params, timeout=5) as resp:
+            text = await resp.text()
             if resp.status == 200:
                 data = await resp.json()
-                return symbol, data.get("data", [])
-    except:
-        pass
+                klines = data.get("data", [])
+                if not klines:
+                    print(f"[API EMPTY] {symbol} повернув порожній масив data: {text[:100]}", flush=True)
+                return symbol, klines
+            else:
+                print(f"[API ERROR] {symbol} статус {resp.status}: {text[:100]}", flush=True)
+    except Exception as e:
+        print(f"[API EXCEPTION] {symbol}: {e}", flush=True)
     return symbol, []
 
 async def scan_daily_sweeps():
@@ -61,7 +67,7 @@ async def scan_daily_sweeps():
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
         print(f"[INFO] Загалом контрактів: {len(symbols)}", flush=True)
 
-        # ПРИМУСОВИЙ ВИВІД ПЕРШИХ 10 МОНЕТ ПОСЛІДОВНО (для гарантованих логів)
+        # Діагностика перших 10 монет для перевірки відповідей API
         print("=== ДІАГНОСТИКА: ПЕРШІ 10 МОНЕТ ===", flush=True)
         async with aiohttp.ClientSession() as session:
             for symbol in symbols[:10]:
@@ -133,7 +139,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Сканер із діагностикою логів запущено.")
+    await send_telegram("🚀 Сканер із розширеним логуванням запущено.")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
