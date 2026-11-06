@@ -65,10 +65,10 @@ def is_blacklisted(symbol):
 # --- СКАНЕР ДЕННИХ СВІПІВ (1D) ---
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Розпочато сканування даних свіпів (1D) по свічках 1 і 2...", flush=True)
+        print("[INFO] Розпочато повне сканування ринку (1D)...", flush=True)
         res = await bingx_request("GET", "/openApi/swap/v2/quote/contracts")
         if not res:
-            await send_telegram("⚠️ *Помилка денного сканера:* не вдалося отримати список монет від BingX.")
+            await send_telegram("⚠️ *Помилка сканера:* не вдалося отримати список монет від BingX.")
             return
 
         contracts_data = res if isinstance(res, list) else res.get("data", [])
@@ -76,6 +76,7 @@ async def scan_daily_sweeps():
 
         bullish_sweeps = []
         bearish_sweeps = []
+        checked_count = 0
 
         for symbol in symbols:
             if is_blacklisted(symbol):
@@ -93,50 +94,50 @@ async def scan_daily_sweeps():
                     if resp.status == 200:
                         data = await resp.json()
                         klines_1d = data.get("data", [])
+                        checked_count += 1
                         
                         if len(klines_1d) >= 3:
                             candle_2 = klines_1d[-3]  # Свічка 2 (орієнтир)
-                            candle_1 = klines_1d[-2]  # Свічка 1 (остання закрита, що робить свіп)
+                            candle_1 = klines_1d[-2]  # Свічка 1 (остання закрита)
 
                             high_2 = float(candle_2['high'])
                             low_2 = float(candle_2['low'])
-
                             high_1 = float(candle_1['high'])
                             low_1 = float(candle_1['low'])
                             close_1 = float(candle_1['close'])
 
-                            # Ведмежий свіп: тінь свічки 1 вища за хай свічки 2, але закриття нижче хаю свічки 2
+                            # Додаємо дебаг для наших монет у логи Render
+                            if symbol in ["LSKUSDT", "BCHUSDT"]:
+                                print(f"[DEBUG] {symbol} -> Candle 2 High: {high_2}, Low: {low_2} | Candle 1 High: {high_1}, Low: {low_1}, Close: {close_1}", flush=True)
+
+                            # Ведмежий свіп
                             if high_1 > high_2 and close_1 < high_2:
-                                bearish_sweeps.append(f"`{symbol}` (High Sweep: High {high_1} > High2 {high_2} -> Close {close_1})")
+                                bearish_sweeps.append(f"`{symbol}` (High Sweep)")
 
-                            # Бичачий свіп: тінь свічки 1 нижча за лой свічки 2, але закриття вище лою свічки 2
+                            # Бичачий свіп
                             elif low_1 < low_2 and close_1 > low_2:
-                                bullish_sweeps.append(f"`{symbol}` (Low Sweep: Low {low_1} < Low2 {low_2} -> Close {close_1})")
+                                bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
 
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.02)
 
-        # Формування звіту
-        report = "🔔 *Щоденний звіт по свіпах (1D)*\n\n"
-        if bullish_sweeps:
-            report += "🟢 *Бичачі свіпи (Знято лой свічки 2 -> Лонг):*\n"
-            report += "\n".join(bullish_sweeps) + "\n\n"
+        print(f"[INFO] Перевірено активних пар: {checked_count}", flush=True)
 
-        if bearish_sweeps:
-            report += "🔴 *Ведмежі свіпи (Знято хай свічки 2 -> Шорт):*\n"
-            report += "\n".join(bearish_sweeps) + "\n\n"
-
-        if not bullish_sweeps and not bearish_sweeps:
-            report += "ℹ️ За минулу добу чітких свіпів за заданими умовами не виявлено."
-
-        await send_telegram(report)
-        print("[INFO] Звіт по денних свіпах успішно надіслано!", flush=True)
+        if bullish_sweeps or bearish_sweeps:
+            report = "🔔 *Знайдені денні свіпи (1D)*\n\n"
+            if bullish_sweeps:
+                report += "🟢 *Бичачі (Лонг):*\n" + "\n".join(bullish_sweeps) + "\n\n"
+            if bearish_sweeps:
+                report += "🔴 *Ведмежі (Шорт):*\n" + "\n".join(bearish_sweeps) + "\n"
+            
+            await send_telegram(report)
+        else:
+            print("[INFO] За поточний цикл свіпів не виявлено.", flush=True)
 
     except Exception as e:
-        print(f"[ERROR] Помилка сканування даних свіпів: {e}", flush=True)
-        await send_telegram(f"⚠️ *Помилка сканера свіпів:* {e}")
+        print(f"[ERROR] Помилка сканування: {e}", flush=True)
 
 async def daily_sweep_loop():
-    print("[INFO] Виконується позаплановий звіт при стартові...", flush=True)
+    print("[INFO] Виконується позаплановий запуск сканування...", flush=True)
     await scan_daily_sweeps()
 
     while True:
@@ -147,21 +148,16 @@ async def daily_sweep_loop():
             target += timedelta(days=1)
 
         sleep_seconds = (target - now).total_seconds()
-        print(f"[INFO] Наступний денний звіт о 00:05 UTC (через {int(sleep_seconds // 3600)} год. {int((sleep_seconds % 3600) // 60)} хв.)", flush=True)
-
         await asyncio.sleep(sleep_seconds)
         await scan_daily_sweeps()
 
 async def main():
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
-    print("[INFO] HTTP-сервер для Health Check запущено.")
-
-    print("[🚀 Окремий бот звітів по свіпах успішно запущено!]", flush=True)
-    await send_telegram("🚀 Окремий бот звітів по денних свіпах успішно запущено!")
-
+    
+    await send_telegram("🚀 Сканер ринку по свічках 1 і 2 запущено.")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+    
