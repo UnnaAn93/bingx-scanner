@@ -36,7 +36,8 @@ async def send_telegram(text: str):
             pass
 
 async def fetch_klines(session, symbol):
-    url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
+    # Виправляємо шлях на актуальний публічний ендпоінт свічок BingX
+    url = f"{BINGX_BASE_URL}/openApi/market/v1/market/klines"
     params = {"symbol": symbol, "interval": "1D", "limit": 6}
     try:
         async with session.get(url, params=params, timeout=5) as resp:
@@ -44,8 +45,6 @@ async def fetch_klines(session, symbol):
             if resp.status == 200:
                 data = await resp.json()
                 klines = data.get("data", [])
-                if not klines:
-                    print(f"[API EMPTY] {symbol} повернув порожній масив data: {text[:100]}", flush=True)
                 return symbol, klines
             else:
                 print(f"[API ERROR] {symbol} статус {resp.status}: {text[:100]}", flush=True)
@@ -55,7 +54,7 @@ async def fetch_klines(session, symbol):
 
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок сканування ринку...", flush=True)
+        print("[INFO] Початок сканування ринку з новим ендпоінтом...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -66,18 +65,6 @@ async def scan_daily_sweeps():
         contracts_data = res if isinstance(res, list) else res.get("data", [])
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
         print(f"[INFO] Загалом контрактів: {len(symbols)}", flush=True)
-
-        # Діагностика перших 10 монет для перевірки відповідей API
-        print("=== ДІАГНОСТИКА: ПЕРШІ 10 МОНЕТ ===", flush=True)
-        async with aiohttp.ClientSession() as session:
-            for symbol in symbols[:10]:
-                _, klines_1d = await fetch_klines(session, symbol)
-                if len(klines_1d) >= 4:
-                    c2 = klines_1d[-3]
-                    c1 = klines_1d[-2]
-                    print(f"[RAW DATA] {symbol} | C2 High:{c2['high']} Low:{c2['low']} || C1 High:{c1['high']} Low:{c1['low']} Close:{c1['close']}", flush=True)
-                await asyncio.sleep(0.05)
-        print("=== КІНЕЦЬ ДІАГНОСТИКИ ===", flush=True)
 
         bullish_sweeps = []
         bearish_sweeps = []
@@ -139,7 +126,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Сканер із розширеним логуванням запущено.")
+    await send_telegram("🚀 Сканер із виправленим API запущено.")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
