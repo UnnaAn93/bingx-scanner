@@ -81,7 +81,7 @@ async def scan_daily_sweeps():
             if is_blacklisted(symbol):
                 continue
 
-            url = f"{BINGX_BASE_URL}{openApi/swap/v1/market/klines" if False else f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
+            url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
             params = {
                 "symbol": symbol,
                 "interval": "1D",
@@ -164,4 +164,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+            
