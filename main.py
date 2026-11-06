@@ -35,9 +35,21 @@ async def send_telegram(text: str):
         except:
             pass
 
+async def fetch_klines(session, symbol):
+    url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
+    params = {"symbol": symbol, "interval": "1D", "limit": 5}
+    try:
+        async with session.get(url, params=params, timeout=5) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return symbol, data.get("data", [])
+    except:
+        pass
+    return symbol, []
+
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок стабільного сканування ринку...", flush=True)
+        print("[INFO] Початок швидкого паралельного сканування ринку...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -47,46 +59,46 @@ async def scan_daily_sweeps():
 
         contracts_data = res if isinstance(res, list) else res.get("data", [])
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
-        print(f"[INFO] Завантажено контрактів: {len(symbols)}", flush=True)
+        print(f"[INFO] Завантажено контрактів: {len(symbols)}. Починаємо аналіз...", flush=True)
 
         bullish_sweeps = []
         bearish_sweeps = []
 
+        # Обробляємо монети паралельними пачками по 40 штук для максимальної швидкості
+        batch_size = 40
         async with aiohttp.ClientSession() as session:
-            for symbol in symbols:
-                url = f"{BINGX_BASE_URL}/openApi/swap/v1/market/klines"
-                params = {"symbol": symbol, "interval": "1D", "limit": 5}
-                try:
-                    async with session.get(url, params=params, timeout=5) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            klines_1d = data.get("data", [])
-                            
-                            if len(klines_1d) >= 3:
-                                candle_2 = klines_1d[-3]  # Орієнтир
-                                candle_1 = klines_1d[-2]  # Закрита свічка
+            for i in range(0, len(symbols), batch_size):
+                batch = symbols[i:i + batch_size]
+                tasks = [fetch_klines(session, sym) for sym in batch]
+                results = await asyncio.gather(*tasks)
 
-                                high_2 = float(candle_2['high'])
-                                low_2 = float(candle_2['low'])
-                                high_1 = float(candle_1['high'])
-                                low_1 = float(candle_1['low'])
-                                close_1 = float(candle_1['close'])
+                for symbol, klines_1d in results:
+                    if len(klines_1d) >= 3:
+                        candle_2 = klines_1d[-3]  # Орієнтир
+                        candle_1 = klines_1d[-2]  # Закрита свічка
 
-                                if "LSK" in symbol or "BCH" in symbol:
-                                    print(f"[CHECK] {symbol} | C2 High:{high_2} Low:{low_2} || C1 High:{high_1} Low:{low_1} Close:{close_1}", flush=True)
+                        try:
+                            high_2 = float(candle_2['high'])
+                            low_2 = float(candle_2['low'])
+                            high_1 = float(candle_1['high'])
+                            low_1 = float(candle_1['low'])
+                            close_1 = float(candle_1['close'])
 
-                                if high_1 > high_2 and close_1 < high_2:
-                                    bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                                elif low_1 < low_2 and close_1 > low_2:
-                                    bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
-                except:
-                    pass
-                
+                            if "LSK" in symbol or "BCH" in symbol:
+                                print(f"[CHECK] {symbol} | C2 High:{high_2} Low:{low_2} || C1 High:{high_1} Low:{low_1} Close:{close_1}", flush=True)
+
+                            if high_1 > high_2 and close_1 < high_2:
+                                bearish_sweeps.append(f"`{symbol}` (High Sweep)")
+                            elif low_1 < low_2 and close_1 > low_2:
+                                bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
+                        except:
+                            continue
+
                 await asyncio.sleep(0.02)
 
-        print(f"[INFO] Сканування завершено. Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
+        print(f"[INFO] Сканування завершено успішно! Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
 
-        # Формування повного звіту в Telegram (зберігаємо звичний формат)
+        # Формування та відправка звіту в Telegram
         report = "🔔 *Щоденний звіт по свіпах (1D)*\n\n"
         if bullish_sweeps:
             report += "🟢 *Бичачі свіпи (Знято лой свічки 2 -> Лонг):*\n" + "\n".join(bullish_sweeps) + "\n\n"
@@ -118,7 +130,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Сканер денних свіпів успішно запущено!")
+    await send_telegram("🚀 Швидкий сканер денних свіпів успішно запущено!")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
