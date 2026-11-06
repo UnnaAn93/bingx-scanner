@@ -49,7 +49,7 @@ async def fetch_klines(session, symbol):
 
 async def scan_daily_sweeps():
     try:
-        print("[INFO] Початок детального сканування топ-10 для логів...", flush=True)
+        print("[INFO] Початок сканування ринку...", flush=True)
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
                 if resp.status != 200:
@@ -59,10 +59,22 @@ async def scan_daily_sweeps():
 
         contracts_data = res if isinstance(res, list) else res.get("data", [])
         symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
-        
+        print(f"[INFO] Загалом контрактів: {len(symbols)}", flush=True)
+
+        # ПРИМУСОВИЙ ВИВІД ПЕРШИХ 10 МОНЕТ ПОСЛІДОВНО (для гарантованих логів)
+        print("=== ДІАГНОСТИКА: ПЕРШІ 10 МОНЕТ ===", flush=True)
+        async with aiohttp.ClientSession() as session:
+            for symbol in symbols[:10]:
+                _, klines_1d = await fetch_klines(session, symbol)
+                if len(klines_1d) >= 4:
+                    c2 = klines_1d[-3]
+                    c1 = klines_1d[-2]
+                    print(f"[RAW DATA] {symbol} | C2 High:{c2['high']} Low:{c2['low']} || C1 High:{c1['high']} Low:{c1['low']} Close:{c1['close']}", flush=True)
+                await asyncio.sleep(0.05)
+        print("=== КІНЕЦЬ ДІАГНОСТИКИ ===", flush=True)
+
         bullish_sweeps = []
         bearish_sweeps = []
-        logged_count = 0
 
         batch_size = 40
         async with aiohttp.ClientSession() as session:
@@ -82,11 +94,6 @@ async def scan_daily_sweeps():
                             high_1 = float(candle_1['high'])
                             low_1 = float(candle_1['low'])
                             close_1 = float(candle_1['close'])
-
-                            # Виводимо деталі по перших 10 монетах у логи Render
-                            if logged_count < 10:
-                                print(f"[TOP-10 LOG] {symbol} => C2_High: {high_2}, C2_Low: {low_2} || C1_High: {high_1}, C1_Low: {low_1}, C1_Close: {close_1}", flush=True)
-                                logged_count += 1
 
                             if high_1 > high_2 and close_1 < high_2:
                                 bearish_sweeps.append(f"`{symbol}` (High Sweep)")
@@ -126,7 +133,7 @@ async def daily_sweep_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    await send_telegram("🚀 Сканер з логуванням топ-10 запущено.")
+    await send_telegram("🚀 Сканер із діагностикою логів запущено.")
     await daily_sweep_loop()
 
 if __name__ == "__main__":
