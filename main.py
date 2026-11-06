@@ -73,10 +73,9 @@ async def scan_daily_sweeps():
 
                 for symbol, klines_1d in results:
                     if len(klines_1d) >= 4:
-                        # Перевіряємо останні три закриті свічки (-4, -3, -2) відносно їх попередників
                         for idx in [-2, -3]:
-                            candle_1 = klines_1d[idx]      фокусна свічка
-                            candle_2 = klines_1d[idx-1]  # орієнтир
+                            candle_1 = klines_1d[idx]
+                            candle_2 = klines_1d[idx-1]
 
                             try:
                                 high_2 = float(candle_2['high'])
@@ -85,12 +84,10 @@ async def scan_daily_sweeps():
                                 low_1 = float(candle_1['low'])
                                 close_1 = float(candle_1['close'])
 
-                                # Ведмежий свіп (хай вище, закриття нижче)
                                 if high_1 > high_2 and close_1 < high_2:
                                     bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                                    break  # знайшли свіп для цієї монети, переходимо до наступної
+                                    break
                                 
-                                # Бичачий свіп (лоу нижче, закриття вище)
                                 elif low_1 < low_2 and close_1 > low_2:
                                     bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
                                     break
@@ -99,9 +96,8 @@ async def scan_daily_sweeps():
 
                 await asyncio.sleep(0.02)
 
-        print(f"[INFO] Знайдено біт-сигналів -> Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
+        print(f"[INFO] Знайдено сигналів -> Бичачих: {len(bullish_sweeps)}, Ведмежих: {len(bearish_sweeps)}", flush=True)
 
-        # Формування та обмеження звіту (топ-5 кожного типу для збереження читабельності)
         report = "🔔 *Щоденний звіт по свіпах (Топ за останні свічки)*\n\n"
         
         if bullish_sweeps:
