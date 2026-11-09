@@ -54,6 +54,20 @@ async def get_klines(session, symbol, interval, limit=100):
         pass
     return []
 
+async def get_current_price(session, symbol):
+    url = f"{BINGX_BASE_URL}/openApi/swap/v1/ticker/price"
+    params = {"symbol": symbol}
+    try:
+        async with session.get(url, params=params, timeout=3) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                price_str = data.get("data", {}).get("price")
+                if price_str:
+                    return float(price_str)
+    except:
+        pass
+    return None
+
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
         return 0.0
@@ -127,8 +141,8 @@ async def job_daily_sweep_report(session, symbols):
                     continue
                 symbol = batch[j]
                 
-                c_prev = klines_1d[-3]  # позавчора
-                c_closed = klines_1d[-2] # вчора (повністю закрита доба)
+                c_prev = klines_1d[-3]  
+                c_closed = klines_1d[-2] 
                 
                 try:
                     high_prev, low_prev = float(c_prev['high']), float(c_prev['low'])
@@ -156,23 +170,21 @@ async def job_daily_sweep_report(session, symbols):
     await send_telegram(report)
     print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
 
-# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ ПО 2 ЗАКРИТИХ СВІЧКАХ (1h) ---
+# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + СВІЖИЙ ПЕРЕТИН KDJ (1h) ---
 async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
             raw_1h = await get_klines(session, symbol, '1h', 50)
             raw_15m = await get_klines(session, symbol, '15m', 30)
-            return raw_1h, raw_15m
+            cur_p = await get_current_price(session, symbol)
+            return raw_1h, raw_15m, cur_p
 
-        raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=5.0)
+        raw_1h, raw_15m, current_price = await asyncio.wait_for(fetch_data(), timeout=5.0)
 
-        if len(raw_1h) < 25 or len(raw_15m) < 25:
+        if len(raw_1h) < 25 or len(raw_15m) < 25 or current_price is None:
             return None
 
-        # Актуальна поточна ринкова ціна для входу з останньої свічки в реальному часі
-        current_price = float(raw_1h[-1]['close'])
-
-        # Перевірка об'єму на 15m (за останні 5 свічок, виключаючи поточну)
+        # Перевірка об'єму на 15m (за останні 5 свічок)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -182,22 +194,26 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        # Для KDJ беремо закриті годинні свічки (виключаючи поточну живу [-1])
+        # Для KDJ беремо закриті свічки (виключаємо поточну живу [-1])
         candles_1h_for_kdj = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
         k_vals, d_vals, j_vals = calculate_kd(candles_1h_for_kdj)
-        if len(k_vals) < 3:
+        if len(k_vals) < 4:
             return None
 
-        # Перетин на двох останніх закритих годинних свічках ([-2] та [-3])
-        curr_k, prev_k = k_vals[-2], k_vals[-3]
-        curr_d, prev_d = d_vals[-2], d_vals[-3]
+        # Беремо три останні точки закритого годинного таймфрейму:
+        # [-3] -> передопераційна, [-2] -> остання закрита свічка, де міг статися свіжий перетин
+        c_k, c_d = k_vals[-2], d_vals[-2]
+        p_k, p_d = k_vals[-3], d_vals[-3]
+        pp_k, pp_d = k_vals[-4], d_vals[-4]
 
         atr_1h = calculate_atr(candles_1h_for_kdj, period=14)
         if atr_1h == 0:
             return None
 
-        kdj_long_crossover = (prev_k <= prev_d and curr_k > curr_d)
-        kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
+        # Свіжий перетин: на перед-попередній свічці лінії ще не перетиналися (або були в іншому положенні),
+        # а на останній закритій [-2] відносно [-3] відбувся перетин.
+        kdj_long_crossover = (p_k <= p_d and c_k > c_d)
+        kdj_short_crossover = (p_k >= p_d and c_k < c_d)
 
         if kdj_long_crossover:
             stop_loss = round(current_price - (atr_1h * 2.0), 6)
@@ -269,7 +285,7 @@ async def scan_5min_loop(session, symbols):
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 async def main_bot_loop():
-    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (по 2 закритих свічках 1h) + Об'єм кожні 5 хв активна.")
+    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (свіжий перетин 1h) + Об'єм кожні 5 хв активна.")
     
     last_daily_report_date = None
 
