@@ -110,35 +110,34 @@ def calculate_kd(candles, n=9):
     except Exception:
         return [50.0], [50.0], [50.0]
 
-# --- 1. ОКРІМИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
+# --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
 async def job_daily_sweep_report(session, symbols):
-    print("[INFO] Формування чіткого звіту по закритих денних свіпах (1D)...", flush=True)
+    print("[INFO] Формування звіту по закритих денних свіпах (1D)...", flush=True)
     bullish_sweeps = []
     bearish_sweeps = []
 
-    batch_size = 30
+    batch_size = 25
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
         tasks = [get_klines(session, sym, '1d', 10) for sym in batch]
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for j, klines_1d in enumerate(results):
-                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 4:
+                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 3:
                     continue
                 symbol = batch[j]
                 
-                # Беремо закриті свічки (виключаючи поточну незакриту [-1])
-                c2 = klines_1d[-3]  # позавчора
-                c1 = klines_1d[-2]  # вчора (повністю закрита доба)
+                c_prev = klines_1d[-3]  # позавчора
+                c_closed = klines_1d[-2] # вчора (повністю закрита доба)
                 
                 try:
-                    high_2, low_2 = float(c2['high']), float(c2['low'])
-                    high_1, low_1 = float(c1['high']), float(c1['low'])
-                    close_1 = float(c1['close'])
+                    high_prev, low_prev = float(c_prev['high']), float(c_prev['low'])
+                    high_closed, low_closed = float(c_closed['high']), float(c_closed['low'])
+                    close_closed = float(c_closed['close'])
 
-                    if high_1 > high_2 and close_1 < high_2:
+                    if high_closed > high_prev and close_closed < high_prev:
                         bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                    elif low_1 < low_2 and close_1 > low_2:
+                    elif low_closed < low_prev and close_closed > low_prev:
                         bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
                 except:
                     continue
@@ -146,18 +145,18 @@ async def job_daily_sweep_report(session, symbols):
             pass
         await asyncio.sleep(0.05)
 
-    report = "🔔 *Щоденний звіт по закритих денних свіпах (1D)*\n\n"
+    report = "🔔 *Щоденний звіт по закритих свіпах (1D)*\n\n"
     if bullish_sweeps:
-        report += "🟢 *Бичачі свіпи (Лонг):*\n" + "\n".join(bullish_sweeps[:10]) + "\n\n"
+        report += "🟢 *Бичачі свіпи (Лонг):*\n" + "\n".join(bullish_sweeps[:15]) + "\n\n"
     if bearish_sweeps:
-        report += "🔴 *Ведмежі свіпи (Шорт):*\n" + "\n".join(bearish_sweeps[:10]) + "\n\n"
+        report += "🔴 *Ведмежі свіпи (Шорт):*\n" + "\n".join(bearish_sweeps[:15]) + "\n\n"
     if not bullish_sweeps and not bearish_sweeps:
         report += "ℹ️ За минулу добу чітких свіпів за заданими умовами не виявлено."
 
     await send_telegram(report)
-    print("[INFO] Стабільний звіт по свіпах за закриту добу надіслано!", flush=True)
+    print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
 
-# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ (1h БЕЗ ЖОРСТКИХ ЗОН) ---
+# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ (1h) ---
 async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
@@ -170,7 +169,6 @@ async def analyze_signal(session, symbol):
         if len(raw_1h) < 20 or len(raw_15m) < 25:
             return None
 
-        # Перевірка сплеску об'єму на 15m (за останні 5 свічок у 2+ рази вище середнього)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -180,7 +178,6 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        # Перетин KDJ на 1h (БЕЗ прив'язки до зон J <= 30 / J >= 70)
         candles_1h = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
         k_vals, d_vals, j_vals = calculate_kd(candles_1h)
         if len(k_vals) < 3:
@@ -194,8 +191,10 @@ async def analyze_signal(session, symbol):
         if atr_1h == 0:
             return None
 
-        # Чистий перетин ліній K (K вище D або нижче D)
+        # ВИПРАВЛЕНІ НАПРЯМКИ ПЕРЕТИНУ:
+        # LONG: K знизу вгору перетинає D
         kdj_long_crossover = (prev_k <= prev_d and curr_k > curr_d)
+        # SHORT: K зверху вниз перетинає D
         kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
 
         if kdj_long_crossover:
@@ -287,12 +286,10 @@ async def main_bot_loop():
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
 
-                # Щоденний звіт відправляємо раз на добу після 00:05 UTC
                 if last_daily_report_date != today_str and now_utc.hour >= 0 and now_utc.minute >= 5:
                     await job_daily_sweep_report(session, symbols)
                     last_daily_report_date = today_str
 
-                # Сканування об'ємів та KDJ кожні 5 хвилин
                 await scan_5min_loop(session, symbols)
 
         except Exception as e:
@@ -306,4 +303,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                
