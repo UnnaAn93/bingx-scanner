@@ -169,10 +169,10 @@ async def analyze_signal(session, symbol):
         if len(raw_1h) < 25 or len(raw_15m) < 25:
             return None
 
-        # Актуальна поточна ціна з останньої активної свічки
+        # Актуальна поточна ринкова ціна для входу з останньої свічки в реальному часі
         current_price = float(raw_1h[-1]['close'])
 
-        # Перевірка об'єму на 15m (попередні свічки без поточної)
+        # Перевірка об'єму на 15m (за останні 5 свічок, виключаючи поточну)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -182,17 +182,17 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        # Аналізуємо закриті годинні свічки (виключаємо поточну [-1], беремо [-3] та [-2] для перетину)
-        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
-        k_vals, d_vals, j_vals = calculate_kd(candles_1h_closed)
+        # Для KDJ беремо закриті годинні свічки (виключаючи поточну живу [-1])
+        candles_1h_for_kdj = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
+        k_vals, d_vals, j_vals = calculate_kd(candles_1h_for_kdj)
         if len(k_vals) < 3:
             return None
 
-        # Перетин на двох останніх закритих свічках годинного таймфрейму
-        curr_k, prev_k = k_vals[-1], k_vals[-2]
-        curr_d, prev_d = d_vals[-1], d_vals[-2]
+        # Перетин на двох останніх закритих годинних свічках ([-2] та [-3])
+        curr_k, prev_k = k_vals[-2], k_vals[-3]
+        curr_d, prev_d = d_vals[-2], d_vals[-3]
 
-        atr_1h = calculate_atr(candles_1h_closed, period=14)
+        atr_1h = calculate_atr(candles_1h_for_kdj, period=14)
         if atr_1h == 0:
             return None
 
@@ -284,10 +284,8 @@ async def main_bot_loop():
 
                 contracts_data = res if isinstance(res, list) else res.get("data", [])
                 
-                # Список виключень для індексів
+                # Фільтрація індексів
                 exclude_patterns = ("NCF", "NCS", "NCC")
-                
-                # Формуємо список, одразу виключаючи індекси з цими символами
                 symbols = [
                     item["symbol"] for item in contracts_data 
                     if isinstance(item, dict) and "symbol" in item 
@@ -314,4 +312,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                                           
+    
