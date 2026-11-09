@@ -185,16 +185,15 @@ async def analyze_signal(session, symbol):
 
         curr_k, prev_k = k_vals[-1], k_vals[-2]
         curr_d, prev_d = d_vals[-1], d_vals[-2]
-        current_price = candles_1h[-1]['close']
+        
+        # Актуальна поточна ринкова ціна з останньої свічки
+        current_price = float(raw_1h[-1]['close'])
         atr_1h = calculate_atr(candles_1h, period=14)
 
         if atr_1h == 0:
             return None
 
-        # ВИПРАВЛЕНІ НАПРЯМКИ ПЕРЕТИНУ:
-        # LONG: K знизу вгору перетинає D
         kdj_long_crossover = (prev_k <= prev_d and curr_k > curr_d)
-        # SHORT: K зверху вниз перетинає D
         kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
 
         if kdj_long_crossover:
@@ -303,4 +302,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                
+        
