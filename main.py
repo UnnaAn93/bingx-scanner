@@ -169,18 +169,19 @@ async def job_daily_sweep_report(session, symbols):
     await send_telegram(report)
     print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
 
-# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + СВІЖИЙ ПЕРЕТИН KDJ НА 2 ЗАКРИТИХ ГОДИННИХ СВІЧКАХ ---
+# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ НА 2 ЗАКРИТИХ ГОДИННИХ СВІЧКАХ (1h) ---
 async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
-            raw_1h = await get_klines(session, symbol, '1h', 60)
+            # Збільшуємо історію годинних свічок до 300 для ідеального прогріву KDJ
+            raw_1h = await get_klines(session, symbol, '1h', 300)
             raw_15m = await get_klines(session, symbol, '15m', 30)
             cur_p = await get_current_price(session, symbol)
             return raw_1h, raw_15m, cur_p
 
         raw_1h, raw_15m, current_price = await asyncio.wait_for(fetch_data(), timeout=5.0)
 
-        if len(raw_1h) < 25 or len(raw_15m) < 25 or current_price is None:
+        if len(raw_1h) < 50 or len(raw_15m) < 25 or current_price is None:
             return None
 
         # 1. Перевірка об'єму на 15m (за останні 5 свічок, виключаючи поточну живу)
@@ -194,16 +195,16 @@ async def analyze_signal(session, symbol):
             return None
 
         # 2. Годинні свічки: ПОВНІСТЮ відкидаємо поточну живу свічку (raw_1h[-1])
-        # Працюємо тільки з повністю закритими свічками.
+        # Працюємо виключно з повністю закритими годинними свічками.
         candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
         
         k_vals, d_vals, j_vals = calculate_kd(candles_1h_closed)
         if len(k_vals) < 3:
             return None
 
-        # Свіжий перетин на ДВОХ ОСТАННІХ ЗАКРИТИХ годинних свічках:
-        # [-1] — це остання повністю закрита година.
-        # [-2] — це передостання закрита година.
+        # Перетин на ДВОХ ОСТАННІХ ЗАКРИТИХ годинних свічках:
+        # [-1] — остання повністю закрита година.
+        # [-2] — передостання закрита година.
         curr_k, curr_d = k_vals[-1], d_vals[-1]
         prev_k, prev_d = k_vals[-2], d_vals[-2]
 
@@ -211,7 +212,6 @@ async def analyze_signal(session, symbol):
         if atr_1h == 0:
             return None
 
-        # Перетин: на попередній закритій K була нижче/вище D, а на останній закритій помінялися місцями
         kdj_long_crossover = (prev_k <= prev_d and curr_k > curr_d)
         kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
 
@@ -328,4 +328,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+                
