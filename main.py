@@ -301,12 +301,14 @@ async def main_bot_loop():
                 contracts_data = res if isinstance(res, list) else res.get("data", [])
                 
                 # Фільтрація індексів
-                exclude_patterns = ("NCF", "NCS", "NCC")
+                # Список виключень: індекси та USDC пари
+                exclude_patterns = ("NCF", "NCS", "NCC", "-USDC")
                 symbols = [
                     item["symbol"] for item in contracts_data 
                     if isinstance(item, dict) and "symbol" in item 
                     and not any(p in item["symbol"] for p in exclude_patterns)
                 ]
+
 
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
