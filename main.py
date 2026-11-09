@@ -43,7 +43,7 @@ async def get_klines(session, symbol, interval, limit=100):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     try:
-        async with session.get(url, params=params, timeout=5) as resp:
+        async with session.get(url, params=params, timeout=4) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 klines = data.get("data", [])
@@ -116,28 +116,32 @@ async def job_daily_sweep_report(session, symbols):
     bullish_sweeps = []
     bearish_sweeps = []
 
-    batch_size = 40
+    batch_size = 30
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
         tasks = [get_klines(session, sym, '1d', 5) for sym in batch]
-        results = await asyncio.gather(*tasks)
-
-        for j, klines_1d in enumerate(results):
-            symbol = batch[j]
-            if len(klines_1d) >= 3:
-                c2, c1 = klines_1d[-3], klines_1d[-2]
-                try:
-                    high_2, low_2 = float(c2['high']), float(c2['low'])
-                    high_1, low_1 = float(c1['high']), float(c1['low'])
-                    close_1 = float(c1['close'])
-
-                    if high_1 > high_2 and close_1 < high_2:
-                        bearish_sweeps.append(f"`{symbol}` (High Sweep)")
-                    elif low_1 < low_2 and close_1 > low_2:
-                        bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
-                except:
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for j, klines_1d in enumerate(results):
+                if isinstance(klines_1d, Exception) or not klines_1d:
                     continue
-        await asyncio.sleep(0.02)
+                symbol = batch[j]
+                if len(klines_1d) >= 3:
+                    c2, c1 = klines_1d[-3], klines_1d[-2]
+                    try:
+                        high_2, low_2 = float(c2['high']), float(c2['low'])
+                        high_1, low_1 = float(c1['high']), float(c1['low'])
+                        close_1 = float(c1['close'])
+
+                        if high_1 > high_2 and close_1 < high_2:
+                            bearish_sweeps.append(f"`{symbol}` (High Sweep)")
+                        elif low_1 < low_2 and close_1 > low_2:
+                            bullish_sweeps.append(f"`{symbol}` (Low Sweep)")
+                    except:
+                        continue
+        except:
+            pass
+        await asyncio.sleep(0.05)
 
     report = "🔔 *Щоденний звіт по денних свіпах (1D)*\n\n"
     if bullish_sweeps:
@@ -153,13 +157,17 @@ async def job_daily_sweep_report(session, symbols):
 # --- 2. КОЖНІ 5 ХВ: АНАЛІЗ ОБ'ЄМУ (15m) + KDJ (1h) ---
 async def analyze_signal(session, symbol):
     try:
-        raw_1h = await get_klines(session, symbol, '1h', 50)
-        raw_15m = await get_klines(session, symbol, '15m', 30)
+        # Захист таймаутом всього аналізу монети (не більше 5 секунд)
+        async def fetch_data():
+            raw_1h = await get_klines(session, symbol, '1h', 50)
+            raw_15m = await get_klines(session, symbol, '15m', 30)
+            return raw_1h, raw_15m
+
+        raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=5.0)
 
         if len(raw_1h) < 20 or len(raw_15m) < 25:
             return None
 
-        # Перевірка об'єму на 15m (сплеск за останні 5 свічок у 2+ рази вище середнього)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -169,7 +177,6 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        # Перетин KDJ на 1h
         candles_1h = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
         k_vals, d_vals, j_vals = calculate_kd(candles_1h)
         if len(k_vals) < 3:
@@ -222,35 +229,38 @@ async def analyze_signal(session, symbol):
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
-    except Exception:
+    except:
         pass
     return None
 
 async def scan_5min_loop(session, symbols):
-    print("[INFO] Сканування ринку на сигнал (1h KDJ + 15m Об'єм)...", flush=True)
-    batch_size = 30
+    print("[INFO] Початок сканування ринку (1h KDJ + 15m Об'єм)...", flush=True)
+    batch_size = 25
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
         tasks = [analyze_signal(session, sym) for sym in batch]
-        results = await asyncio.gather(*tasks)
-
-        for setup in results:
-            if setup:
-                msg = (
-                    f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
-                    f"🪙 Монета: `{setup['symbol']}`\n\n"
-                    f"🟢 Вхід (орієнтир): `{setup['entry']:.6f}`\n"
-                    f"🔴 Стоп-лос: `{setup['stop_loss']:.6f}`\n"
-                    f"🎯 TP1: `{setup['tp1']:.6f}` | TP2: `{setup['tp2']:.6f}` | TP3: `{setup['tp3']:.6f}`\n\n"
-                    f"🧮 **Розрахунок позиції (Депозит $20):**\n"
-                    f"📦 Кількість: `{setup['pos_qty']:.4f}`\n"
-                    f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
-                    f"🏦 Маржа (10x): `{setup['margin_usd']:.2f} USD`\n"
-                    f"🛡️ Ризик на стоп: `$0.60` (3%)\n\n"
-                    f"⏳ Очікування ручного відкриття..."
-                )
-                await send_telegram(msg)
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for setup in results:
+                if isinstance(setup, dict):
+                    msg = (
+                        f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
+                        f"🪙 Монета: `{setup['symbol']}`\n\n"
+                        f"🟢 Вхід (орієнтир): `{setup['entry']:.6f}`\n"
+                        f"🔴 Стоп-лос: `{setup['stop_loss']:.6f}`\n"
+                        f"🎯 TP1: `{setup['tp1']:.6f}` | TP2: `{setup['tp2']:.6f}` | TP3: `{setup['tp3']:.6f}`\n\n"
+                        f"🧮 **Розрахунок позиції (Депозит $20):**\n"
+                        f"📦 Кількість: `{setup['pos_qty']:.4f}`\n"
+                        f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
+                        f"🏦 Маржа (10x): `{setup['margin_usd']:.2f} USD`\n"
+                        f"🛡️ Ризик на стоп: `$0.60` (3%)\n\n"
+                        f"⏳ Очікування ручного відкриття..."
+                    )
+                    await send_telegram(msg)
+        except:
+            pass
         await asyncio.sleep(0.1)
+    print("[INFO] Сканування ринку завершено.", flush=True)
 
 # --- ГОЛОВНИЙ ОДНОЧАСНИЙ ДЕМОН ---
 async def main_bot_loop():
@@ -270,20 +280,20 @@ async def main_bot_loop():
                 contracts_data = res if isinstance(res, list) else res.get("data", [])
                 symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
 
-                # Перевірка щоденного звіту (відправляємо раз на добу після опівночі UTC)
+                # Перевірка щоденного звіту
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
                 if last_daily_report_date != today_str:
                     await job_daily_sweep_report(session, symbols)
                     last_daily_report_date = today_str
 
-                # Запуск аналізу кожні 5 хвилин
+                # Запуск аналізу об'ємів та KDJ
                 await scan_5min_loop(session, symbols)
 
         except Exception as e:
             print(f"[ERROR] Помилка в основному циклі: {e}", flush=True)
 
-        # Пауза 5 хвилин до наступного сканування об'ємів та KDJ
+        # Пауза 5 хвилин до наступного циклу
         await asyncio.sleep(300)
 
 async def main():
@@ -292,4 +302,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+                
