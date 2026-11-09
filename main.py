@@ -156,7 +156,7 @@ async def job_daily_sweep_report(session, symbols):
     await send_telegram(report)
     print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
 
-# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ (1h) ---
+# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + ПЕРЕТИН KDJ ПО 2 ЗАКРИТИХ СВІЧКАХ (1h) ---
 async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
@@ -166,9 +166,13 @@ async def analyze_signal(session, symbol):
 
         raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=5.0)
 
-        if len(raw_1h) < 20 or len(raw_15m) < 25:
+        if len(raw_1h) < 25 or len(raw_15m) < 25:
             return None
 
+        # Актуальна поточна ціна з останньої активної свічки
+        current_price = float(raw_1h[-1]['close'])
+
+        # Перевірка об'єму на 15m (попередні свічки без поточної)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -178,18 +182,17 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        candles_1h = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
-        k_vals, d_vals, j_vals = calculate_kd(candles_1h)
+        # Аналізуємо закриті годинні свічки (виключаємо поточну [-1], беремо [-3] та [-2] для перетину)
+        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
+        k_vals, d_vals, j_vals = calculate_kd(candles_1h_closed)
         if len(k_vals) < 3:
             return None
 
+        # Перетин на двох останніх закритих свічках годинного таймфрейму
         curr_k, prev_k = k_vals[-1], k_vals[-2]
         curr_d, prev_d = d_vals[-1], d_vals[-2]
-        
-        # Актуальна поточна ринкова ціна з останньої свічки
-        current_price = float(raw_1h[-1]['close'])
-        atr_1h = calculate_atr(candles_1h, period=14)
 
+        atr_1h = calculate_atr(candles_1h_closed, period=14)
         if atr_1h == 0:
             return None
 
@@ -266,7 +269,7 @@ async def scan_5min_loop(session, symbols):
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 async def main_bot_loop():
-    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (перетин) + Об'єм кожні 5 хв активна.")
+    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (по 2 закритих свічках 1h) + Об'єм кожні 5 хв активна.")
     
     last_daily_report_date = None
 
@@ -286,7 +289,7 @@ async def main_bot_loop():
                 today_str = now_utc.strftime("%Y-%m-%d")
 
                 if last_daily_report_date != today_str and now_utc.hour >= 0 and now_utc.minute >= 5:
-                    await job_daily_sweep_report(session, symbols)
+                    await job_daily_report = await job_daily_sweep_report(session, symbols)
                     last_daily_report_date = today_str
 
                 await scan_5min_loop(session, symbols)
@@ -302,4 +305,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+                              
