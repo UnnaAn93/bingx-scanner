@@ -83,16 +83,23 @@ def calculate_atr(candles, period=14):
 def calculate_kd(candles, n=9):
     try:
         if not candles or len(candles) < n: 
-            return [50.0], [50.0], [50.0]
+            return [], [], []
         
         closes = [float(x['close']) for x in candles]
         lows = [float(x['low']) for x in candles]
         highs = [float(x['high']) for x in candles]
         
-        rsv_list = []
+        k_list, d_list, j_list = [], [], []
+        k = 50.0
+        d = 50.0
+        
         for i in range(len(candles)):
             if i < n - 1:
+                k_list.append(k)
+                d_list.append(d)
+                j_list.append(3.0 * k - 2.0 * d)
                 continue
+                
             sub_lows = lows[i - n + 1 : i + 1]
             sub_highs = highs[i - n + 1 : i + 1]
             l_val = min(sub_lows)
@@ -103,26 +110,18 @@ def calculate_kd(candles, n=9):
                 rsv = 50.0
             else:
                 rsv = (c_val - l_val) / (h_val - l_val) * 100.0
-            rsv_list.append(rsv)
-            
-        if not rsv_list:
-            return [50.0], [50.0], [50.0]
-
-        k_list, d_list, j_list = [], [], []
-        k = rsv_list[0]
-        d = rsv_list[0]
-        
-        for rsv in rsv_list:
+                
             k = (2.0 / 3.0) * k + (1.0 / 3.0) * rsv
             d = (2.0 / 3.0) * d + (1.0 / 3.0) * k
             j = 3.0 * k - 2.0 * d
+            
             k_list.append(k)
             d_list.append(d)
             j_list.append(j)
             
         return k_list, d_list, j_list
     except Exception:
-        return [50.0], [50.0], [50.0]
+        return [], [], []
 
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
 async def job_daily_sweep_report(session, symbols):
@@ -170,11 +169,11 @@ async def job_daily_sweep_report(session, symbols):
     await send_telegram(report)
     print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
 
-# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + СВІЖИЙ ПЕРЕТИН KDJ (1h) ---
+# --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ (15m) + СВІЖИЙ ПЕРЕТИН KDJ НА 2 ЗАКРИТИХ ГОДИННИХ СВІЧКАХ ---
 async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
-            raw_1h = await get_klines(session, symbol, '1h', 50)
+            raw_1h = await get_klines(session, symbol, '1h', 60)
             raw_15m = await get_klines(session, symbol, '15m', 30)
             cur_p = await get_current_price(session, symbol)
             return raw_1h, raw_15m, cur_p
@@ -184,7 +183,7 @@ async def analyze_signal(session, symbol):
         if len(raw_1h) < 25 or len(raw_15m) < 25 or current_price is None:
             return None
 
-        # Перевірка об'єму на 15m (за останні 5 свічок)
+        # 1. Перевірка об'єму на 15m (за останні 5 свічок, виключаючи поточну живу)
         candles_15m = [{'volume': float(c['volume'])} for c in raw_15m[:-1]]
         avg_vol_15m = sum(c['volume'] for c in candles_15m[-25:-5]) / 20
         if avg_vol_15m == 0:
@@ -194,26 +193,27 @@ async def analyze_signal(session, symbol):
         if not has_volume_spike_15m:
             return None
 
-        # Для KDJ беремо закриті свічки (виключаємо поточну живу [-1])
-        candles_1h_for_kdj = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
-        k_vals, d_vals, j_vals = calculate_kd(candles_1h_for_kdj)
-        if len(k_vals) < 4:
+        # 2. Годинні свічки: ПОВНІСТЮ відкидаємо поточну живу свічку (raw_1h[-1])
+        # Працюємо тільки з повністю закритими свічками.
+        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
+        
+        k_vals, d_vals, j_vals = calculate_kd(candles_1h_closed)
+        if len(k_vals) < 3:
             return None
 
-        # Беремо три останні точки закритого годинного таймфрейму:
-        # [-3] -> передопераційна, [-2] -> остання закрита свічка, де міг статися свіжий перетин
-        c_k, c_d = k_vals[-2], d_vals[-2]
-        p_k, p_d = k_vals[-3], d_vals[-3]
-        pp_k, pp_d = k_vals[-4], d_vals[-4]
+        # Свіжий перетин на ДВОХ ОСТАННІХ ЗАКРИТИХ годинних свічках:
+        # [-1] — це остання повністю закрита година.
+        # [-2] — це передостання закрита година.
+        curr_k, curr_d = k_vals[-1], d_vals[-1]
+        prev_k, prev_d = k_vals[-2], d_vals[-2]
 
-        atr_1h = calculate_atr(candles_1h_for_kdj, period=14)
+        atr_1h = calculate_atr(candles_1h_closed, period=14)
         if atr_1h == 0:
             return None
 
-        # Свіжий перетин: на перед-попередній свічці лінії ще не перетиналися (або були в іншому положенні),
-        # а на останній закритій [-2] відносно [-3] відбувся перетин.
-        kdj_long_crossover = (p_k <= p_d and c_k > c_d)
-        kdj_short_crossover = (p_k >= p_d and c_k < c_d)
+        # Перетин: на попередній закритій K була нижче/вище D, а на останній закритій помінялися місцями
+        kdj_long_crossover = (prev_k <= prev_d and curr_k > curr_d)
+        kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
 
         if kdj_long_crossover:
             stop_loss = round(current_price - (atr_1h * 2.0), 6)
@@ -285,7 +285,7 @@ async def scan_5min_loop(session, symbols):
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 async def main_bot_loop():
-    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (свіжий перетин 1h) + Об'єм кожні 5 хв активна.")
+    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (на 2 закритих свічках 1h) + Об'єм кожні 5 хв активна.")
     
     last_daily_report_date = None
 
@@ -328,4 +328,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+            
