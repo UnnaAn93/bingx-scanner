@@ -289,7 +289,7 @@ async def main_bot_loop():
                 today_str = now_utc.strftime("%Y-%m-%d")
 
                 if last_daily_report_date != today_str and now_utc.hour >= 0 and now_utc.minute >= 5:
-                    await job_daily_report = await job_daily_sweep_report(session, symbols)
+                    await job_daily_sweep_report(session, symbols)
                     last_daily_report_date = today_str
 
                 await scan_5min_loop(session, symbols)
@@ -305,4 +305,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                              
+                                           
