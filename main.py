@@ -283,7 +283,16 @@ async def main_bot_loop():
                     res = await resp.json()
 
                 contracts_data = res if isinstance(res, list) else res.get("data", [])
-                symbols = [item["symbol"] for item in contracts_data if isinstance(item, dict) and "symbol" in item]
+                
+                # Список виключень для індексів
+                exclude_patterns = ("NCF", "NCS", "NCC")
+                
+                # Формуємо список, одразу виключаючи індекси з цими символами
+                symbols = [
+                    item["symbol"] for item in contracts_data 
+                    if isinstance(item, dict) and "symbol" in item 
+                    and not any(p in item["symbol"] for p in exclude_patterns)
+                ]
 
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
