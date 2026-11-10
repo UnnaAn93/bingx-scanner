@@ -109,7 +109,7 @@ def calculate_kd(candles, n=9):
     except Exception:
         return [], [], []
 
-# --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D - суворо по закритих добових свічках) ---
+# --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
 async def job_daily_sweep_report(session, symbols):
     print("[INFO] Формування звіту по закритих денних свіпах (1D)...", flush=True)
     bullish_sweeps = []
@@ -126,8 +126,6 @@ async def job_daily_sweep_report(session, symbols):
                     continue
                 symbol = batch[j]
                 
-                # Суворо беремо повністю закриту вчорашню добу ([-2]) відносно попередньої ([-3])
-                # Ігноруємо поточну незакриту добу ([-1])
                 c_prev = klines_1d[-3]  
                 c_closed = klines_1d[-2] 
                 
@@ -136,14 +134,18 @@ async def job_daily_sweep_report(session, symbols):
                     high_closed, low_closed = float(c_closed['high']), float(c_closed['low'])
                     close_closed = float(c_closed['close'])
 
-                    # Low Sweep (Бичачий): мінімум пробив попередній low, але закрився вище нього
-                    if low_closed < low_prev and close_closed > low_prev:
+                    is_low_sweep = (low_closed < low_prev) and (close_closed > low_prev)
+                    is_high_sweep = (high_closed > high_prev) and (close_closed < high_prev)
+
+                    if is_low_sweep or is_high_sweep:
+                        print(f"[SWEEP FOUND] {symbol} | LowSweep={is_low_sweep}, HighSweep={is_high_sweep} | PrevLow={low_prev}, ClosedLow={low_closed}, Close={close_closed}", flush=True)
+
+                    if is_low_sweep:
                         b_str = f"`{symbol}` (Low Sweep)"
                         if b_str not in bullish_sweeps:
                             bullish_sweeps.append(b_str)
                     
-                    # High Sweep (Ведмежий): максимум пробив попередній high, але закрився нижче нього
-                    if high_closed > high_prev and close_closed < high_prev:
+                    if is_high_sweep:
                         s_str = f"`{symbol}` (High Sweep)"
                         if s_str not in bearish_sweeps:
                             bearish_sweeps.append(s_str)
@@ -194,7 +196,6 @@ async def analyze_signal(session, symbol):
         if len(k_vals) < 3:
             return None
 
-        # Перетин на останній закритій годинній свічці відносно попередньої
         curr_k, curr_d = k_vals[-1], d_vals[-1]
         prev_k, prev_d = k_vals[-2], d_vals[-2]
 
@@ -206,7 +207,6 @@ async def analyze_signal(session, symbol):
         kdj_short_crossover = (prev_k >= prev_d and curr_k < curr_d)
 
         if kdj_long_crossover or kdj_short_crossover:
-            # Ціна входу — ціна закриття останньої повністю закритої годинної свічки
             current_price = float(candles_1h_closed[-1]['close'])
             signal_type = "LONG" if kdj_long_crossover else "SHORT"
             print(f"[SIGNAL MATCH] {symbol} | {signal_type} | 1h K[-2]={prev_k:.2f}, D[-2]={prev_d:.2f} -> K[-1]={curr_k:.2f}, D[-1]={curr_d:.2f}", flush=True)
@@ -323,4 +323,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                        
+                
