@@ -66,26 +66,19 @@ def calculate_atr(candles, period=14):
         tr_list.append(tr)
     return sum(tr_list[-period:]) / period
 
-def calculate_kd(candles, n=9):
+def calculate_kd(candles, n=9, m1=3, m2=3):
     try:
         if not candles or len(candles) < n: 
-            return [], [], []
+            return [50.0], [50.0], [50.0]
         
         closes = [float(x['close']) for x in candles]
         lows = [float(x['low']) for x in candles]
         highs = [float(x['high']) for x in candles]
         
-        k_list, d_list, j_list = [], [], []
-        k = 50.0
-        d = 50.0
-        
+        rsv_list = []
         for i in range(len(candles)):
             if i < n - 1:
-                k_list.append(k)
-                d_list.append(d)
-                j_list.append(3.0 * k - 2.0 * d)
                 continue
-                
             sub_lows = lows[i - n + 1 : i + 1]
             sub_highs = highs[i - n + 1 : i + 1]
             l_val = min(sub_lows)
@@ -96,18 +89,27 @@ def calculate_kd(candles, n=9):
                 rsv = 50.0
             else:
                 rsv = (c_val - l_val) / (h_val - l_val) * 100.0
-                
+            rsv_list.append(rsv)
+            
+        if not rsv_list:
+            return [50.0], [50.0], [50.0]
+
+        k_list, d_list, j_list = [], [], []
+        k = rsv_list[0]
+        d = rsv_list[0]
+        
+        for rsv in rsv_list:
             k = (2.0 / 3.0) * k + (1.0 / 3.0) * rsv
             d = (2.0 / 3.0) * d + (1.0 / 3.0) * k
             j = 3.0 * k - 2.0 * d
-            
             k_list.append(k)
             d_list.append(d)
             j_list.append(j)
             
         return k_list, d_list, j_list
     except Exception:
-        return [], [], []
+        return [50.0], [50.0], [50.0]
+        
 
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) З ДАНИМИ СВІЧОК ---
 # --- 1. СУВОРИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
