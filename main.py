@@ -382,6 +382,7 @@ async def main_bot_loop():
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
+    asyncio.create_task(self_ping_loop())
     await main_bot_loop()
 
 if __name__ == "__main__":
