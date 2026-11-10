@@ -191,45 +191,46 @@ async def analyze_signal(session, symbol):
             raw_1h = await get_klines(session, symbol, '1h', 200)
             raw_15m = await get_klines(session, symbol, '15m', 50)
             return raw_1h, raw_15m
-
+        
         raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=6.0)
-
+        
         if len(raw_1h) < 30 or len(raw_15m) < 30:
             return None
 
-        # --- ШВИДКИЙ ФІЛЬТР: Перевірка об'єму на 15m ПЕРШИМ кроком ---
+        # --- ШВИДКИЙ ФІЛЬТР: Перевірка об'єму на 15м (за останні 5 свічок >= 2.0x) ---
         candles_15m_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_15m[:-1]]
         
-        avg_vol_15m = sum(c['volume'] for c in candles_15m_closed[-25:-5]) / 20
+        if len(candles_15m_closed) < 25:
+            return None
+
+        avg_vol_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
         if avg_vol_15m == 0:
             return None
-        has_vol_spike = any(c['volume'] >= avg_vol_15m * 2.0 for c in candles_15m_closed[-5:])
+            
+        has_vol_spike = any(float(c['volume']) >= avg_vol_15m * 2.0 for c in candles_15m_closed[-5:])
         if not has_vol_spike:
-            return None  # Відсіюємо миттєво, якщо немає сплеску об'єму!
+            return None  # Немає сплеску об'єму за останні 5 свічок — виходимо
 
-        # 1. ГОДИННИЙ KDJ (рахуємо тільки для тих пар, що пройшли фільтр об'єму)
-        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
-        k_1h, d_1h, _ = calculate_kd(candles_1h_closed)
-        if len(k_1h) < 3:
-            return None
-        
-        h_trend_long = (k_1h[-2] <= d_1h[-2] and k_1h[-1] > d_1h[-1]) or (k_1h[-1] > d_1h[-1])
-        h_trend_short = (k_1h[-2] >= d_1h[-2] and k_1h[-1] < d_1h[-1]) or (k_1h[-1] < d_1h[-1])
-
-        # 2. KDJ на 15m (ТВХ)
-        k_15m, d_15m, _ = calculate_kd(candles_15m_closed)
-        if len(k_15m) < 3:
+        # --- УМОВИ KDJ ТА ЛІНІЇ J НА 15м ---
+        k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
+        if len(k_15m) < 5:
             return None
 
-        m15_long_trigger = (k_15m[-2] <= d_15m[-2] and k_15m[-1] > d_15m[-1]) or (k_15m[-1] < 25)
-        m15_short_trigger = (k_15m[-2] >= d_15m[-2] and k_15m[-1] < d_15m[-1]) or (k_15m[-1] > 75)
+        # Базові перетини K та D на останній закритій свічці
+        m15_k_cross_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])
+        m15_k_cross_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])
 
-        is_long_signal = h_trend_long and m15_long_trigger
-        is_short_signal = h_trend_short and m15_short_trigger
+        # Лонг: J була нижче 10 на останніх свічках + перетин K і D знизу вгору
+        j_was_below_10 = any(val < 10 for val in j_15m[-5:])
+        is_long_signal = m15_k_cross_up and j_was_below_10
+
+        # Шорт: J була вище 90 на останніх свічках + перетин K і D зверху вниз
+        j_was_above_90 = any(val > 90 for val in j_15m[-5:])
+        is_short_signal = m15_k_cross_down and j_was_above_90
 
         if not is_long_signal and not is_short_signal:
             return None
-
+        
         atr_1h = calculate_atr(candles_1h_closed, period=14)
         if atr_1h == 0:
             return None
