@@ -239,10 +239,10 @@ async def analyze_signal(session, symbol):
 
         if is_long_signal:
             signal_name = "LONG (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price - (atr_1h * 2.0), 6)
-            tp1 = round(current_price + (atr_1h * 3.0), 6)
-            tp2 = round(tp1 + (atr_1h * 2.0), 6)
-            tp3 = round(tp2 + (atr_1h * 2.0), 6)
+            stop_loss = round(current_price - (atr_1h * 2.0), 8)
+            tp1 = round(current_price + (atr_1h * 3.0), 8)
+            tp2 = round(tp1 + (atr_1h * 2.0), 8)
+            tp3 = round(tp2 + (atr_1h * 2.0), 8)
 
             risk_per_coin = current_price - stop_loss
             if risk_per_coin > 0:
@@ -258,10 +258,10 @@ async def analyze_signal(session, symbol):
 
         elif is_short_signal:
             signal_name = "SHORT (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price + (atr_1h * 2.0), 6)
-            tp1 = round(current_price - (atr_1h * 3.0), 6)
-            tp2 = round(tp1 - (atr_1h * 2.0), 6)
-            tp3 = round(tp2 - (atr_1h * 2.0), 6)
+            stop_loss = round(current_price + (atr_1h * 2.0), 8)
+            tp1 = round(current_price - (atr_1h * 3.0), 8)
+            tp2 = round(tp1 - (atr_1h * 2.0), 8)
+            tp3 = round(tp2 - (atr_1h * 2.0), 8)
 
             risk_per_coin = stop_loss - current_price
             if risk_per_coin > 0:
@@ -293,9 +293,9 @@ async def scan_5min_loop(session, symbols):
                     msg = (
                         f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
                         f"🪙 Монета: `{setup['symbol']}`\n\n"
-                        f"🟢 Вхід (орієнтир): `{setup['entry']:.6f}`\n"
-                        f"🔴 Стоп-лос: `{setup['stop_loss']:.6f}`\n"
-                        f"🎯 TP1: `{setup['tp1']:.6f}` | TP2: `{setup['tp2']:.6f}` | TP3: `{setup['tp3']:.6f}`\n\n"
+                        f"🟢 Вхід (орієнтир): `{setup['entry']:.8f}`\n"
+                        f"🔴 Стоп-лос: `{setup['stop_loss']:.8f}`\n"
+                        f"🎯 TP1: `{setup['tp1']:.8f}` | TP2: `{setup['tp2']:.8f}` | TP3: `{setup['tp3']:.8f}`\n\n"
                         f"🧮 **Розрахунок позиції (Депозит $20):**\n"
                         f"📦 Кількість: `{setup['pos_qty']:.4f}`\n"
                         f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
