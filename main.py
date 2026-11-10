@@ -110,6 +110,7 @@ def calculate_kd(candles, n=9):
         return [], [], []
 
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) З ДАНИМИ СВІЧОК ---
+# --- 1. СУВОРИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
 async def job_daily_sweep_report(session, symbols):
     print("[INFO] Формування звіту по закритих денних свіпах (1D)...", flush=True)
     bullish_sweeps = []
@@ -118,14 +119,18 @@ async def job_daily_sweep_report(session, symbols):
     batch_size = 20
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
-        tasks = [get_klines(session, sym, '1d', 10) for sym in batch]
+        tasks = [get_klines(session, sym, '1d', 15) for sym in batch]
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for j, klines_1d in enumerate(results):
-                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 3:
+                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 5:
                     continue
                 symbol = batch[j]
                 
+                # Уточнюємо зріз:
+                # klines_1d[-1] — це поточна (жива, неповна) доба.
+                # klines_1d[-2] — це повністю закрита вчорашня доба (яку аналізуємо).
+                # klines_1d[-3] — це позавчорашня доба (відносно якої шукаємо свіп).
                 c_prev = klines_1d[-3]  
                 c_closed = klines_1d[-2] 
                 
@@ -133,14 +138,18 @@ async def job_daily_sweep_report(session, symbols):
                     open_prev, high_prev, low_prev, close_prev = float(c_prev['open']), float(c_prev['high']), float(c_prev['low']), float(c_prev['close'])
                     open_closed, high_closed, low_closed, close_closed = float(c_closed['open']), float(c_closed['high']), float(c_closed['low']), float(c_closed['close'])
 
+                    # Суворі правила свіпу:
+                    # 1. Low Sweep (Лонг): лоу закритого дня нижче лоу попереднього, АЛЕ закриття ВИЩЕ попереднього лоу
                     is_low_sweep = (low_closed < low_prev) and (close_closed > low_prev)
+                    
+                    # 2. High Sweep (Шорт): хай закритого дня ВИЩЕ хая попереднього, АЛЕ закриття НИЖЧЕ попереднього хая
                     is_high_sweep = (high_closed > high_prev) and (close_closed < high_prev)
 
                     if is_low_sweep:
                         b_str = (
                             f"🟢 `{symbol}` *(Low Sweep)*\n"
                             f"   • Попередній Low: `{low_prev}`\n"
-                            f"   • Закрита: Open `{open_closed}` | Close `{close_closed}` | Low `{low_closed}`"
+                            f"   • Закрита доба: Low `{low_closed}` | Close `{close_closed}`"
                         )
                         if b_str not in bullish_sweeps:
                             bullish_sweeps.append(b_str)
@@ -149,7 +158,7 @@ async def job_daily_sweep_report(session, symbols):
                         s_str = (
                             f"🔴 `{symbol}` *(High Sweep)*\n"
                             f"   • Попередній High: `{high_prev}`\n"
-                            f"   • Закрита: Open `{open_closed}` | Close `{close_closed}` | High `{high_closed}`"
+                            f"   • Закрита доба: High `{high_closed}` | Close `{close_closed}`"
                         )
                         if s_str not in bearish_sweeps:
                             bearish_sweeps.append(s_str)
@@ -168,8 +177,8 @@ async def job_daily_sweep_report(session, symbols):
         report += "ℹ️ За минулу добу чітких свіпів за заданими умовами не виявлено."
 
     await send_telegram(report)
-    print("[INFO] Звіт по свіпах з деталями успішно надіслано!", flush=True)
-
+    print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
+    
 # --- 2. КОЖНІ 5 ХВ: ОБ'ЄМ НА 15m (>= 2.0x) + ПЕРЕТИН KDJ НА ЗАКРИТИХ ГОДИННИХ СВІЧКАХ (1h) ---
 async def analyze_signal(session, symbol):
     try:
