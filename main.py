@@ -311,28 +311,56 @@ async def scan_5min_loop(session, symbols):
     print("[INFO] Сканування ринку завершено.", flush=True)
 
 # --- ГОЛОВНИЙ ДЕМОН ---
+# Константа мінімального добового об'єму (в USD)
+MIN_24H_VOLUME_USD = 400_000
+
 async def main_bot_loop():
-    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ (на 2 закритих свічках 1h) + Об'єм кожні 5 хв активна.")
+    await send_telegram("🚀 Торговий бот успішно запущено!\n• Щоденний звіт по закритих свіпах активний\n• Перевірка KDJ + Об'єм (24h Vol >= $400k) кожні 5 хв активна.")
     
     last_daily_report_date = None
 
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
+                # 1. Запитуємо тікери з цінами та 24h об'ємами
+                async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker", timeout=10) as resp:
                     if resp.status != 200:
                         await asyncio.sleep(60)
                         continue
                     res = await resp.json()
 
-                contracts_data = res if isinstance(res, list) else res.get("data", [])
+                tickers_data = res.get("data", []) if isinstance(res, dict) else []
+                
+                # Формуємо множину монет, чий добовий об'єм >= $400,000
+                valid_volume_symbols = set()
+                for t in tickers_data:
+                    if isinstance(t, dict):
+                        sym = t.get("symbol", "")
+                        # Перевіряємо об'єм у USDT (quoteVolume або volume * price)
+                        vol_quote = float(t.get("quoteVolume", 0) or t.get("volume", 0))
+                        if vol_quote >= MIN_24H_VOLUME_USD:
+                            valid_volume_symbols.add(sym)
+
+                # 2. Отримуємо загальний список контракту
+                async with session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts", timeout=10) as resp:
+                    if resp.status != 200:
+                        await asyncio.sleep(60)
+                        continue
+                    res_c = await resp.json()
+
+                contracts_data = res_c if isinstance(res_c, list) else res_c.get("data", [])
                 
                 exclude_patterns = ("NCF", "NCS", "NCC", "-USDC")
+                
+                # 3. Фільтруємо монети: прибираємо сміттєві патерни ТА відсікаємо ті, де 24h volume < $400k
                 symbols = [
                     item["symbol"] for item in contracts_data 
                     if isinstance(item, dict) and "symbol" in item 
                     and not any(p in item["symbol"] for p in exclude_patterns)
+                    and item["symbol"] in valid_volume_symbols
                 ]
+
+                print(f"[INFO] Відфільтровано монет з об'ємом >= $400K: {len(symbols)}", flush=True)
 
                 now_utc = datetime.now(timezone.utc)
                 today_str = now_utc.strftime("%Y-%m-%d")
@@ -348,6 +376,7 @@ async def main_bot_loop():
             print(f"[ERROR] Помилка в основному циклі: {e}\n{traceback.format_exc()}", flush=True)
 
         await asyncio.sleep(300)
+        
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
