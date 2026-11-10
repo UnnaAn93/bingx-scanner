@@ -380,6 +380,17 @@ async def main_bot_loop():
         await asyncio.sleep(300)
         
 
+async def self_ping_loop():
+    while True:
+        await asyncio.sleep(240)
+        url = "http://localhost:10000"
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    pass
+            except Exception as e:
+                print(f"[LOG WARN] Самопінг не вдався: {e}", flush=True)
+
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     asyncio.create_task(self_ping_loop())
