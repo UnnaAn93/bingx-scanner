@@ -253,8 +253,10 @@ async def analyze_signal(session, symbol):
         h_trend_short = False
         
         for h in range(-6, 0):
+            # Перетин знизу вгору (для лонга)
             if k_1h[h-1] <= d_1h[h-1] and k_1h[h] > d_1h[h]:
                 h_trend_long = True
+            # Перетин зверху вниз (для шорта)
             if k_1h[h-1] >= d_1h[h-1] and k_1h[h] < d_1h[h]:
                 h_trend_short = True
 
