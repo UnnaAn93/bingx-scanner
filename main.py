@@ -351,7 +351,8 @@ async def main_bot_loop():
                 await scan_5min_loop(session, symbols)
 
         except Exception as e:
-            print(f"[ERROR] Помилка в основному циклі: {e}", flush=True)
+            import traceback
+            print(f"[ERROR] Помилка в основному циклі: {e}\n{traceback.format_exc()}", flush=True)
 
         await asyncio.sleep(300)
 
