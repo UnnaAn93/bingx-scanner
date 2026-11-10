@@ -421,7 +421,9 @@ async def main_bot_loop():
 async def self_ping_loop():
     while True:
         await asyncio.sleep(240)
-        url = "http://localhost:10000"
+        url = os.getenv("RENDER_URL")
+        if not url:
+            continue
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, timeout=10) as resp:
