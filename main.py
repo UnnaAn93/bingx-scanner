@@ -195,36 +195,33 @@ async def analyze_signal(session, symbol):
         if len(raw_1h) < 30 or len(raw_15m) < 30:
             return None
 
-        # 1. ГОДИННИЙ KDJ (Старший фільтр тренду)
-        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
-        k_1h, d_1h, _ = calculate_kd(candles_1h_closed)
-        if len(k_1h) < 3:
-            return None
-        
-        h_trend_long = (k_1h[-2] <= d_1h[-2] and k_1h[-1] > d_1h[-1]) or (k_1h[-1] > d_1h[-1]) # Перетин або утримання висхідної фази
-        h_trend_short = (k_1h[-2] >= d_1h[-2] and k_1h[-1] < d_1h[-1]) or (k_1h[-1] < d_1h[-1])
-
-        # 2. 15-ХВИЛИННИЙ ТАЙМФРЕЙМ (ТВХ: Об'єм + Перетин / Перепроданість)
+        # --- ШВИДКИЙ ФІЛЬТР: Перевірка об'єму на 15m ПЕРШИМ кроком ---
         candles_15m_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_15m[:-1]]
         
-        # Об'єм (середній за 20 свічок)
         avg_vol_15m = sum(c['volume'] for c in candles_15m_closed[-25:-5]) / 20
         if avg_vol_15m == 0:
             return None
         has_vol_spike = any(c['volume'] >= avg_vol_15m * 2.0 for c in candles_15m_closed[-5:])
         if not has_vol_spike:
-            return None
+            return None  # Відсіюємо миттєво, якщо немає сплеску об'єму!
 
-        # KDJ на 15m (ТВХ)
+        # 1. ГОДИННИЙ KDJ (рахуємо тільки для тих пар, що пройшли фільтр об'єму)
+        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close'])} for c in raw_1h[:-1]]
+        k_1h, d_1h, _ = calculate_kd(candles_1h_closed)
+        if len(k_1h) < 3:
+            return None
+        
+        h_trend_long = (k_1h[-2] <= d_1h[-2] and k_1h[-1] > d_1h[-1]) or (k_1h[-1] > d_1h[-1])
+        h_trend_short = (k_1h[-2] >= d_1h[-2] and k_1h[-1] < d_1h[-1]) or (k_1h[-1] < d_1h[-1])
+
+        # 2. KDJ на 15m (ТВХ)
         k_15m, d_15m, _ = calculate_kd(candles_15m_closed)
         if len(k_15m) < 3:
             return None
 
-        # Локальний перетин на 15m АБО зона перепроданості/перекупленості
-        m15_long_trigger = (k_15m[-2] <= d_15m[-2] and k_15m[-1] > d_15m[-1]) or (k_15m[-1] < 25) # Перетин знизу вгору або глибока перепроданість
-        m15_short_trigger = (k_15m[-2] >= d_15m[-2] and k_15m[-1] < d_15m[-1]) or (k_15m[-1] > 75) # Перетин зверху вниз або перекупленість
+        m15_long_trigger = (k_15m[-2] <= d_15m[-2] and k_15m[-1] > d_15m[-1]) or (k_15m[-1] < 25)
+        m15_short_trigger = (k_15m[-2] >= d_15m[-2] and k_15m[-1] < d_15m[-1]) or (k_15m[-1] > 75)
 
-        # 3. ЗБІЖНІСТЬ (Сигнал спрацьовує тільки при поєднанні 1h тренду + 15m тригера об'єму і ТВХ)
         is_long_signal = h_trend_long and m15_long_trigger
         is_short_signal = h_trend_short and m15_short_trigger
 
@@ -235,7 +232,6 @@ async def analyze_signal(session, symbol):
         if atr_1h == 0:
             return None
 
-        # Запит актуальної ринкової ціни в реальному часі
         ticker_resp = await session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker?symbol={symbol}")
         ticker_data = await ticker_resp.json()
         if ticker_data.get('code') == 0 and 'data' in ticker_data:
@@ -281,13 +277,10 @@ async def analyze_signal(session, symbol):
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
                 
-                
-
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
     return None
-    
-
+            
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку (1h KDJ Crossover + 15m Об'єм)...", flush=True)
     batch_size = 20
