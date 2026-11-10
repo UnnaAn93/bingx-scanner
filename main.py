@@ -189,19 +189,20 @@ async def analyze_signal(session, symbol):
     try:
         async def fetch_data():
             raw_1h = await get_klines(session, symbol, '1h', 200)
-            raw_15m = await get_klines(session, symbol, '15m', 50)
+            raw_15m = await get_klines(session, symbol, '15m', 60)
             return raw_1h, raw_15m
         
         raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=6.0)
         
-        if len(raw_1h) < 30 or len(raw_15m) < 30:
+        if len(raw_1h) < 30 or len(raw_15m) < 40:
             return None
 
-        # --- ШВИДКИЙ ФІЛЬТР: Перевірка об'єму на 15м (за останні 5 свічок >= 2.0x) ---
+        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_1h[:-1]]
+
         # --- 1. ОБ'ЄМ НА 15 хв (за останні 5 свічок >= 2.0x) ---
         candles_15m_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_15m[:-1]]
         
-        if len(candles_15m_closed) < 30:
+        if len(candles_15m_closed) < 35:
             return None
 
         avg_vol_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
@@ -215,17 +216,17 @@ async def analyze_signal(session, symbol):
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
         k_1h, d_1h, _ = calculate_kd(candles_1h_closed)
         
-        if len(k_15m) < 20 or len(k_1h) < 5:
+        if len(k_15m) < 35 or len(k_1h) < 10:
             return None
 
-        # --- 2. ПОТОЧНИЙ (ДРУГИЙ) ПЕРЕТИН НА 15 хв ---
+        # --- 2. ДРУГИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15 хв (дві останні свічки) ---
         m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])
         m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])
 
         if not m15_cross2_up and not m15_cross2_down:
             return None
 
-        # --- 3. ПЕРЕВІРКА ПЕРШОГО ПЕРЕТИНУ НА 15 хв ТА ЕКСТРЕМУМУ J ---
+        # --- 3. ПЕРШИЙ ПЕРЕТИН НА 15 хв (пошук на 30 свічок назад) ТА ЕКСТРЕМУМ J ---
         first_cross_found = False
         extreme_j_found = False
 
@@ -233,23 +234,29 @@ async def analyze_signal(session, symbol):
            (m15_cross2_down and any(val > 90 for val in j_15m[-3:])):
             extreme_j_found = True
 
-        for i in range(-15, -3):
+        for i in range(-30, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
             
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
                 first_cross_found = True
-                if (m15_cross2_up and any(val < 10 for val in j_15m[i-2:i+2])) or \
-                   (m15_cross2_down and any(val > 90 for val in j_15m[i-2:i+2])):
+                if (m15_cross2_up and any(val < 10 for val in j_15m[i-3:i+3])) or \
+                   (m15_cross2_down and any(val > 90 for val in j_15m[i-3:i+3])):
                     extreme_j_found = True
                 break
 
         if not first_cross_found or not extreme_j_found:
             return None
 
-        # --- 4. ПЕРЕТИН НА ГОДИННИКУ (1h) ДЛЯ ПІДТВЕРДЖЕННЯ ---
-        h_trend_long = (k_1h[-2] <= d_1h[-2]) and (k_1h[-1] > d_1h[-1])
-        h_trend_short = (k_1h[-2] >= d_1h[-2]) and (k_1h[-1] < d_1h[-1])
+        # --- 4. ПЕРЕТИН НА ГОДИННИКУ (1h) ДЛЯ ПІДТВЕРДЖЕННЯ (вікно 6 свічок) ---
+        h_trend_long = False
+        h_trend_short = False
+        
+        for h in range(-6, 0):
+            if k_1h[h-1] <= d_1h[h-1] and k_1h[h] > d_1h[h]:
+                h_trend_long = True
+            if k_1h[h-1] >= d_1h[h-1] and k_1h[h] < d_1h[h]:
+                h_trend_short = True
 
         # --- 5. ФІНАЛЬНИЙ СИГНАЛ ---
         is_long_signal = m15_cross2_up and h_trend_long
@@ -257,9 +264,9 @@ async def analyze_signal(session, symbol):
 
         if not is_long_signal and not is_short_signal:
             return None
-        
-        atr_1h = calculate_atr(candles_1h_closed, period=14)
-        if atr_1h == 0:
+
+        atr_th = calculate_atr(candles_1h_closed, period=14)
+        if atr_th == 0:
             return None
 
         ticker_resp = await session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker?symbol={symbol}")
@@ -271,10 +278,10 @@ async def analyze_signal(session, symbol):
 
         if is_long_signal:
             signal_name = "LONG (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price - (atr_1h * 2.0), 8)
-            tp1 = round(current_price + (atr_1h * 3.0), 8)
-            tp2 = round(tp1 + (atr_1h * 2.0), 8)
-            tp3 = round(tp2 + (atr_1h * 2.0), 8)
+            stop_loss = round(current_price - (atr_th * 2.0), 8)
+            tp1 = round(current_price + (atr_th * 3.0), 8)
+            tp2 = round(tp1 + (atr_th * 2.0), 8)
+            tp3 = round(tp2 + (atr_th * 2.0), 8)
 
             risk_per_coin = current_price - stop_loss
             if risk_per_coin > 0:
@@ -290,10 +297,10 @@ async def analyze_signal(session, symbol):
 
         elif is_short_signal:
             signal_name = "SHORT (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price + (atr_1h * 2.0), 8)
-            tp1 = round(current_price - (atr_1h * 3.0), 8)
-            tp2 = round(tp1 - (atr_1h * 2.0), 8)
-            tp3 = round(tp2 - (atr_1h * 2.0), 8)
+            stop_loss = round(current_price + (atr_th * 2.0), 8)
+            tp1 = round(current_price - (atr_th * 3.0), 8)
+            tp2 = round(tp1 - (atr_th * 2.0), 8)
+            tp3 = round(tp2 - (atr_th * 2.0), 8)
 
             risk_per_coin = stop_loss - current_price
             if risk_per_coin > 0:
@@ -306,10 +313,11 @@ async def analyze_signal(session, symbol):
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
-                
+
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
-    return None
+        return None
+        
             
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку (1h KDJ Crossover + 15m Об'єм)...", flush=True)
