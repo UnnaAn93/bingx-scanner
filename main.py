@@ -235,7 +235,13 @@ async def analyze_signal(session, symbol):
         if atr_1h == 0:
             return None
 
-        current_price = float(candles_1h_closed[-1]['close'])
+        # Запит актуальної ринкової ціни в реальному часі
+        ticker_resp = await session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker?symbol={symbol}")
+        ticker_data = await ticker_resp.json()
+        if ticker_data.get('code') == 0 and 'data' in ticker_data:
+            current_price = float(ticker_data['data']['lastPrice'])
+        else:
+            current_price = float(candles_1h_closed[-1]['close'])
 
         if is_long_signal:
             signal_name = "LONG (1h Trend + 15m Vol & KDJ Entry)"
@@ -274,6 +280,7 @@ async def analyze_signal(session, symbol):
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
+                
                 
 
     except Exception as e:
