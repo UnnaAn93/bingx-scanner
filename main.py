@@ -119,16 +119,24 @@ async def job_daily_sweep_report(session, symbols):
     batch_size = 20
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
-        # Явно запитуємо таймфрейм '1d' з достатньою історією
-        tasks = [get_klines(session, sym, '1d', 30) for sym in batch]
+        # Запитуємо лише 5 свічок для максимальної точності та швидкості
+        tasks = [get_klines(session, sym, '1d', 5) for sym in batch]
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for j, klines_1d in enumerate(results):
-                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 5:
+                if isinstance(klines_1d, Exception) or not klines_1d or len(klines_1d) < 3:
                     continue
                 symbol = batch[j]
                 
-                # Беремо останню закриту денну свічку ([-2]) та передостанню ([-3])
+                # Сортуємо свічки за часом (на випадок, якщо біржа віддає їх у розкид)
+                try:
+                    klines_1d = sorted(klines_1d, key=lambda x: int(x.get('time', x.get('openTime', 0))))
+                except:
+                    pass
+                
+                # [-1] — поточна незакрита доба
+                # [-2] — повністю закрита вчорашня доба
+                # [-3] — позавчорашня доба
                 c_prev = klines_1d[-3]  
                 c_closed = klines_1d[-2] 
                 
@@ -136,7 +144,6 @@ async def job_daily_sweep_report(session, symbols):
                     open_prev, high_prev, low_prev, close_prev = float(c_prev['open']), float(c_prev['high']), float(c_prev['low']), float(c_prev['close'])
                     open_closed, high_closed, low_closed, close_closed = float(c_closed['open']), float(c_closed['high']), float(c_closed['low']), float(c_closed['close'])
 
-                    # Суворі умови свіпу для 1D:
                     is_low_sweep = (low_closed < low_prev) and (close_closed > low_prev)
                     is_high_sweep = (high_closed > high_prev) and (close_closed < high_prev)
 
