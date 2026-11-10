@@ -274,6 +274,7 @@ async def analyze_signal(session, symbol):
                     "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
+                
 
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
