@@ -201,7 +201,7 @@ async def analyze_signal(session, symbol):
         candles_1h_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h[:-1]]
         candles_15m_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m[:-1]]
     
-        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м ---
+        # --- 1. СПЛЕСК ОБ'ЄМУ НА ОСТАННІХ 5 СВІЧКАХ ---
         if len(candles_15m_closed) < 35:
             return None, False, "Недостатньо даних"
 
@@ -209,9 +209,10 @@ async def analyze_signal(session, symbol):
         if avg_vel_15m == 0:
             return None, False, "Нульовий об'єм"
 
-        has_vel_spike = any(float(c['volume']) >= avg_vel_15m * 2.0 for c in candles_15m_closed[-1:])
+        # Перевіряємо, чи був сплеск об'єму хоча б на одній із останніх 5 свічок [-5:]
+        has_vel_spike = any(float(c['volume']) >= avg_vel_15m * 2.0 for c in candles_15m_closed[-5:])
         if not has_vel_spike:
-            return None, False, "Немає сплеску об'єму на 15м (>= 2.0x)"
+            return None, False, "Немає сплеску об'єму на останніх 5 свічках (>= 2.0x)"  # <--- СТОП, якщо немає
 
         # --- РОЗРАХУНОК KDJ ---
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
