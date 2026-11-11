@@ -274,7 +274,7 @@ async def analyze_signal(session, symbol):
 
 
         if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу з годинником (перетин або спрямування)
+            return None, True, "Немає збігу з годинником (перетин або спрямування)"
         
 
         atr_th = calculate_atr(candles_1h_closed, period=14)
