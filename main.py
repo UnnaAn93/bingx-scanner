@@ -201,71 +201,37 @@ async def analyze_signal(session, symbol):
         candles_1h_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h[:-1]]
         candles_15m_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m[:-1]]
     
-        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м (>= 2.0x) ---
+        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м ---
         if len(candles_15m_closed) < 35:
             return None, False, "Недостатньо даних"
 
-        avg_vol_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
-        if avg_vol_15m == 0:
+        avg_vel_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
+        if avg_vel_15m == 0:
             return None, False, "Нульовий об'єм"
 
-        has_vol_spike = any(float(c['volume']) >= avg_vol_15m * 2.0 for c in candles_15m_closed[-1:])
-        if not has_vol_spike:
+        has_vel_spike = any(float(c['volume']) >= avg_vel_15m * 2.0 for c in candles_15m_closed[-1:])
+        if not has_vel_spike:
             return None, False, "Немає сплеску об'єму на 15м (>= 2.0x)"
 
-        # --- 2. РОЗРАХУНОК KDJ ДЛЯ ОБОХ ТАЙМФРЕЙМІВ ---
+        # --- РОЗРАХУНОК KDJ ---
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
         k_1h, d_1h, j_1h = calculate_kd(candles_1h_closed)
 
         if len(k_15m) < 35 or len(k_1h) < 10:
             return None, True, "Недостатньо даних для KDJ"
 
-        # --- 3. ПОТОЧНИЙ (ДРУГИЙ) ПЕРЕТИН НА 15м (останні свічки [-2] та [-1]) ---
-        m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])
-        m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])
+        # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
+        m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])     # Лонг
+        m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])   # Шорт
 
         if not m15_cross2_up and not m15_cross2_down:
-            return None, True, "Немає поточного перетину на 15м"
+            return None, True, "Немає основного поточного перетину на 15м"
 
-        # --- 4. ДВА ПЕРЕТИНИ ТА ЕКСТРЕМУМ J НА 15м (в межах 30 свічок) ---
-        first_cross_found = False
-        extreme_j_found = False
+        # --- 3. ПІДТВЕРДЖЕННЯ НА 1 ГОДИНІ (1h) ---
+        h_trend_long = (k_1h[-1] > d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) >= (d_1h[-1] - d_1h[-2]))
+        h_trend_short = (k_1h[-1] < d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) <= (d_1h[-1] - d_1h[-2]))
 
-        # Перевіряємо, чи був екстремум J в історії перед перетинами (на глибині 30 свічок)
-        if m15_cross2_up:
-            extreme_j_found = any(val < 10 for val in j_15m[-30:-1])
-        elif m15_cross2_down:
-            extreme_j_found = any(val > 90 for val in j_15m[-30:-1])
-
-        # Шукаємо перший (попередній) перетин у діапазоні від -30 до -3 свічки
-        for i in range(-30, -3):
-            is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
-            is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
-
-            if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
-                first_cross_found = True
-                break
-
-        if not first_cross_found or not extreme_j_found:
-            return None, True, "Немає першого перетину або екстремуму J"
-
-        # --- 5. ТРЕНД НА ГОДИННИКУ (1h): ПЕРЕТИН АБО НАХОДЖЕННЯ/СПРЯМУВАННЯ ---
-        h_trend_long = False
-        h_trend_short = False
-
-        # Перевіряємо поточний нахил та взаємне розташування на закритій годинній свічці [-1] та [-2]
-        # Лонг: якщо K вище D, АБО лінії спрямовані вгору (K росте швидше за D або обидві ростуть)
-        if k_1h[-1] > d_1h[-1] or (k_1h[-1] - k_1h[-2]) > (d_1h[-1] - d_1h[-2]):
-            # Додатково перевіряємо, щоб нахил не був різко протилежним, або дозволяємо за нахилом
-            if (k_1h[-1] - k_1h[-2]) >= -0.5: # щоб не ловити стрімке падіння
-                h_trend_long = True
-
-        # Шорт: якщо K нижче D, АБО лінії спрямовані вниз (K падає швидше за D або обидві падають)
-        if k_1h[-1] < d_1h[-1] or (k_1h[-1] - k_1h[-2]) < (d_1h[-1] - d_1h[-2]):
-            if (k_1h[-1] - k_1h[-2]) <= 0.5: # щоб не ловити стрімкий ріст
-                h_trend_short = True
-
-        # Також перевіряємо свіжий перетин за останні кілька годинних свічок
+        # Перевірка свіжого перетину на годиннику за останні свічки
         for h in range(-2, -8, -1):
             try:
                 if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
@@ -275,9 +241,37 @@ async def analyze_signal(session, symbol):
             except IndexError:
                 continue
 
-        # --- 6. ФІНАЛЬНИЙ СИГНАЛ ---
-        is_long_signal = m15_cross2_up and first_cross_found and extreme_j_found and h_trend_long
-        is_short_signal = m15_cross2_down and first_cross_found and extreme_j_found and h_trend_short
+        if m15_cross2_up and not h_trend_long:
+            return None, True, "Немає підтвердження на 1 годині для Лонг"
+        if m15_cross2_down and not h_trend_short:
+            return None, True, "Немає підтвердження на 1 годині для Шорт"
+
+        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м В ТОМУ Ж НАПРЯМКУ ---
+        first_cross_found = False
+        for i in range(-30, -3):
+            is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
+            is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
+
+            if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
+                first_cross_found = True
+                break
+
+        if not first_cross_found:
+            return None, True, "Немає попереднього перетину на 15м в тому ж напрямку"
+
+        # --- 5. ПЕРЕПРОДАДНІСТЬ / ПЕРЕКУПЛЕНІСТЬ (<10 або >90) ХОЧА Б ПЕРЕД ОДНИМ ПЕРЕТИНОМ ---
+        extreme_j_found = False
+        if m15_cross2_up:
+            extreme_j_found = any(val < 10 for val in j_15m[-30:])
+        elif m15_cross2_down:
+            extreme_j_found = any(val > 90 for val in j_15m[-30:])
+
+        if not extreme_j_found:
+            return None, True, "Немає екстремуму J (<10 або >90) перед перетинами"
+
+        is_long_signal = m15_cross2_up
+        is_short_signal = m15_cross2_down
+
 
         if not is_long_signal and not is_short_signal:
             return None, True, "Немає збігу з годинником (перетин або спрямування)
