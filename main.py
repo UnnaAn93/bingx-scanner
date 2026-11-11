@@ -281,7 +281,7 @@ async def analyze_signal(session, symbol):
         if is_long_signal:
             signal_name = "LONG (1h Trend + 15m Vol & KDJ Entry)"
             stop_loss = round(current_price - (atr_th * 2.0), 8)
-            tp1 = round(current_price + (atr_th * 3.0), 8)
+            tp1 = round(current_price + (atr_th * 2.5), 8)
             tp2 = round(tp1 + (atr_th * 2.0), 8)
             tp3 = round(tp2 + (atr_th * 2.0), 8)
 
@@ -300,7 +300,7 @@ async def analyze_signal(session, symbol):
         elif is_short_signal:
             signal_name = "SHORT (1h Trend + 15m Vol & KDJ Entry)"
             stop_loss = round(current_price + (atr_th * 2.0), 8)
-            tp1 = round(current_price - (atr_th * 3.0), 8)
+            tp1 = round(current_price - (atr_th * 2.5), 8)
             tp2 = round(tp1 - (atr_th * 2.0), 8)
             tp3 = round(tp2 - (atr_th * 2.0), 8)
 
