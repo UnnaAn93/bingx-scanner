@@ -198,7 +198,9 @@ async def analyze_signal(session, symbol):
             return None
 
         candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_1h[:-1]]
-
+        candles_1h_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h[:-1]]
+        candles_15m_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m[:-1]]
+    
         # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м (>= 2.0x) ---
         if len(candles_15m_closed) < 35:
             return None, False, "Недостатньо даних"
