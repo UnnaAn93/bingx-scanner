@@ -249,17 +249,23 @@ async def analyze_signal(session, symbol):
         if not first_cross_found or not extreme_j_found:
             return None, True, "Немає першого перетину або екстремуму J"
 
-        # --- 5. ТРЕНД НА ГОДИННИКУ (1h) (СУВОРЕ ПІДТВЕРДЖЕННЯ) ---
+        # --- 5. ТРЕНД НА ГОДИННИКУ (1h): ПЕРЕТИН АБО НАХОДЖЕННЯ/СПРЯМУВАННЯ ---
         h_trend_long = False
         h_trend_short = False
 
-        # Суворо дивимося на закриту годинну свічку [-1]:
-        if k_1h[-1] > d_1h[-1]:
-            h_trend_long = True
-        elif k_1h[-1] < d_1h[-1]:
-            h_trend_short = True
+        # Перевіряємо поточний нахил та взаємне розташування на закритій годинній свічці [-1] та [-2]
+        # Лонг: якщо K вище D, АБО лінії спрямовані вгору (K росте швидше за D або обидві ростуть)
+        if k_1h[-1] > d_1h[-1] or (k_1h[-1] - k_1h[-2]) > (d_1h[-1] - d_1h[-2]):
+            # Додатково перевіряємо, щоб нахил не був різко протилежним, або дозволяємо за нахилом
+            if (k_1h[-1] - k_1h[-2]) >= -0.5: # щоб не ловити стрімке падіння
+                h_trend_long = True
 
-        # Або якщо за останні 6 закритих свічок був свіжий перетин на годиннику:
+        # Шорт: якщо K нижче D, АБО лінії спрямовані вниз (K падає швидше за D або обидві падають)
+        if k_1h[-1] < d_1h[-1] or (k_1h[-1] - k_1h[-2]) < (d_1h[-1] - d_1h[-2]):
+            if (k_1h[-1] - k_1h[-2]) <= 0.5: # щоб не ловити стрімкий ріст
+                h_trend_short = True
+
+        # Також перевіряємо свіжий перетин за останні кілька годинних свічок
         for h in range(-2, -8, -1):
             try:
                 if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
@@ -270,11 +276,11 @@ async def analyze_signal(session, symbol):
                 continue
 
         # --- 6. ФІНАЛЬНИЙ СИГНАЛ ---
-        is_long_signal = m15_cross2_up and h_trend_long
-        is_short_signal = m15_cross2_down and h_trend_short
+        is_long_signal = m15_cross2_up and first_cross_found and extreme_j_found and h_trend_long
+        is_short_signal = m15_cross2_down and first_cross_found and extreme_j_found and h_trend_short
 
         if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу напряму з годинником (1h)"
+            return None, True, "Немає збігу з годинником (перетин або спрямування)
         
 
         atr_th = calculate_atr(candles_1h_closed, period=14)
