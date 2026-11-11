@@ -224,32 +224,48 @@ async def analyze_signal(session, symbol):
         m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])
         m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])
 
-        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м ТА ПОШУК ЕКСТРЕМУМУ J НА ГЛИБИНІ 30 СВІЧОК ---
-        first_cross_found = False
-        extreme_j_found = False
-
-        # Перевіряємо, чи був екстремум J у зонах перепроданості/перекупленості на всій глибині пошуку (30 свічок)
-        # Наприклад, шукаємо J < 10 (для лонгу) або J > 90 (для шорту) в діапазоні
-        if m15_cross2_up:
-            if any(val < 10 for val in j_15m[-30:]):
-                extreme_j_found = True
-        elif m15_cross2_down:
-            if any(val > 90 for val in j_15m[-30:]):
-                extreme_j_found = True
-        else:
+        if not m15_cross2_up and not m15_cross2_down:
             return None, True, "Немає поточного перетину на 15м"
 
-        # Шукаємо попередній перетин у межах 30 свічок
+        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м (в межах 30 свічок) ТА ЕКСТРЕМУМ J ---
+        first_cross_found = False
+        extreme_j_on_cross = False
+
+        # Перевіряємо поточний перетин на екстремум J
+        if (m15_cross2_up and j_15m[-1] < 10) or (m15_cross2_down and j_15m[-1] > 90):
+            extreme_j_on_cross = True
+
+        # Шукаємо перший (попередній) перетин у діапазоні від -30 до -3 свічки
         for i in range(-30, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
 
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
                 first_cross_found = True
+                # Якщо на моменті історичного перетину J був в екстремумі
+                if (m15_cross2_up and j_15m[i] < 10) or (m15_cross2_down and j_15m[i] > 90):
+                    extreme_j_on_cross = True
                 break
 
-        if not first_cross_found or not extreme_j_found:
-            return None, True, "Немає першого перетину або екстремуму J в історії"
+        if not first_cross_found or not extreme_j_on_cross:
+            return None, True, "Немає першого перетину або екстремуму J"
+
+        # --- 5. ГОДИННИК (1h): ПІДТВЕРДЖЕННЯ НАПРЯМКУ ---
+        h_trend_long = (k_1h[-1] > d_1h[-1]) and (k_1h[-2] >= d_1h[-2])
+        h_trend_short = (k_1h[-1] < d_1h[-1]) and (k_1h[-2] <= d_1h[-2])
+
+        for h in range(-1, -13, -1):
+            if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
+                h_trend_long = True
+            if (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h]):
+                h_trend_short = True
+
+        # --- 6. ФІНАЛЬНИЙ ВИХІДНИЙ СИГНАЛ ---
+        is_long_signal = m15_cross2_up and h_trend_long
+        is_short_signal = m15_cross2_down and h_trend_short
+
+        if not is_long_signal and not is_short_signal:
+            return None, True, "Немає збігу з годинником (1h)"
             
         # --- 5. ТРЕНД НА ГОДИННИКУ (1h) ---
         h_trend_long = False
