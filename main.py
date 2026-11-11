@@ -249,23 +249,23 @@ async def analyze_signal(session, symbol):
         if not first_cross_found or not extreme_j_found:
             return None, True, "Немає першого перетину або екстремуму J"
 
-        # --- 5. ТРЕНД НА ГОДИННИКУ (1h) [БЕЗ ДУБЛІВ] ---
+        # --- 5. ТРЕНД НА ГОДИННИКУ (1h) (СУВОРЕ ПІДТВЕРДЖЕННЯ) ---
         h_trend_long = False
         h_trend_short = False
 
-        # Дивимося виключно на закриті годинні свічки (вікно 6 свічок, ігноруючи поточну open [-1])
+        # Суворо дивимося на закриту годинну свічку [-1]:
+        if k_1h[-1] > d_1h[-1]:
+            h_trend_long = True
+        elif k_1h[-1] < d_1h[-1]:
+            h_trend_short = True
+
+        # Або якщо за останні 6 закритих свічок був свіжий перетин на годиннику:
         for h in range(-2, -8, -1):
             try:
-                is_cross_down = (k_1h[h-1] > d_1h[h-1]) and (k_1h[h] < d_1h[h])
-                is_state_down = (k_1h[h] < d_1h[h]) and (k_1h[h-1] < d_1h[h-1])
-            
-                is_cross_up = (k_1h[h-1] < d_1h[h-1]) and (k_1h[h] > d_1h[h])
-                is_state_up = (k_1h[h] > d_1h[h]) and (k_1h[h-1] > d_1h[h-1])
-
-                if is_cross_down or is_state_down:
-                    h_trend_short = True
-                if is_cross_up or is_state_up:
+                if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
                     h_trend_long = True
+                if (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h]):
+                    h_trend_short = True
             except IndexError:
                 continue
 
