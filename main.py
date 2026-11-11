@@ -249,53 +249,33 @@ async def analyze_signal(session, symbol):
         if not first_cross_found or not extreme_j_found:
             return None, True, "Немає першого перетину або екстремуму J"
 
-        # --- 5. ГОДИННИК (1h): ПІДТВЕРДЖЕННЯ НАПРЯМКУ ---
-        h_trend_long = (k_1h[-1] > d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) > (d_1h[-1] - d_1h[-2]))
-        h_trend_short = (k_1h[-1] < d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) < (d_1h[-1] - d_1h[-2]))
+        # --- 5. ТРЕНД НА ГОДИННИКУ (1h) [БЕЗ ДУБЛІВ] ---
+        h_trend_long = False
+        h_trend_short = False
+
+        # Дивимося виключно на закриті годинні свічки (вікно 6 свічок, ігноруючи поточну open [-1])
+        for h in range(-2, -8, -1):
+            try:
+                is_cross_down = (k_1h[h-1] > d_1h[h-1]) and (k_1h[h] < d_1h[h])
+                is_state_down = (k_1h[h] < d_1h[h]) and (k_1h[h-1] < d_1h[h-1])
+            
+                is_cross_up = (k_1h[h-1] < d_1h[h-1]) and (k_1h[h] > d_1h[h])
+                is_state_up = (k_1h[h] > d_1h[h]) and (k_1h[h-1] > d_1h[h-1])
+
+                if is_cross_down or is_state_down:
+                    h_trend_short = True
+                if is_cross_up or is_state_up:
+                    h_trend_long = True
+            except IndexError:
+                continue
 
         # --- 6. ФІНАЛЬНИЙ СИГНАЛ ---
         is_long_signal = m15_cross2_up and h_trend_long
         is_short_signal = m15_cross2_down and h_trend_short
 
         if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу з годинником (1h)"
-            
-
-        # --- 6. ФІНАЛЬНИЙ ВИХІДНИЙ СИГНАЛ ---
-        is_long_signal = m15_cross2_up and h_trend_long
-        is_short_signal = m15_cross2_down and h_trend_short
-
-        if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу з годинником (1h)"
-            
-        # --- 5. ТРЕНД НА ГОДИННИКУ (1h) ---
-        h_trend_long = False
-        h_trend_short = False
-
-        for h in range(-1, -13, -1):
-            # Шукаємо перетин у ширшому діапазоні (12 свічок) 
-            # АБО перевіряємо загальний стан, коли K впевнено вище/нижче D
-            is_cross_up = (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h])
-            is_cross_down = (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h])
-            
-            # Додатково враховуємо поточний стан тренду на годиннику
-            is_state_up = (k_1h[-1] > d_1h[-1]) and (k_1h[-2] >= d_1h[-2])
-            is_state_down = (k_1h[-1] < d_1h[-1]) and (k_1h[-2] <= d_1h[-2])
-
-            if is_cross_up or is_state_up:
-                h_trend_long = True
-                break
-            if is_cross_down or is_state_down:
-                h_trend_short = True
-                break
-                
-        # --- 6. ФІНАЛЬНИЙ СИГНАЛ (СИНХРОНІЗАЦІЯ 15м ТА 1h) ---
-        is_long_signal = m15_cross2_up and h_trend_long
-        is_short_signal = m15_cross2_down and h_trend_short
-
-        if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу напрямку з годинником (1h)"
-            
+            return None, True, "Немає збігу напряму з годинником (1h)"
+        
 
         atr_th = calculate_atr(candles_1h_closed, period=14)
         if atr_th == 0:
