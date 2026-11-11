@@ -199,78 +199,70 @@ async def analyze_signal(session, symbol):
 
         candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_1h[:-1]]
 
-        # --- 1. ОБ'ЄМ НА 15 хв (за останні 5 свічок >= 2.0x) ---
-        candles_15m_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'volume': float(c['volume'])} for c in raw_15m[:-1]]
-        
+        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м (>= 2.0x) ---
         if len(candles_15m_closed) < 35:
-            return None
+            return None, False, "Недостатньо даних"
 
         avg_vol_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
         if avg_vol_15m == 0:
-            return None
-            
-        has_vol_spike = any(float(c['volume']) >= avg_vol_15m * 2.0 for c in candles_15m_closed[-5:])
+            return None, False, "Нульовий об'єм"
+
+        has_vol_spike = any(float(c['volume']) >= avg_vol_15m * 2.0 for c in candles_15m_closed[-1:])
         if not has_vol_spike:
-            return None
+            return None, False, "Немає сплеску об'єму на 15м (>= 2.0x)"
 
+        # --- 2. РОЗРАХУНОК KDJ ДЛЯ ОБОХ ТАЙМФРЕЙМІВ ---
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
-        k_1h, d_1h, _ = calculate_kd(candles_1h_closed)
-        
-        if len(k_15m) < 35 or len(k_1h) < 10:
-            return None
+        k_1h, d_1h, j_1h = calculate_kd(candles_1h_closed)
 
-        # --- 2. ДРУГИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15 хв (дві останні свічки) ---
+        if len(k_15m) < 35 or len(k_1h) < 10:
+            return None, True, "Недостатньо даних для KDJ"
+
+        # --- 3. ПОТОЧНИЙ (ДРУГИЙ) ПЕРЕТИН НА 15м (останні свічки [-2] та [-1]) ---
         m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1])
         m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1])
 
         if not m15_cross2_up and not m15_cross2_down:
-            return None
+            return None, True, "Немає поточного перетину на 15м"
 
-        # --- 3. ПЕРШИЙ ПЕРЕТИН НА 15 хв (пошук на 30 свічок назад) ТА ЕКСТРЕМУМ J ---
+        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м ТА ЕКСТРЕМУМ J ---
         first_cross_found = False
         extreme_j_found = False
 
-        if (m15_cross2_up and any(val < 10 for val in j_15m[-3:])) or \
-           (m15_cross2_down and any(val > 90 for val in j_15m[-3:])):
+        if (m15_cross2_up and any(val < 10 for val in j_15m[-7:])) or \
+           (m15_cross2_down and any(val > 90 for val in j_15m[-7:])):
             extreme_j_found = True
 
         for i in range(-30, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
-            
+
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
                 first_cross_found = True
-                if (m15_cross2_up and any(val < 10 for val in j_15m[i-3:i+3])) or \
-                   (m15_cross2_down and any(val > 90 for val in j_15m[i-3:i+3])):
-                    extreme_j_found = True
                 break
 
         if not first_cross_found or not extreme_j_found:
-            return None
-            
-        # --- 4. ПЕРЕТИН НА ГОДИННИКУ (1h) ДЛЯ ПІДТВЕРДЖЕННЯ ---
+            return None, True, "Немає першого перетину або екстремуму J на 15м"
+
+        # --- 5. ПЕРЕТИН НА ГОДИННИКУ (1h) ДЛЯ ПІДТВЕРДЖЕННЯ ---
         h_trend_long = False
         h_trend_short = False
 
-        # Шукаємо найсвіжіший перетин, йдучи від останніх свічок у минуле
-        if len(k_1h) >= 7:
-            for h in range(-1, -7, -1):
-                # Перетин знизу вгору (бичачий)
-                if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
-                    h_trend_long = True
-                    break  # Знайшли найсвіжіший, зупиняємось!
-                
-                # Перетин зверху вниз (ведмежий)
-                if (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h]):
-                    h_trend_short = True
-                    break  # Знайшли найсвіжіший, зупиняємось!
+        for h in range(-1, -7, -1):
+            if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
+                h_trend_long = True
+                break
+            if (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h]):
+                h_trend_short = True
+                break
 
-        # --- 5. ФІНАЛЬНИЙ СИГНАЛ ---
+        # --- 6. ФІНАЛЬНИЙ СИГНАЛ (СИНХРОНІЗАЦІЯ 15м ТА 1h) ---
         is_long_signal = m15_cross2_up and h_trend_long
         is_short_signal = m15_cross2_down and h_trend_short
 
         if not is_long_signal and not is_short_signal:
-            return None
+            return None, True, "Немає збігу напрямку з годинником (1h)"
+            
 
         atr_th = calculate_atr(candles_1h_closed, period=14)
         if atr_th == 0:
