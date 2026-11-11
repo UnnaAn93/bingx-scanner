@@ -227,24 +227,29 @@ async def analyze_signal(session, symbol):
         if not m15_cross2_up and not m15_cross2_down:
             return None, True, "Немає поточного перетину на 15м"
 
-        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м ТА ЕКСТРЕМУМ J ---
+        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м ТА ЕКСТРЕМУМ J НА ГЛИБИНІ 30 СВІЧОК ---
         first_cross_found = False
-        extreme_j_found = False
+        extreme_j_on_cross = False
 
-        if (m15_cross2_up and any(val < 10 for val in j_15m[-7:])) or \
-           (m15_cross2_down and any(val > 90 for val in j_15m[-7:])):
-            extreme_j_found = True
+        # Перевіряємо поточний перетин на екстремум J
+        if (m15_cross2_up and j_15m[-1] < 10) or (m15_cross2_down and j_15m[-1] > 90):
+            extreme_j_on_cross = True
 
+        # Шукаємо попередній перетин у межах 30 свічок і дивимось екстремум на ньому
         for i in range(-30, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
 
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
                 first_cross_found = True
+                # Якщо на моменті цього історичного перетину J був в екстремумі
+                if (m15_cross2_up and j_15m[i] < 10) or (m15_cross2_down and j_15m[i] > 90):
+                    extreme_j_on_cross = True
                 break
 
-        if not first_cross_found or not extreme_j_found:
-            return None, True, "Немає першого перетину або екстремуму J на 15м"
+        if not first_cross_found or not extreme_j_on_cross:
+            return None, True, "Немає першого перетину або екстремуму J у точці перетину"
+            
 
         # --- 5. ПЕРЕТИН НА ГОДИННИКУ (1h) ДЛЯ ПІДТВЕРДЖЕННЯ ---
         h_trend_long = False
