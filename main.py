@@ -247,9 +247,13 @@ async def analyze_signal(session, symbol):
         if len(k_15m) < 35 or len(k_1h) < 10:
             return None
 
-        # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
-        m15_cross2_up = (k_15m[-3] <= d_15m[-3]) and (k_15m[-2] > d_15m[-2])
-        m15_cross2_down = (k_15m[-3] >= d_15m[-3]) and (k_15m[-2] < d_15m[-2])
+        # --- ПЕРЕВІРКА ПЕРЕТИНУ KDJ (Чиста математика) ---
+        # Перевіряємо закриті свічки [-3] та [-2] з мінімальним порогом розходження, щоб уникнути шуму у флеті
+        epsilon = 0.05  # Мінімальна різниця для підтвердження перетину
+
+        m15_cross2_up = (k_15m[-3] - d_15m[-3] <= epsilon) and (k_15m[-2] - d_15m[-2] > epsilon)
+        m15_cross2_down = (k_15m[-3] - d_15m[-3] >= -epsilon) and (k_15m[-2] - d_15m[-2] < -epsilon)
+
 
         if not m15_cross2_up and not m15_cross2_down:
             return None
