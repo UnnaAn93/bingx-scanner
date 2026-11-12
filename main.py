@@ -66,51 +66,57 @@ def calculate_atr(candles, period=14):
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         tr_list.append(tr)
     return sum(tr_list[-period:]) / period
-
+    
 def calculate_kd(candles, n=9, m1=3, m2=3):
     try:
-        if not candles or len(candles) < n: 
-            return [50.0], [50.0], [50.0]
-        
-        closes = [float(x['close']) for x in candles]
-        lows = [float(x['low']) for x in candles]
-        highs = [float(x['high']) for x in candles]
-        
+        if len(candles) < n:
+            return [], [], []
+
+        highs = [float(c["high"]) for c in candles]
+        lows = [float(c["low"]) for c in candles]
+        closes = [float(c["close"]) for c in candles]
+
         rsv_list = []
-        for i in range(len(candles)):
-            if i < n - 1:
-                continue
-            sub_lows = lows[i - n + 1 : i + 1]
-            sub_highs = highs[i - n + 1 : i + 1]
-            l_val = min(sub_lows)
-            h_val = max(sub_highs)
-            c_val = closes[i]
-            
-            if h_val - l_val == 0:
+
+        for i in range(n - 1, len(candles)):
+            highest = max(highs[i - n + 1:i + 1])
+            lowest = min(lows[i - n + 1:i + 1])
+
+            if highest == lowest:
                 rsv = 50.0
             else:
-                rsv = (c_val - l_val) / (h_val - l_val) * 100.0
-            rsv_list.append(rsv)
-            
-        if not rsv_list:
-            return [50.0], [50.0], [50.0]
+                rsv = (
+                    (closes[i] - lowest)
+                    / (highest - lowest)
+                    * 100.0
+                )
 
-        k_list, d_list, j_list = [], [], []
-        k = rsv_list[0]
-        d = rsv_list[0]
-        
+            rsv_list.append(rsv)
+
+        if not rsv_list:
+            return [], [], []
+
+        k_list = []
+        d_list = []
+        j_list = []
+
+        k = 50.0
+        d = 50.0
+
         for rsv in rsv_list:
             k = (2.0 / 3.0) * k + (1.0 / 3.0) * rsv
             d = (2.0 / 3.0) * d + (1.0 / 3.0) * k
             j = 3.0 * k - 2.0 * d
+
             k_list.append(k)
             d_list.append(d)
             j_list.append(j)
-            
+
         return k_list, d_list, j_list
-    except Exception:
-        return [50.0], [50.0], [50.0]
-        
+
+    except Exception as e:
+        print(f"[KDJ ERROR] {e}", flush=True)
+        return [], [], []
 
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) З ДАНИМИ СВІЧОК ---
 # --- 1. СУВОРИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
@@ -187,169 +193,473 @@ async def job_daily_sweep_report(session, symbols):
 signal_cooldowns = {}
 COOLDOWN_PERIOD = 3600  # 1 година
 
+def candle_timestamp_ms(candle):
+    ts = candle.get("time", candle.get("openTime"))
+
+    if ts is None:
+        return 0
+
+    ts = int(ts)
+
+    # Якщо час прийшов у секундах, переводимо в мілісекунди
+    if ts < 10_000_000_000:
+        ts *= 1000
+
+    return ts
+
+
+def get_closed_candles(raw_candles, interval_ms):
+    now_ms = int(time.time() * 1000)
+
+    ordered = sorted(
+        raw_candles,
+        key=candle_timestamp_ms
+    )
+
+    closed = []
+
+    for candle in ordered:
+        open_time = candle_timestamp_ms(candle)
+
+        if open_time <= 0:
+            continue
+
+        # Свічка закрита, якщо минув увесь її інтервал
+        if open_time + interval_ms <= now_ms:
+            closed.append(candle)
+
+    return closed
+
 async def analyze_signal(session, symbol):
     try:
-        # --- 0. КОУЛДАУН ---
+        # =====================================================
+        # 0. COOLDOWN
+        # =====================================================
         now = time.time()
-        if symbol in signal_cooldowns and now - signal_cooldowns[symbol] < COOLDOWN_PERIOD:
+
+        if (
+            symbol in signal_cooldowns
+            and now - signal_cooldowns[symbol] < COOLDOWN_PERIOD
+        ):
             return None
 
+        # =====================================================
+        # 1. ЗАВАНТАЖЕННЯ СВІЧОК
+        # =====================================================
         async def fetch_data():
-            raw_1h = await get_klines(session, symbol, '1h', 200)
-            raw_15m = await get_klines(session, symbol, '15m', 60)
+            raw_1h = await get_klines(
+                session, symbol, "1h", 200
+            )
+
+            raw_15m = await get_klines(
+                session, symbol, "15m", 60
+            )
+
             return raw_1h, raw_15m
 
-        raw_1h, raw_15m = await asyncio.wait_for(fetch_data(), timeout=6.0)
+        raw_1h, raw_15m = await asyncio.wait_for(
+            fetch_data(),
+            timeout=6.0
+        )
+
+        if not raw_1h or not raw_15m:
+            return None
+
+        # Сортуємо та залишаємо тільки закриті свічки
+        raw_1h = get_closed_candles(
+            raw_1h,
+            60 * 60 * 1000
+        )
+
+        raw_15m = get_closed_candles(
+            raw_15m,
+            15 * 60 * 1000
+        )
 
         if len(raw_1h) < 30 or len(raw_15m) < 40:
             return None
 
-        candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'open': float(c['open']), 'time': c['time']} for c in raw_1h]
-        
-        candles_15m_closed = []
-        for c in raw_15m:
-            vol = c.get('volume') or c.get('Volume') or c.get('vol') or 0.0
-            candles_15m_closed.append({
-                'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 
-                'open': float(c['open']), 'time': c['time'], 'volume': float(vol)
+        # =====================================================
+        # 2. ПІДГОТОВКА ДАНИХ
+        # =====================================================
+        candles_1h = []
+        candles_15m = []
+
+        for c in raw_1h:
+            candles_1h.append({
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "time": candle_timestamp_ms(c)
             })
 
-        if len(candles_15m_closed) < 33:
+        for c in raw_15m:
+            volume = (
+                c.get("volume")
+                or c.get("Volume")
+                or c.get("vol")
+                or 0
+            )
+
+            candles_15m.append({
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "volume": float(volume),
+                "time": candle_timestamp_ms(c)
+            })
+
+        # =====================================================
+        # 3. СПЛЕСК ОБ'ЄМУ 15m — ПЕРША ПЕРЕВІРКА
+        # =====================================================
+        # Базовий об'єм: свічки від -25 до -5
+        base_volumes = [
+            c["volume"]
+            for c in candles_15m[-25:-5]
+        ]
+
+        # Останні 5 повністю закритих свічок
+        recent_volumes = [
+            c["volume"]
+            for c in candles_15m[-5:]
+        ]
+
+        if not base_volumes or not recent_volumes:
             return None
 
-        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м ---
-        base_volumes = [c['volume'] for c in candles_15m_closed[-25:-5]]
-        if not base_volumes or sum(base_volumes) == 0:
-            return None
-            
-        avg_vol_15m = sum(base_volumes) / len(base_volumes)
-        max_base_v = max(base_volumes)
-        min_base_v = min(base_volumes) if min(base_volumes) > 0 else 1e-9
+        avg_volume = sum(base_volumes) / len(base_volumes)
 
-        if max_base_v < min_base_v * 2.5:
+        if avg_volume <= 0:
             return None
 
-        has_vol_spike = any(c['volume'] >= avg_vol_15m * 2.5 for c in candles_15m_closed[-5:])
-        if not has_vol_spike:
+        # Хоча б одна з останніх 5 свічок має бути
+        # з об'ємом >= 2.5 середнього базового об'єму
+        has_volume_spike = any(
+            volume >= avg_volume * 2.5
+            for volume in recent_volumes
+        )
+
+        # Якщо сплеску немає — одразу STOP
+        if not has_volume_spike:
             return None
 
-        # --- РОЗРАХУНОК KDJ ---
-        k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
-        k_1h, d_1h, j_1h = calculate_kd(candles_1h_closed)
+        # =====================================================
+        # 4. РОЗРАХУНОК KDJ
+        # =====================================================
+        k_15m, d_15m, j_15m = calculate_kd(candles_15m)
+        k_1h, d_1h, j_1h = calculate_kd(candles_1h)
 
-        if len(k_15m) < 35 or len(k_1h) < 10:
+        if (
+            len(k_15m) < 35
+            or len(d_15m) != len(k_15m)
+            or len(j_15m) != len(k_15m)
+        ):
             return None
 
-        # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
-        m15_cross2_up = (k_15m[-3] <= d_15m[-3]) and (k_15m[-2] > d_15m[-2])
-        m15_cross2_down = (k_15m[-3] >= d_15m[-3]) and (k_15m[-2] < d_15m[-2])
-
-        if not m15_cross2_up and not m15_cross2_down:
+        if (
+            len(k_1h) < 10
+            or len(d_1h) != len(k_1h)
+        ):
             return None
 
-        # --- 3. ПІДТВЕРДЖЕННЯ НА 1 ГОДИНИ (1h) ---
-        h_trend_long = (k_1h[-1] > d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) >= (d_1h[-1] - d_1h[-2]))
-        h_trend_short = (k_1h[-1] < d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) <= (d_1h[-1] - d_1h[-2]))
+        # =====================================================
+        # 5. ПОТОЧНИЙ ПЕРЕТИН KDJ НА 15m
+        # =====================================================
+        # Усі свічки вже закриті.
+        # Остання закрита свічка — [-1].
+        current_idx = len(k_15m) - 1
+        previous_idx = current_idx - 1
 
-        for h in range(-2, -8, -1):
-            try:
-                if (k_1h[h-1] <= d_1h[h-1]) and (k_1h[h] > d_1h[h]):
-                    h_trend_long = True
-                if (k_1h[h-1] >= d_1h[h-1]) and (k_1h[h] < d_1h[h]):
-                    h_trend_short = True
-            except IndexError:
-                continue
+        cross_up = (
+            k_15m[previous_idx] <= d_15m[previous_idx]
+            and k_15m[current_idx] > d_15m[current_idx]
+        )
 
-        if m15_cross2_up and not h_trend_long:
+        cross_down = (
+            k_15m[previous_idx] >= d_15m[previous_idx]
+            and k_15m[current_idx] < d_15m[current_idx]
+        )
+
+        # Якщо поточного перетину немає — STOP
+        if not cross_up and not cross_down:
             return None
-        if m15_cross2_down and not h_trend_short:
-            return None
 
-        # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м В ТОМУ Ж НАПРЯМКУ ---
-        first_cross_found = False
-        for i in range(-30, -3):
-            is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
-            is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
-            if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
-                first_cross_found = True
+        is_long_signal = cross_up
+        is_short_signal = cross_down
+
+        # =====================================================
+        # 6. ПІДТВЕРДЖЕННЯ НА 1h
+        # =====================================================
+        h_last = len(k_1h) - 1
+
+        # Обидві лінії K і D повинні рухатися вгору
+        h_lines_rising = (
+            k_1h[h_last] > k_1h[h_last - 1]
+            and d_1h[h_last] > d_1h[h_last - 1]
+        )
+
+        # Обидві лінії K і D повинні рухатися вниз
+        h_lines_falling = (
+            k_1h[h_last] < k_1h[h_last - 1]
+            and d_1h[h_last] < d_1h[h_last - 1]
+        )
+
+        # Шукаємо перетин потрібного напрямку
+        # серед останніх 6 закритих годинних свічок
+        h_cross_up = False
+        h_cross_down = False
+
+        h_start = max(1, len(k_1h) - 6)
+
+        for i in range(h_start, len(k_1h)):
+            if (
+                k_1h[i - 1] <= d_1h[i - 1]
+                and k_1h[i] > d_1h[i]
+            ):
+                h_cross_up = True
+
+            if (
+                k_1h[i - 1] >= d_1h[i - 1]
+                and k_1h[i] < d_1h[i]
+            ):
+                h_cross_down = True
+
+        # Для LONG: перетин вгору АБО обидві лінії ростуть
+        if is_long_signal:
+            if not (h_cross_up or h_lines_rising):
+                return None
+
+        # Для SHORT: перетин вниз АБО обидві лінії падають
+        if is_short_signal:
+            if not (h_cross_down or h_lines_falling):
+                return None
+
+        # =====================================================
+        # 7. ПОПЕРЕДНІЙ ПЕРЕТИН 15m У ТОМУ Ж НАПРЯМКУ
+        # =====================================================
+        # Шукаємо найближчий попередній перетин
+        # у тому самому напрямку, не включаючи поточний.
+        first_cross_idx = None
+
+        search_start = max(1, current_idx - 30)
+
+        for i in range(current_idx - 1, search_start - 1, -1):
+
+            previous_up = (
+                k_15m[i - 1] <= d_15m[i - 1]
+                and k_15m[i] > d_15m[i]
+            )
+
+            previous_down = (
+                k_15m[i - 1] >= d_15m[i - 1]
+                and k_15m[i] < d_15m[i]
+            )
+
+            if is_long_signal and previous_up:
+                first_cross_idx = i
                 break
 
-        if not first_cross_found:
+            if is_short_signal and previous_down:
+                first_cross_idx = i
+                break
+
+        # Якщо попереднього перетину немає — STOP
+        if first_cross_idx is None:
             return None
 
-        # --- 5. ПЕРЕПРОДАНІСТЬ / ПЕРЕКУПЛЕНІСТЬ ПО J ---
-        extreme_j_found = False
-        if m15_cross2_up:
-            extreme_j_found = any(val < 10 for val in j_15m[-30:])
-        elif m15_cross2_down:
-            extreme_j_found = any(val > 90 for val in j_15m[-30:])
+        # =====================================================
+        # 8. ПЕРЕВІРКА ЕКСТРЕМУ J
+        # =====================================================
+        # J може досягнути екстремуму:
+        # - до першого перетину;
+        # - між першим і другим перетином.
+        #
+        # Але не після поточного перетину.
+        #
+        # Перевіряємо історію до поточного перетину,
+        # у межах останніх 30 значень KDJ.
 
+        j_search_start = max(0, current_idx - 30)
+
+        j_values_before_current = j_15m[
+            j_search_start:current_idx
+        ]
+
+        if not j_values_before_current:
+            return None
+
+        if is_long_signal:
+            extreme_j_found = any(
+                value < 10
+                for value in j_values_before_current
+            )
+
+        else:
+            extreme_j_found = any(
+                value > 90
+                for value in j_values_before_current
+            )
+
+        # Якщо J не був в екстремумі — STOP
         if not extreme_j_found:
             return None
 
-        is_long_signal = m15_cross2_up
-        is_short_signal = m15_cross2_down
+        # =====================================================
+        # 9. ATR НА 1h
+        # =====================================================
+        atr_th = calculate_atr(
+            candles_1h,
+            period=14
+        )
 
-        if not is_long_signal and not is_short_signal:
+        if atr_th <= 0:
             return None
 
-        atr_th = calculate_atr(candles_1h_closed, period=14)
-        if atr_th == 0:
+        current_price_for_atr = candles_1h[-1]["close"]
+
+        # Фільтр мінімальної волатильності
+        if atr_th < current_price_for_atr * 0.004:
             return None
 
-        current_price_for_atr = float(candles_1h_closed[-1]['close'])
-        if atr_th < (current_price_for_atr * 0.004):
-            return None
+        # =====================================================
+        # 10. ПОТОЧНА ЦІНА
+        # =====================================================
+        ticker_url = (
+            f"{BINGX_BASE_URL}"
+            f"/openApi/swap/v2/quote/ticker"
+        )
 
-        ticker_resp = await session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker?symbol={symbol}")
-        ticker_data = await ticker_resp.json()
-        if ticker_data.get('code') == 0 and 'data' in ticker_data:
-            current_price = float(ticker_data['data']['lastPrice'])
-        else:
-            current_price = float(candles_1h_closed[-1]['close'])
+        current_price = None
 
+        async with session.get(
+            ticker_url,
+            params={"symbol": symbol},
+            timeout=5
+        ) as ticker_resp:
+
+            if ticker_resp.status == 200:
+                ticker_data = await ticker_resp.json()
+
+                if (
+                    ticker_data.get("code") == 0
+                    and ticker_data.get("data")
+                ):
+                    current_price = float(
+                        ticker_data["data"]["lastPrice"]
+                    )
+
+        if current_price is None or current_price <= 0:
+            current_price = candles_1h[-1]["close"]
+
+        # =====================================================
+        # 11. ФОРМУВАННЯ LONG
+        # =====================================================
         if is_long_signal:
-            signal_name = "LONG (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price - (atr_th * 2.0), 8)
-            tp1 = round(current_price + (atr_th * 2.5), 8)
-            tp2 = round(tp1 + (atr_th * 2.0), 8)
-            tp3 = round(tp2 + (atr_th * 2.0), 8)
+
+            signal_name = (
+                "LONG (1h Confirmation + 15m Volume & KDJ)"
+            )
+
+            stop_loss = round(
+                current_price - atr_th * 2.0,
+                8
+            )
+
+            tp1 = round(
+                current_price + atr_th * 2.5,
+                8
+            )
+
+            tp2 = round(
+                tp1 + atr_th * 2.0,
+                8
+            )
+
+            tp3 = round(
+                tp2 + atr_th * 2.0,
+                8
+            )
 
             risk_per_coin = current_price - stop_loss
-            if risk_per_coin > 0:
-                pos_qty = RISK_USD / risk_per_coin
-                notional_usd = pos_qty * current_price
-                margin_usd = notional_usd / LEVERAGE
-                signal_cooldowns[symbol] = time.time()
-                return {
-                    "symbol": symbol, "signal": signal_name, "entry": current_price, 
-                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
-                }
 
+        # =====================================================
+        # 12. ФОРМУВАННЯ SHORT
+        # =====================================================
         elif is_short_signal:
-            signal_name = "SHORT (1h Trend + 15m Vol & KDJ Entry)"
-            stop_loss = round(current_price + (atr_th * 2.0), 8)
-            tp1 = round(current_price - (atr_th * 2.5), 8)
-            tp2 = round(tp1 - (atr_th * 2.0), 8)
-            tp3 = round(tp2 - (atr_th * 2.0), 8)
+
+            signal_name = (
+                "SHORT (1h Confirmation + 15m Volume & KDJ)"
+            )
+
+            stop_loss = round(
+                current_price + atr_th * 2.0,
+                8
+            )
+
+            tp1 = round(
+                current_price - atr_th * 2.5,
+                8
+            )
+
+            tp2 = round(
+                tp1 - atr_th * 2.0,
+                8
+            )
+
+            tp3 = round(
+                tp2 - atr_th * 2.0,
+                8
+            )
 
             risk_per_coin = stop_loss - current_price
-            if risk_per_coin > 0:
-                pos_qty = RISK_USD / risk_per_coin
-                notional_usd = pos_qty * current_price
-                margin_usd = notional_usd / LEVERAGE
-                signal_cooldowns[symbol] = time.time()
-                return {
-                    "symbol": symbol, "signal": signal_name, "entry": current_price, 
-                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-                    "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
-                }
 
-        return None
+        else:
+            return None
+
+        # =====================================================
+        # 13. РОЗРАХУНОК ПОЗИЦІЇ
+        # =====================================================
+        if risk_per_coin <= 0:
+            return None
+
+        pos_qty = RISK_USD / risk_per_coin
+
+        notional_usd = pos_qty * current_price
+
+        margin_usd = notional_usd / LEVERAGE
+
+        # Cooldown встановлюємо тільки після готового сигналу
+        signal_cooldowns[symbol] = time.time()
+
+        print(
+            f"[SIGNAL] {symbol} | "
+            f"{'LONG' if is_long_signal else 'SHORT'} | "
+            f"Volume OK | 15m Cross OK | "
+            f"1h Confirmed | Previous Cross OK | "
+            f"J Extreme OK",
+            flush=True
+        )
+
+        return {
+            "symbol": symbol,
+            "signal": signal_name,
+            "entry": current_price,
+            "stop_loss": stop_loss,
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3,
+            "pos_qty": pos_qty,
+            "notional_usd": notional_usd,
+            "margin_usd": margin_usd
+        }
 
     except Exception as e:
-        print(f"[ERROR in {symbol}] {e}", flush=True)
+        print(
+            f"[ERROR in {symbol}] {e}",
+            flush=True
+        )
         return None
         
 async def scan_5min_loop(session, symbols):
