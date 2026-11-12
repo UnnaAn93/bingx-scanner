@@ -235,8 +235,9 @@ async def analyze_signal(session, symbol):
             return None, True, "Недостатньо даних для KDJ"
 
         # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
-        m15_cross2_up = (k_15m[-2] <= d_15m[-2]) and (k_15m[-1] > d_15m[-1]) and (k_15m[-1] - d_15m[-1] > 0.1)
-        m15_cross2_down = (k_15m[-2] >= d_15m[-2]) and (k_15m[-1] < d_15m[-1]) and (d_15m[-1] - k_15m[-1] > 0.1)
+        # Жорстка перевірка по ЗАВЕРШЕНИХ свічках (ігноруємо поточний шум [-1])
+        m15_cross2_up = (k_15m[-3] <= d_15m[-3]) and (k_15m[-2] > d_15m[-2])
+        m15_cross2_down = (k_15m[-3] >= d_15m[-3]) and (k_15m[-2] < d_15m[-2])
 
         if not m15_cross2_up and not m15_cross2_down:
             return None, True, "Немає основного поточного перетину на 15м"
