@@ -274,7 +274,7 @@ async def analyze_signal(session, symbol):
 
         # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м В ТОМУ Ж НАПРЯМКУ ---
         first_cross_found = False
-        for i in range(-30, -3):
+        for i in range(-15, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
