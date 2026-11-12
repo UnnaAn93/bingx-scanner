@@ -207,40 +207,52 @@ async def analyze_signal(session, symbol):
             return None
 
         candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'open': float(c['open']), 'time': c['time']} for c in raw_1h]
-        candles_15m_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'open': float(c['open']), 'time': c['time']} for c in raw_15m]
+        
+        # Безпечний парсинг 15м свічок (з підтримкою різних ключів volume)
+        candles_15m_closed = []
+        for c in raw_15m:
+            vol = c.get('volume') or c.get('Volume') or c.get('vol') or 0.0
+            candles_15m_closed.append({
+                'high': float(c['high']), 
+                'low': float(c['low']), 
+                'close': float(c['close']), 
+                'open': float(c['open']), 
+                'time': c['time'],
+                'volume': float(vol)
+            })
 
         if len(candles_15m_closed) < 33:
-            return None, False, "Недостатньо даних"
+            return None
 
         # --- 1. СПЛЕСК ОБ'ЄМУ НА ОСТАННІХ 5 СВІЧКАХ ---
-        base_volumes = [float(c['volume']) for c in candles_15m_closed[-25:-5]]
+        base_volumes = [c['volume'] for c in candles_15m_closed[-25:-5]]
         if not base_volumes or sum(base_volumes) == 0:
-            return None, False, "Нульовий об'єм"
+            return None
             
         avg_vol_15m = sum(base_volumes) / len(base_volumes)
         max_base_v = max(base_volumes)
         min_base_v = min(base_volumes) if min(base_volumes) > 0 else 1e-9
 
         if max_base_v < min_base_v * 2.5:
-            return None, False, "Флет по об'єму: немає різниці між свічками"
+            return None
 
-        has_vol_spike = any(float(c['volume']) >= avg_vol_15m * 2.5 for c in candles_15m_closed[-5:])
+        has_vol_spike = any(c['volume'] >= avg_vol_15m * 2.5 for c in candles_15m_closed[-5:])
         if not has_vol_spike:
-            return None, False, "Немає справжнього сплеску об'єму на останніх 5 свічках"
+            return None
 
         # --- РОЗРАХУНОК KDJ ---
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
         k_1h, d_1h, j_1h = calculate_kd(candles_1h_closed)
 
         if len(k_15m) < 35 or len(k_1h) < 10:
-            return None, True, "Недостатньо даних для KDJ"
+            return None
 
         # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
         m15_cross2_up = (k_15m[-3] <= d_15m[-3]) and (k_15m[-2] > d_15m[-2])
         m15_cross2_down = (k_15m[-3] >= d_15m[-3]) and (k_15m[-2] < d_15m[-2])
 
         if not m15_cross2_up and not m15_cross2_down:
-            return None, True, "Немає основного поточного перетину на 15м"
+            return None
 
         # --- 3. ПІДТВЕРДЖЕННЯ НА 1 ГОДИНИ (1h) ---
         h_trend_long = (k_1h[-1] > d_1h[-1]) or ((k_1h[-1] - k_1h[-2]) >= (d_1h[-1] - d_1h[-2]))
@@ -256,9 +268,9 @@ async def analyze_signal(session, symbol):
                 continue
 
         if m15_cross2_up and not h_trend_long:
-            return None, True, "Немає підтвердження на 1 годині для Лонг"
+            return None
         if m15_cross2_down and not h_trend_short:
-            return None, True, "Немає підтвердження на 1 годині для Шорт"
+            return None
 
         # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м В ТОМУ Ж НАПРЯМКУ ---
         first_cross_found = False
@@ -270,7 +282,7 @@ async def analyze_signal(session, symbol):
                 break
 
         if not first_cross_found:
-            return None, True, "Немає попереднього перетину на 15м в тому ж напрямку"
+            return None
 
         # --- 5. ПЕРЕПРОДАНІСТЬ / ПЕРЕКУПЛЕНІСТЬ ---
         extreme_j_found = False
@@ -280,13 +292,13 @@ async def analyze_signal(session, symbol):
             extreme_j_found = any(val > 90 for val in j_15m[-30:])
 
         if not extreme_j_found:
-            return None, True, "Немає екстремуму J (<10 або >90) перед перетинами"
+            return None
 
         is_long_signal = m15_cross2_up
         is_short_signal = m15_cross2_down
 
         if not is_long_signal and not is_short_signal:
-            return None, True, "Немає збігу з годинником (перетин або спрямування)"
+            return None
 
         atr_th = calculate_atr(candles_1h_closed, period=14)
         if atr_th == 0:
@@ -295,7 +307,7 @@ async def analyze_signal(session, symbol):
         # --- ФІЛЬТР МІНІМАЛЬНОГО ATR (Захист від флету / стояння ціни) ---
         current_price_for_atr = float(candles_1h_closed[-1]['close'])
         if atr_th < (current_price_for_atr * 0.004):
-            return None, True, "Флет: занадто низький ATR"
+            return None
 
         ticker_resp = await session.get(f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker?symbol={symbol}")
         ticker_data = await ticker_resp.json()
@@ -317,7 +329,6 @@ async def analyze_signal(session, symbol):
                 notional_usd = pos_qty * current_price
                 margin_usd = notional_usd / LEVERAGE
                 
-                # --- Успішний сигнал: оновлюємо таймер годинного коулдауну для цієї монети ---
                 signal_cooldowns[symbol] = time.time()
                 
                 return {
@@ -340,7 +351,6 @@ async def analyze_signal(session, symbol):
                 notional_usd = pos_qty * current_price
                 margin_usd = notional_usd / LEVERAGE
                 
-                # --- Успішний сигнал: оновлюємо таймер годинного коулдауну для цієї монети ---
                 signal_cooldowns[symbol] = time.time()
                 
                 return {
@@ -355,7 +365,6 @@ async def analyze_signal(session, symbol):
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
         return None
-        
         
             
 async def scan_5min_loop(session, symbols):
