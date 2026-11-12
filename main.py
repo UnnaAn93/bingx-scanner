@@ -201,18 +201,31 @@ async def analyze_signal(session, symbol):
         candles_1h_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_1h[:-1]]
         candles_15m_closed = [{'time': k['time'], 'open': float(k['open']), 'high': float(k['high']), 'low': float(k['low']), 'close': float(k['close']), 'volume': float(k['volume'])} for k in raw_15m[:-1]]
     
-        # --- 1. СПЛЕСК ОБ'ЄМУ НА ОСТАННІХ 5 СВІЧКАХ ---
-        if len(candles_15m_closed) < 35:
+        # --- 1. СПЛЕСК ОБ'ЄМУ НА ОСТАННІХ 5 СВІЧКАХ (З ЖОРСТКИМ ФІЛЬТРОМ ФЛЕТУ) ---
+        if len(candles_15m_closed) < 33:
             return None, False, "Недостатньо даних"
 
-        avg_vel_15m = sum(float(c['volume']) for c in candles_15m_closed[-25:-5]) / 20
+        # Беремо базові 20 свічок для розрахунку середнього
+        base_volumes = [float(c['volume']) for c in candles_15m_closed[-25:-5]]
+        avg_vel_15m = sum(base_volumes) / len(base_volumes)
+
         if avg_vel_15m == 0:
             return None, False, "Нульовий об'єм"
 
-        # Перевіряємо, чи був сплеск об'єму хоча б на одній із останніх 5 свічок [-5:]
-        has_vel_spike = any(float(c['volume']) >= avg_vel_15m * 2.0 for c in candles_15m_closed[-5:])
+        # Додатковий захист: якщо на всій базовій історії об'єми майже однакові 
+        # (максимальний від мінімального відрізняється менш ніж у 2.5 рази), 
+        # це повний флет по об'єму — ніяких сигналів!
+        max_base_v = max(base_volumes)
+        min_base_v = min(base_volumes) if min(base_volumes) > 0 else 1e-9
+        
+        if max_base_v < min_base_v * 2.5:
+            return None, False, "Флет по об'єму: немає різниці між свічками"
+
+        # Сплеск на останніх 5 закритих свічках: хоча б одна свічка має строго перевищувати середнє у 2.5 рази
+        has_vel_spike = any(float(c['volume']) >= avg_vel_15m * 2.5 for c in candles_15m_closed[-5:])
+
         if not has_vel_spike:
-            return None, False, "Немає сплеску об'єму на останніх 5 свічках (>= 2.0x)"  # <--- СТОП, якщо немає
+            return None, False, "Немає справжнього сплеску об'єму на останніх 5 свічках"
 
         # --- РОЗРАХУНОК KDJ ---
         k_15m, d_15m, j_15m = calculate_kd(candles_15m_closed)
