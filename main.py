@@ -183,18 +183,16 @@ async def job_daily_sweep_report(session, symbols):
 
     await send_telegram(report)
     print("[INFO] Звіт по свіпах успішно надіслано!", flush=True)
-    
-# Глобальний словник для годинної паузи (поставити десь на початку вашого скрипта)
+
 signal_cooldowns = {}
-COOLDOWN_PERIOD = 3600  # 1 година в секундах
+COOLDOWN_PERIOD = 3600  # 1 година
 
 async def analyze_signal(session, symbol):
     try:
-        # --- 0. ПЕРЕВІРКА КОУЛДАУНУ (Пауза 1 година після попереднього сигналу) ---
+        # --- 0. КОУЛДАУН ---
         now = time.time()
-        if symbol in signal_cooldowns:
-            if now - signal_cooldowns[symbol] < COOLDOWN_PERIOD:
-                return None  # Монета на паузі, пропускаємо
+        if symbol in signal_cooldowns and now - signal_cooldowns[symbol] < COOLDOWN_PERIOD:
+            return None
 
         async def fetch_data():
             raw_1h = await get_klines(session, symbol, '1h', 200)
@@ -208,23 +206,18 @@ async def analyze_signal(session, symbol):
 
         candles_1h_closed = [{'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 'open': float(c['open']), 'time': c['time']} for c in raw_1h]
         
-        # Безпечний парсинг 15м свічок (з підтримкою різних ключів volume)
         candles_15m_closed = []
         for c in raw_15m:
             vol = c.get('volume') or c.get('Volume') or c.get('vol') or 0.0
             candles_15m_closed.append({
-                'high': float(c['high']), 
-                'low': float(c['low']), 
-                'close': float(c['close']), 
-                'open': float(c['open']), 
-                'time': c['time'],
-                'volume': float(vol)
+                'high': float(c['high']), 'low': float(c['low']), 'close': float(c['close']), 
+                'open': float(c['open']), 'time': c['time'], 'volume': float(vol)
             })
 
         if len(candles_15m_closed) < 33:
             return None
 
-        # --- 1. СПЛЕСК ОБ'ЄМУ НА ОСТАННІХ 5 СВІЧКАХ ---
+        # --- 1. СПЛЕСК ОБ'ЄМУ НА 15м ---
         base_volumes = [c['volume'] for c in candles_15m_closed[-25:-5]]
         if not base_volumes or sum(base_volumes) == 0:
             return None
@@ -247,13 +240,9 @@ async def analyze_signal(session, symbol):
         if len(k_15m) < 35 or len(k_1h) < 10:
             return None
 
-        # --- ПЕРЕВІРКА ПЕРЕТИНУ KDJ (Чиста математика) ---
-        # Перевіряємо закриті свічки [-3] та [-2] з мінімальним порогом розходження, щоб уникнути шуму у флеті
-        epsilon = 0.05  # Мінімальна різниця для підтвердження перетину
-
-        m15_cross2_up = (k_15m[-3] - d_15m[-3] <= epsilon) and (k_15m[-2] - d_15m[-2] > epsilon)
-        m15_cross2_down = (k_15m[-3] - d_15m[-3] >= -epsilon) and (k_15m[-2] - d_15m[-2] < -epsilon)
-
+        # --- 2. ОСНОВНИЙ (ПОТОЧНИЙ) ПЕРЕТИН НА 15м ---
+        m15_cross2_up = (k_15m[-3] <= d_15m[-3]) and (k_15m[-2] > d_15m[-2])
+        m15_cross2_down = (k_15m[-3] >= d_15m[-3]) and (k_15m[-2] < d_15m[-2])
 
         if not m15_cross2_up and not m15_cross2_down:
             return None
@@ -278,7 +267,7 @@ async def analyze_signal(session, symbol):
 
         # --- 4. ПОПЕРЕДНІЙ ПЕРЕТИН НА 15м В ТОМУ Ж НАПРЯМКУ ---
         first_cross_found = False
-        for i in range(-15, -3):
+        for i in range(-30, -3):
             is_up = (k_15m[i-1] <= d_15m[i-1]) and (k_15m[i] > d_15m[i])
             is_down = (k_15m[i-1] >= d_15m[i-1]) and (k_15m[i] < d_15m[i])
             if (m15_cross2_up and is_up) or (m15_cross2_down and is_down):
@@ -288,7 +277,7 @@ async def analyze_signal(session, symbol):
         if not first_cross_found:
             return None
 
-        # --- 5. ПЕРЕПРОДАНІСТЬ / ПЕРЕКУПЛЕНІСТЬ ---
+        # --- 5. ПЕРЕПРОДАНІСТЬ / ПЕРЕКУПЛЕНІСТЬ ПО J ---
         extreme_j_found = False
         if m15_cross2_up:
             extreme_j_found = any(val < 10 for val in j_15m[-30:])
@@ -308,7 +297,6 @@ async def analyze_signal(session, symbol):
         if atr_th == 0:
             return None
 
-        # --- ФІЛЬТР МІНІМАЛЬНОГО ATR (Захист від флету / стояння ціни) ---
         current_price_for_atr = float(candles_1h_closed[-1]['close'])
         if atr_th < (current_price_for_atr * 0.004):
             return None
@@ -332,13 +320,10 @@ async def analyze_signal(session, symbol):
                 pos_qty = RISK_USD / risk_per_coin
                 notional_usd = pos_qty * current_price
                 margin_usd = notional_usd / LEVERAGE
-                
                 signal_cooldowns[symbol] = time.time()
-                
                 return {
-                    "symbol": symbol, "signal": signal_name,
-                    "entry": current_price, "stop_loss": stop_loss,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "symbol": symbol, "signal": signal_name, "entry": current_price, 
+                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
 
@@ -354,13 +339,10 @@ async def analyze_signal(session, symbol):
                 pos_qty = RISK_USD / risk_per_coin
                 notional_usd = pos_qty * current_price
                 margin_usd = notional_usd / LEVERAGE
-                
                 signal_cooldowns[symbol] = time.time()
-                
                 return {
-                    "symbol": symbol, "signal": signal_name,
-                    "entry": current_price, "stop_loss": stop_loss,
-                    "tp1": tp1, "tp2": tp2, "tp3": tp3,
+                    "symbol": symbol, "signal": signal_name, "entry": current_price, 
+                    "stop_loss": stop_loss, "tp1": tp1, "tp2": tp2, "tp3": tp3,
                     "pos_qty": pos_qty, "notional_usd": notional_usd, "margin_usd": margin_usd
                 }
 
@@ -370,7 +352,6 @@ async def analyze_signal(session, symbol):
         print(f"[ERROR in {symbol}] {e}", flush=True)
         return None
         
-            
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку (1h KDJ Crossover + 15m Об'єм)...", flush=True)
     batch_size = 20
