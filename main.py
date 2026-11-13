@@ -277,7 +277,9 @@ async def analyze_signal(session, symbol):
             and now - signal_cooldowns[symbol] < COOLDOWN_PERIOD
         ):
             return None
-
+        # ЗАБОРОНА СИГНАЛІВ ПО БІТКОЙНУ (він потрібен лише для розрахунку кореляції альткоїнів)
+        if symbol == "BTC-USDT":
+            return None
         # =====================================================
         # 1. ЗАВАНТАЖЕННЯ СВІЧОК
         # =====================================================
