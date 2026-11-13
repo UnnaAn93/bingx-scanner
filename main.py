@@ -566,7 +566,7 @@ async def analyze_signal(session, symbol):
             
             # Беремо останні 24 закриті годинні свічки (доба)
             period_corr = 24
-            if len(btc_1h) >= period_corr and len(candles_1h) >= period_corr:
+            if len(btc_th) >= period_corr and len(candles_1h) >= period_corr:
                 # Вирівнюємо свічки точно за часом (timestamp), щоб не було зсувів
                 btc_map = {candle_timestamp_ms(c): float(c["close"]) for c in btc_1h[-period_corr:]}
                 coin_map = {c["time"]: c["close"] for c in candles_1h[-period_corr:]}
