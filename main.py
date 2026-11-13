@@ -557,7 +557,33 @@ async def analyze_signal(session, symbol):
         # Фільтр мінімальної волатильності
         if atr_th < current_price_for_atr * 0.004:
             return None
-
+            
+        # =====================================================
+        # 9.5. ФІЛЬТР КОРЕЛЯЦІЇ З BITCOIN (1h)
+        # =====================================================
+        if symbol != "BTC-USDT":
+            btc_1h = await get_btc_1h_candles(session)
+            
+            # Беремо останні 24 закриті годинні свічки (доба)
+            period_corr = 24
+            if len(btc_1h) >= period_corr and len(candles_1h) >= period_corr:
+                # Вирівнюємо свічки точно за часом (timestamp), щоб не було зсувів
+                btc_map = {candle_timestamp_ms(c): float(c["close"]) for c in btc_1h[-period_corr:]}
+                coin_map = {c["time"]: c["close"] for c in candles_1h[-period_corr:]}
+                
+                common_times = sorted(set(btc_map.keys()) & set(coin_map.keys()))
+                
+                if len(common_times) >= 15:
+                    btc_closes = [btc_map[t] for t in common_times]
+                    coin_closes = [coin_map[t] for t in common_times]
+                    
+                    corr = calculate_correlation(btc_closes, coin_closes)
+                    
+                    # Відсікаємо монети, які сильно повторюють рух BTC (поріг >= 0.45)
+                    # Значення від -1.0 до +0.45 означають слабку, відсутню або зворотну кореляцію
+                    if corr >= 0.45:
+                        return None
+                        
         # =====================================================
         # 10. ПОТОЧНА ЦІНА
         # =====================================================
