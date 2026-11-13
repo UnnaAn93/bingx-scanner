@@ -247,6 +247,24 @@ def get_closed_candles(raw_candles, interval_ms):
 
     return closed
 
+btc_cache = {"time": 0, "candles": []}
+
+async def get_btc_1h_candles(session):
+    now = time.time()
+    # Оновлюємо дані по BTC раз на 15 хвилин (900 секунд)
+    if btc_cache["candles"] and (now - btc_cache["time"] < 900):
+        return btc_cache["candles"]
+    
+    raw_btc = await get_klines(session, "BTC-USDT", "1h", 50)
+    if not raw_btc:
+        return btc_cache["candles"]
+        
+    closed_btc = get_closed_candles(raw_btc, 60 * 60 * 1000)
+    btc_cache["candles"] = closed_btc
+    btc_cache["time"] = now
+    return closed_btc
+    
+
 async def analyze_signal(session, symbol):
     try:
         # =====================================================
