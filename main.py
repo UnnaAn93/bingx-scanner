@@ -348,39 +348,25 @@ async def analyze_signal(session, symbol):
                 "time": candle_timestamp_ms(c)
             })
 
-        # =====================================================
-        # 3. СПЛЕСК ОБ'ЄМУ 15m — ПЕРША ПЕРЕВІРКА
-        # =====================================================
-        # Базовий об'єм: свічки від -25 до -5
-        base_volumes = [
-            c["volume"]
-            for c in candles_15m[-25:-5]
-        ]
+        # ==========================================
+        # 3. ФІЛЬТР ОБ'ЄМУ (Сумарний за останні 3 свічки)
+        # ==========================================
+        if len(candles_15m) >= 23:
+            # Середній об'єм за попередні 20 свічок (виключаючи останні 3)
+            historical_volumes = [float(c["volume"]) for c in candles_15m[-23:-3]]
+            avg_volume = sum(historical_volumes) / len(historical_volumes) if historical_volumes else 0
 
-        # Останні 5 повністю закритих свічок
-        recent_volumes = [
-            c["volume"]
-            for c in candles_15m[-5:]
-        ]
+            # Сумарний об'єм останніх 3 свічок
+            recent_volume_sum = sum(float(c["volume"]) for c in candles_15m[-3:])
 
-        if not base_volumes or not recent_volumes:
+            # Порівнюємо суму (поріг можна регулювати множником, наприклад 1.8 - 2.0)
+            required_volume_sum = avg_volume * 3 * 1.8
+
+            if avg_volume == 0 or recent_volume_sum < required_volume_sum:
+                return None
+        else:
             return None
 
-        avg_volume = sum(base_volumes) / len(base_volumes)
-
-        if avg_volume <= 0:
-            return None
-
-        # Хоча б одна з останніх 5 свічок має бути
-        # з об'ємом >= 2.5 середнього базового об'єму
-        has_volume_spike = any(
-            volume >= avg_volume * 2.5
-            for volume in recent_volumes
-        )
-
-        # Якщо сплеску немає — одразу STOP
-        if not has_volume_spike:
-            return None
 
         # =====================================================
         # 4. РОЗРАХУНОК KDJ
