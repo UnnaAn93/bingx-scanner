@@ -754,39 +754,59 @@ async def analyze_signal(session, symbol):
         return None
     
         
+
 async def scan_5min_loop(session, symbols):
-    print("[INFO] Початок сканування ринку (1h KDJ Crossover + 15m Об'єм)...", flush=True)
+    print("[INFO] Початок сканування ринку...", flush=True)
+
     batch_size = 20
+
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
-        tasks = [analyze_signal(session, sym) for sym in batch]
+
+        tasks = [
+            analyze_signal(session, sym)
+            for sym in batch
+        ]
+
         try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(
+                *tasks,
+                return_exceptions=True
+            )
+
             for setup in results:
-                if isinstance(setup, dict):
-                    msg = (
-                    msg = (
-                        f"🎯 **НОВИЙ СИГНАЛ**\n"
-                        f"🪙 Монета: `{setup['symbol']}`\n"
-                        f"📊 Стратегія: `{setup['strategy']}`\n"
-                        f"📈 Напрямок: `{setup['direction']}`\n\n"
-                        f"🟢 Вхід: `{setup['entry']:.8f}`\n"
-                        f"🔴 Стоп: `{setup['stop_loss']:.8f}`\n\n"
-                        f"🎯 TP1: `{setup['tp1']:.8f}` — закрити 50%\n"
-                        f"🎯 TP2: `{setup['tp2']:.8f}` — закрити 25%\n"
-                        f"🎯 TP3: `{setup['tp3']:.8f}` — залишок 25%\n\n"
-                        f"📦 Кількість: `{setup['pos_qty']:.6f}`\n"
-                        f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
-                        f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
-                        f"🛡️ Ризик на стоп: `${setup['actual_risk']:.2f}`\n\n"
-                        f"⏳ Очікування ручного відкриття."
-                    )
-                    
-                    await send_telegram(msg)
+                if not isinstance(setup, dict):
+                    continue
+
+                msg = (
+                    f"🎯 **НОВИЙ СИГНАЛ**\n"
+                    f"🪙 Монета: `{setup['symbol']}`\n"
+                    f"📊 Стратегія: `{setup['strategy']}`\n"
+                    f"📈 Напрямок: `{setup['direction']}`\n\n"
+                    f"🟢 Вхід: `{setup['entry']:.8f}`\n"
+                    f"🔴 Стоп: `{setup['stop_loss']:.8f}`\n\n"
+                    f"🎯 TP1: `{setup['tp1']:.8f}` — закрити 50%\n"
+                    f"🎯 TP2: `{setup['tp2']:.8f}` — закрити 25%\n"
+                    f"🎯 TP3: `{setup['tp3']:.8f}` — закрити 25%\n\n"
+                    f"📦 Кількість: `{setup['pos_qty']:.6f}`\n"
+                    f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
+                    f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
+                    f"🛡️ Ризик на стоп: `${setup['actual_risk']:.2f}`\n\n"
+                    f"⏳ Очікування ручного відкриття."
+                )
+
+                await send_telegram(msg)
+
         except Exception as e:
-            print(f"[BATCH ERROR] {e}", flush=True)
+            print(
+                f"[BATCH ERROR] {e}",
+                flush=True
+            )
+
         await asyncio.sleep(0.3)
+
     print("[INFO] Сканування ринку завершено.", flush=True)
+
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 # Константа мінімального добового об'єму (в USD)
