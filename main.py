@@ -628,12 +628,19 @@ def detect_impulse_retest(candles_1h, candles_15m):
 
 def detect_rounding(candles_1h, candles_15m):
     """
-    Спрощений пошук заокруглення на 1H.
-    LONG: формування вищих мінімумів і пробій локального максимуму.
-    SHORT: нижчі максимуми і пробій локального мінімуму.
+    Ранній пошук заокруглення на 1H.
+    Вхід біля основи після підтвердження розвороту на 15M.
+
+    LONG:
+    1. На 1H формується заокруглене дно.
+    2. На 15M з'являється локальне дно.
+    3. Формується вищий мінімум.
+    4. Закрита свічка пробиває локальний максимум відскоку.
+
+    SHORT — дзеркальна логіка.
     """
 
-    if len(candles_1h) < 30 or len(candles_15m) < 3:
+    if len(candles_1h) < 30 or len(candles_15m) < 12:
         return None
 
     c = candles_1h[-30:]
@@ -650,52 +657,140 @@ def detect_rounding(candles_1h, candles_15m):
     middle_high = max(x["high"] for x in middle)
     right_high = max(x["high"] for x in right)
 
-    last = candles_15m[-1]
+    atr_1h = calculate_atr(candles_1h, 14)
+    atr_15m = calculate_atr(candles_15m, 14)
 
-    # Заокруглене дно
+    if atr_1h <= 0 or atr_15m <= 0:
+        return None
+
+    recent = candles_15m[-12:]
+    last = recent[-1]
+    prev = recent[-2]
+
+    # ==========================================
+    # LONG — ЗАОКРУГЛЕНЕ ДНО
+    # ==========================================
+
     if (
         middle_low < left_low
         and middle_low < right_low
         and right_low > middle_low
     ):
-        neckline = max(x["high"] for x in c[10:25])
+        # Шукаємо локальний мінімум на 15M
+        # серед останніх 8 свічок, крім двох останніх.
+        pivot_idx = None
 
-        if last["close"] > neckline:
-            stop = min(x["low"] for x in c[10:])
+        for i in range(len(recent) - 3, 1, -1):
+            if (
+                recent[i]["low"] <= recent[i - 1]["low"]
+                and recent[i]["low"] <= recent[i + 1]["low"]
+            ):
+                pivot_idx = i
+                break
 
-            return {
-                "strategy": "ROUNDING BOTTOM",
-                "direction": "LONG",
-                "entry": last["close"],
-                "stop": stop,
-                "tp1": last["close"] + (last["close"] - stop),
-                "tp2": last["close"] + 2 * (last["close"] - stop),
-                "tp3": last["close"] + 3 * (last["close"] - stop)
-            }
+        if pivot_idx is not None:
+            pivot_low = recent[pivot_idx]["low"]
 
-    # Заокруглена вершина
+            # Після першого дна ціна повинна відскочити.
+            rebound_high = max(
+                x["high"] for x in recent[pivot_idx + 1:-1]
+            )
+
+            # Після відскоку формується вищий мінімум.
+            higher_low_found = any(
+                recent[i]["low"] > pivot_low
+                and recent[i]["low"] < rebound_high
+                for i in range(pivot_idx + 2, len(recent) - 1)
+            )
+
+            # Підтвердження: остання закрита свічка
+            # пробиває максимум попереднього відскоку.
+            breakout = (
+                last["close"] > rebound_high
+                and last["close"] > last["open"]
+            )
+
+            # Не наздоганяємо ціну, якщо вона вже далеко від дна.
+            not_extended = (
+                last["close"] - pivot_low <= atr_15m * 2.0
+            )
+
+            if higher_low_found and breakout and not_extended:
+                stop = pivot_low - atr_15m * 0.3
+                risk = last["close"] - stop
+
+                if risk <= 0:
+                    return None
+
+                return {
+                    "strategy": "ROUNDING BOTTOM EARLY",
+                    "direction": "LONG",
+                    "entry": last["close"],
+                    "stop": stop,
+                    "tp1": last["close"] + risk,
+                    "tp2": last["close"] + 2 * risk,
+                    "tp3": last["close"] + 3 * risk
+                }
+
+    # ==========================================
+    # SHORT — ЗАОКРУГЛЕНА ВЕРШИНА
+    # ==========================================
+
     if (
         middle_high > left_high
         and middle_high > right_high
         and right_high < middle_high
     ):
-        neckline = min(x["low"] for x in c[10:25])
+        pivot_idx = None
 
-        if last["close"] < neckline:
-            stop = max(x["high"] for x in c[10:])
+        for i in range(len(recent) - 3, 1, -1):
+            if (
+                recent[i]["high"] >= recent[i - 1]["high"]
+                and recent[i]["high"] >= recent[i + 1]["high"]
+            ):
+                pivot_idx = i
+                break
 
-            return {
-                "strategy": "ROUNDING TOP",
-                "direction": "SHORT",
-                "entry": last["close"],
-                "stop": stop,
-                "tp1": last["close"] - (stop - last["close"]),
-                "tp2": last["close"] - 2 * (stop - last["close"]),
-                "tp3": last["close"] - 3 * (stop - last["close"])
-            }
+        if pivot_idx is not None:
+            pivot_high = recent[pivot_idx]["high"]
+
+            rebound_low = min(
+                x["low"] for x in recent[pivot_idx + 1:-1]
+            )
+
+            lower_high_found = any(
+                recent[i]["high"] < pivot_high
+                and recent[i]["high"] > rebound_low
+                for i in range(pivot_idx + 2, len(recent) - 1)
+            )
+
+            breakout = (
+                last["close"] < rebound_low
+                and last["close"] < last["open"]
+            )
+
+            not_extended = (
+                pivot_high - last["close"] <= atr_15m * 2.0
+            )
+
+            if lower_high_found and breakout and not_extended:
+                stop = pivot_high + atr_15m * 0.3
+                risk = stop - last["close"]
+
+                if risk <= 0:
+                    return None
+
+                return {
+                    "strategy": "ROUNDING TOP EARLY",
+                    "direction": "SHORT",
+                    "entry": last["close"],
+                    "stop": stop,
+                    "tp1": last["close"] - risk,
+                    "tp2": last["close"] - 2 * risk,
+                    "tp3": last["close"] - 3 * risk
+                }
 
     return None
-
 
 async def analyze_signal(session, symbol):
     try:
