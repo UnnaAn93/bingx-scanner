@@ -765,18 +765,23 @@ async def scan_5min_loop(session, symbols):
             for setup in results:
                 if isinstance(setup, dict):
                     msg = (
-                        f"🎯 **Знайдено сигнал ({setup['signal']})**\n"
-                        f"🪙 Монета: `{setup['symbol']}`\n\n"
-                        f"🟢 Вхід (орієнтир): `{setup['entry']:.8f}`\n"
-                        f"🔴 Стоп-лос: `{setup['stop_loss']:.8f}`\n"
-                        f"🎯 TP1: `{setup['tp1']:.8f}` | TP2: `{setup['tp2']:.8f}` | TP3: `{setup['tp3']:.8f}`\n\n"
-                        f"🧮 **Розрахунок позиції (Депозит $20):**\n"
-                        f"📦 Кількість: `{setup['pos_qty']:.4f}`\n"
+                    msg = (
+                        f"🎯 **НОВИЙ СИГНАЛ**\n"
+                        f"🪙 Монета: `{setup['symbol']}`\n"
+                        f"📊 Стратегія: `{setup['strategy']}`\n"
+                        f"📈 Напрямок: `{setup['direction']}`\n\n"
+                        f"🟢 Вхід: `{setup['entry']:.8f}`\n"
+                        f"🔴 Стоп: `{setup['stop_loss']:.8f}`\n\n"
+                        f"🎯 TP1: `{setup['tp1']:.8f}` — закрити 50%\n"
+                        f"🎯 TP2: `{setup['tp2']:.8f}` — закрити 25%\n"
+                        f"🎯 TP3: `{setup['tp3']:.8f}` — залишок 25%\n\n"
+                        f"📦 Кількість: `{setup['pos_qty']:.6f}`\n"
                         f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
-                        f"🏦 Маржа (10x): `{setup['margin_usd']:.2f} USD`\n"
-                        f"🛡️ Ризик на стоп: `$0.60` (3%)\n\n"
-                        f"⏳ Очікування ручного відкриття..."
+                        f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
+                        f"🛡️ Ризик на стоп: `${setup['actual_risk']:.2f}`\n\n"
+                        f"⏳ Очікування ручного відкриття."
                     )
+                    
                     await send_telegram(msg)
         except Exception as e:
             print(f"[BATCH ERROR] {e}", flush=True)
