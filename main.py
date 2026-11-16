@@ -805,7 +805,7 @@ async def analyze_signal(session, symbol):
         if symbol == "BTC-USDT":
             return None
 
-        # Завантажуємо свічки один раз для всіх трьох стратегій
+        # Завантажуємо свічки один раз
         raw_1h, raw_15m = await asyncio.gather(
             get_klines(session, symbol, "1h", 100),
             get_klines(session, symbol, "15m", 100)
@@ -824,6 +824,9 @@ async def analyze_signal(session, symbol):
         historical = candles_15m[-23:-3]
         recent = candles_15m[-3:]
 
+        if not historical or not recent:
+            return None
+
         avg_volume = sum(x["volume"] for x in historical) / len(historical)
         recent_volume = sum(x["volume"] for x in recent)
 
@@ -841,8 +844,9 @@ async def analyze_signal(session, symbol):
                 candle_timestamp_ms(x): float(x["close"])
                 for x in btc_1h[-24:]
             }
+
             coin_map = {
-                x["time"]: x["close"]
+                x["time"]: float(x["close"])
                 for x in candles_1h[-24:]
             }
 
@@ -854,25 +858,38 @@ async def analyze_signal(session, symbol):
                     [coin_map[t] for t in common]
                 )
 
+                # Відсікаємо тільки сильну позитивну кореляцію
                 if corr >= 0.60:
                     return None
 
-        # Перевіряємо всі три стратегії
-        setups = [
-            detect_range_sweep(candles_1h, candles_15m),
-            detect_impulse_retest(candles_1h, candles_15m),
-            detect_rounding(candles_1h, candles_15m)
+        # Перевіряємо всі три стратегії незалежно
+        detectors = [
+            detect_range_sweep,
+            detect_impulse_retest,
+            detect_rounding
         ]
 
-        # Беремо перший знайдений варіант
-        setup = next((x for x in setups if x is not None), None)
+        setups = []
 
-        if setup is None:
+        for detector in detectors:
+            try:
+                setup = detector(candles_1h, candles_15m)
+
+                if setup is not None:
+                    setups.append(setup)
+
+            except Exception as e:
+                print(
+                    f"[STRATEGY ERROR] {symbol} "
+                    f"{detector.__name__}: {e}",
+                    flush=True
+                )
+                continue
+
+        if not setups:
             return None
 
-        direction = setup["direction"]
-
-        # Перевіряємо актуальну ціну
+        # Отримуємо актуальну ціну один раз
         ticker_url = (
             f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         )
@@ -900,57 +917,99 @@ async def analyze_signal(session, symbol):
 
         entry = float(ticker["lastPrice"])
 
-        # Стоп має бути з правильного боку від входу
-        stop = setup["stop"]
+        # Перевіряємо кожен сетап до кінця.
+        # Якщо один не підходить — переходимо до наступного.
+        for setup in setups:
 
-        if direction == "LONG" and stop >= entry:
-            return None
+            direction = setup.get("direction")
 
-        if direction == "SHORT" and stop <= entry:
-            return None
+            if direction not in ("LONG", "SHORT"):
+                continue
 
-        # Цілі мають бути в напрямку прибутку
-        tp1 = setup["tp1"]
-        tp2 = setup["tp2"]
-        tp3 = setup["tp3"]
+            try:
+                stop = float(setup["stop"])
 
-        if direction == "LONG":
-            if not (entry < tp1 < tp2 < tp3):
-                return None
-        else:
-            if not (entry > tp1 > tp2 > tp3):
-                return None
+                # Стоп повинен бути з правильного боку від входу
+                if direction == "LONG":
+                    if stop >= entry:
+                        continue
 
-        levels = calculate_trade_levels(
-            direction, entry, stop, tp1, tp2, tp3
-        )
+                    risk = entry - stop
 
-        if levels is None:
-            return None
+                else:
+                    if stop <= entry:
+                        continue
 
-        signal_cooldowns[symbol] = time.time()
+                    risk = stop - entry
 
-        print(
-            f"[SIGNAL] {symbol} {direction} "
-            f"{setup['strategy']}",
-            flush=True
-        )
+                if risk <= 0:
+                    continue
 
-        return {
-            "symbol": symbol,
-            "signal": f"{direction} — {setup['strategy']}",
-            "strategy": setup["strategy"],
-            "direction": direction,
-            "entry": entry,
-            **levels
-        }
+                # Перераховуємо цілі від актуальної ціни входу
+                if direction == "LONG":
+                    tp1 = entry + risk
+                    tp2 = entry + risk * 2
+                    tp3 = entry + risk * 3
+
+                else:
+                    tp1 = entry - risk
+                    tp2 = entry - risk * 2
+                    tp3 = entry - risk * 3
+
+                # Перевіряємо правильність цілей
+                if direction == "LONG":
+                    if not (entry < tp1 < tp2 < tp3):
+                        continue
+                else:
+                    if not (entry > tp1 > tp2 > tp3):
+                        continue
+
+                levels = calculate_trade_levels(
+                    direction,
+                    entry,
+                    stop,
+                    tp1,
+                    tp2,
+                    tp3
+                )
+
+                if levels is None:
+                    continue
+
+                # Успішно сформований сигнал
+                signal_cooldowns[symbol] = time.time()
+
+                print(
+                    f"[SIGNAL] {symbol} {direction} "
+                    f"{setup['strategy']} "
+                    f"Entry: {entry} Stop: {stop}",
+                    flush=True
+                )
+
+                return {
+                    "symbol": symbol,
+                    "signal": f"{direction} — {setup['strategy']}",
+                    "strategy": setup["strategy"],
+                    "direction": direction,
+                    "entry": entry,
+                    **levels
+                }
+
+            except (KeyError, TypeError, ValueError, ZeroDivisionError) as e:
+                print(
+                    f"[SETUP ERROR] {symbol} "
+                    f"{setup.get('strategy', 'UNKNOWN')}: {e}",
+                    flush=True
+                )
+                continue
+
+        # Жоден із сетапів не пройшов перевірки
+        return None
 
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
         return None
-    
         
-
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку...", flush=True)
 
