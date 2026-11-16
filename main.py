@@ -435,95 +435,196 @@ def detect_range_sweep(candles_1h, candles_15m):
 
 def detect_impulse_retest(candles_1h, candles_15m):
     """
-    Пошук сильного імпульсу та повторних тестів зони.
+    Рахує окремі ретести, а не кількість свічок у зоні.
+
+    LONG:
+    1. Є сильна висхідна імпульсна свічка.
+    2. Ціна повертається до зони імпульсу.
+    3. Після ретесту ціна повинна відійти від зони.
+    4. Лише після цього наступне повернення рахується новим ретестом.
+
+    SHORT — дзеркально.
     """
 
     if len(candles_1h) < 20 or len(candles_15m) < 20:
         return None
 
     hourly = candles_1h[-20:]
-    recent = candles_15m[-20:]
+    recent = candles_15m[-48:]
 
     avg_range = sum(
-        c["high"] - c["low"] for c in hourly[:-5]
+        x["high"] - x["low"] for x in hourly[:-5]
     ) / max(1, len(hourly[:-5]))
 
     if avg_range <= 0:
         return None
 
-    # Шукаємо імпульс на 1H серед останніх п'яти свічок
+    # Перевіряємо останні 5 годинних свічок
     for i in range(len(hourly) - 1, len(hourly) - 6, -1):
-        c = hourly[i]
-        body = abs(c["close"] - c["open"])
-        candle_range = c["high"] - c["low"]
+        impulse = hourly[i]
+
+        body = abs(impulse["close"] - impulse["open"])
+        candle_range = impulse["high"] - impulse["low"]
 
         if candle_range <= 0:
             continue
 
-        # LONG імпульс
+        # Беремо тільки 15m свічки, які сформувалися
+        # ПІСЛЯ імпульсної 1H свічки
+        impulse_time = impulse["time"]
+
+        after_impulse = [
+            x for x in recent
+            if x["time"] > impulse_time
+        ]
+
+        if len(after_impulse) < 5:
+            continue
+
+        # =========================
+        # LONG: висхідний імпульс
+        # =========================
+
         if (
-            c["close"] > c["open"]
+            impulse["close"] > impulse["open"]
             and body >= avg_range * 1.5
             and body / candle_range >= 0.60
         ):
-            zone_low = c["open"]
-            zone_high = c["open"] + body * 0.35
+            zone_low = impulse["open"]
+            zone_high = impulse["open"] + body * 0.35
 
-            tests = [
-                x for x in recent
-                if x["low"] <= zone_high
-                and x["high"] >= zone_low
-            ]
+            reset_level = zone_high + avg_range * 0.10
 
-            if len(tests) >= MIN_RETESTS:
-                last = recent[-1]
+            retests = 0
+            armed = True
+            last_retest_index = None
 
-                if last["close"] > zone_high:
-                    stop = min(x["low"] for x in tests)
+            for j, candle in enumerate(after_impulse):
 
-                    return {
-                        "strategy": "IMPULSE RETEST",
-                        "direction": "LONG",
-                        "entry": last["close"],
-                        "stop": stop - avg_range * 0.10,
-                        "tp1": last["close"] + avg_range,
-                        "tp2": last["close"] + avg_range * 2,
-                        "tp3": last["close"] + avg_range * 3
-                    }
+                # Новий ретест можливий тільки після того,
+                # як ціна вийшла із зони вгору
+                if not armed:
+                    if candle["close"] > reset_level:
+                        armed = True
+                    continue
 
-        # SHORT імпульс
+                # Один підхід до зони = один ретест
+                touched = (
+                    candle["low"] <= zone_high
+                    and candle["high"] >= zone_low
+                )
+
+                if touched:
+                    retests += 1
+                    last_retest_index = j
+                    armed = False
+
+            last = after_impulse[-1]
+
+            if (
+                retests >= MIN_RETESTS
+                and last_retest_index is not None
+                and last["close"] > zone_high
+            ):
+                # Стоп за найнижчою точкою ретестів
+                touched_candles = [
+                    x for x in after_impulse
+                    if x["low"] <= zone_high
+                    and x["high"] >= zone_low
+                ]
+
+                stop = min(x["low"] for x in touched_candles)
+                stop -= avg_range * 0.10
+
+                entry = last["close"]
+                risk = entry - stop
+
+                if risk <= 0:
+                    continue
+
+                return {
+                    "strategy": "IMPULSE RETEST",
+                    "direction": "LONG",
+                    "entry": entry,
+                    "stop": stop,
+                    "tp1": entry + risk,
+                    "tp2": entry + risk * 2,
+                    "tp3": entry + risk * 3,
+                    "retests": retests
+                }
+
+        # =========================
+        # SHORT: низхідний імпульс
+        # =========================
+
         if (
-            c["close"] < c["open"]
+            impulse["close"] < impulse["open"]
             and body >= avg_range * 1.5
             and body / candle_range >= 0.60
         ):
-            zone_high = c["open"]
-            zone_low = c["open"] - body * 0.35
+            zone_high = impulse["open"]
+            zone_low = impulse["open"] - body * 0.35
 
-            tests = [
-                x for x in recent
-                if x["high"] >= zone_low
-                and x["low"] <= zone_high
-            ]
+            reset_level = zone_low - avg_range * 0.10
 
-            if len(tests) >= MIN_RETESTS:
-                last = recent[-1]
+            retests = 0
+            armed = True
+            last_retest_index = None
 
-                if last["close"] < zone_low:
-                    stop = max(x["high"] for x in tests)
+            for j, candle in enumerate(after_impulse):
 
-                    return {
-                        "strategy": "IMPULSE RETEST",
-                        "direction": "SHORT",
-                        "entry": last["close"],
-                        "stop": stop + avg_range * 0.10,
-                        "tp1": last["close"] - avg_range,
-                        "tp2": last["close"] - avg_range * 2,
-                        "tp3": last["close"] - avg_range * 3
-                    }
+                # Новий ретест можливий тільки після того,
+                # як ціна вийшла із зони вниз
+                if not armed:
+                    if candle["close"] < reset_level:
+                        armed = True
+                    continue
+
+                touched = (
+                    candle["high"] >= zone_low
+                    and candle["low"] <= zone_high
+                )
+
+                if touched:
+                    retests += 1
+                    last_retest_index = j
+                    armed = False
+
+            last = after_impulse[-1]
+
+            if (
+                retests >= MIN_RETESTS
+                and last_retest_index is not None
+                and last["close"] < zone_low
+            ):
+                touched_candles = [
+                    x for x in after_impulse
+                    if x["high"] >= zone_low
+                    and x["low"] <= zone_high
+                ]
+
+                stop = max(x["high"] for x in touched_candles)
+                stop += avg_range * 0.10
+
+                entry = last["close"]
+                risk = stop - entry
+
+                if risk <= 0:
+                    continue
+
+                return {
+                    "strategy": "IMPULSE RETEST",
+                    "direction": "SHORT",
+                    "entry": entry,
+                    "stop": stop,
+                    "tp1": entry - risk,
+                    "tp2": entry - risk * 2,
+                    "tp3": entry - risk * 3,
+                    "retests": retests
+                }
 
     return None
-
+        
 
 def detect_rounding(candles_1h, candles_15m):
     """
