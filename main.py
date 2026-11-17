@@ -2240,92 +2240,9 @@ def format_scan_report(report):
 # Захист від одночасного запуску декількох сканувань
 SCAN_LOCK = asyncio.Lock()
 
-
-# =====================================================
-# ФІЛЬТР МІНІМАЛЬНОГО ДОБОВОГО ОБ'ЄМУ
-# =====================================================
-
-MIN_24H_VOLUME_USD = 400_000
-
-
-# =====================================================
-# ОТРИМАННЯ ДОБОВИХ ОБ'ЄМІВ УСІХ МОНЕТ З BINGX
-# =====================================================
-
-async def get_24h_ticker_volumes(session):
-
-    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
-
-    try:
-        async with session.get(url, timeout=10) as response:
-
-            if response.status != 200:
-                print(
-                    f"[TICKER ERROR] HTTP {response.status}",
-                    flush=True
-                )
-                return None
-
-            result = await response.json()
-
-        if str(result.get("code")) != "0":
-            print(
-                f"[TICKER ERROR] BingX: {result}",
-                flush=True
-            )
-            return None
-
-        data = result.get("data")
-
-        if isinstance(data, dict):
-            data = [data]
-
-        if not isinstance(data, list):
-            print(
-                "[TICKER ERROR] Некоректний формат даних",
-                flush=True
-            )
-            return None
-
-        volumes = {}
-
-        for item in data:
-
-            symbol = item.get("symbol")
-            quote_volume = item.get("quoteVolume")
-
-            if not symbol or quote_volume is None:
-                continue
-
-            try:
-                volumes[symbol] = float(quote_volume)
-            except (ValueError, TypeError):
-                continue
-
-        if not volumes:
-            print(
-                "[TICKER ERROR] Не отримано обсягів монет",
-                flush=True
-            )
-            return None
-
-        print(
-            f"[TICKER] Отримано обсяги для {len(volumes)} монет",
-            flush=True
-        )
-
-        return volumes
-
-    except Exception as e:
-        print(
-            f"[TICKER ERROR] {e}",
-            flush=True
-        )
-        return None
-
-
 # =====================================================
 # ОСНОВНЕ СКАНУВАННЯ РИНКУ
+# Добовий об'єм уже відфільтрований у main_bot_loop()
 # =====================================================
 
 async def scan_5min_loop(session, symbols):
@@ -2347,58 +2264,36 @@ async def scan_5min_loop(session, symbols):
 
         report = create_scan_report()
 
-        # ЕТАП 1. Отримуємо добові обсяги всіх монет
-        volumes = await get_24h_ticker_volumes(session)
+        # symbols уже містить тільки монети з 24h оборотом >= $400 000
+        filtered_symbols = list(symbols)
 
-        # Якщо запит не вдався — зупиняємо сканування
-        if volumes is None:
+        print(
+            f"[INFO] Монет після фільтра добового обороту: "
+            f"{len(filtered_symbols)}",
+            flush=True
+        )
 
+        if not filtered_symbols:
             add_report_item(
                 report,
-                "errors",
-                "Не вдалося отримати 24-годинні обсяги BingX. Сканування зупинено."
+                "other_rejections",
+                "Немає монет, які пройшли фільтр добового обороту."
             )
 
             await send_telegram(format_scan_report(report))
 
             print(
-                "[INFO] Сканування зупинено через помилку Ticker API.",
+                "[INFO] Немає монет для сканування.",
                 flush=True
             )
             return
 
-        # ЕТАП 2. Фільтруємо монети за добовим оборотом
-        filtered_symbols = []
-
-        for sym in symbols:
-
-            volume_24h = volumes.get(sym, 0)
-
-            if volume_24h >= MIN_24H_VOLUME_USD:
-                filtered_symbols.append(sym)
-
-        rejected_count = len(symbols) - len(filtered_symbols)
-
-        print(
-            f"[VOLUME FILTER] Пройшли: {len(filtered_symbols)} "
-            f"із {len(symbols)} монет. "
-            f"Відсіяно: {rejected_count}",
-            flush=True
-        )
-
-        add_report_item(
-            report,
-            "low_volume",
-            f"Відсіяно за оборотом 24h: {rejected_count} монет "
-            f"(мінімум {MIN_24H_VOLUME_USD:,.0f} USDT)"
-        )
-
-        # ЕТАП 3. Аналізуємо тільки монети, які пройшли фільтр
+        # Аналізуємо монети пакетами
         batch_size = 10
         total_symbols = len(filtered_symbols)
 
         print(
-            f"[INFO] До перевірки свічок: {total_symbols} монет",
+            f"[INFO] До аналізу: {total_symbols} монет",
             flush=True
         )
 
@@ -2501,7 +2396,6 @@ async def scan_5min_loop(session, symbols):
             f"[INFO] Знайдено сигналів: {len(report['signals'])}",
             flush=True
         )
-        
 
 async def main_bot_loop():
     await send_telegram(
