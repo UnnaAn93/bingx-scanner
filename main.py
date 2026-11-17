@@ -2569,24 +2569,37 @@ async def main_bot_loop():
                 # 2. Перевіряємо отримані тікери
                 if cycle_ok:
 
-                    tickers_data = (
-                        res.get("data", [])
-                        if isinstance(res, dict)
-                        else []
-                    )
-
-                    if isinstance(tickers_data, dict):
-                        tickers_data = [tickers_data]
-
-                    if (
-                        not isinstance(tickers_data, list)
-                        or not tickers_data
-                    ):
+                    if not isinstance(res, dict):
                         print(
-                            "[TICKER ERROR] Порожня або некоректна відповідь",
+                            f"[TICKER ERROR] "
+                            f"Неочікуваний формат: {type(res).__name__} | "
+                            f"Відповідь: {str(res)[:500]}",
                             flush=True
                         )
                         cycle_ok = False
+
+                    else:
+                        api_code = str(res.get("code", "відсутній"))
+                        api_msg = res.get("msg", "відсутнє")
+                        tickers_data = res.get("data", [])
+
+                        if isinstance(tickers_data, dict):
+                            tickers_data = [tickers_data]
+
+                        if (
+                            api_code != "0"
+                            or not isinstance(tickers_data, list)
+                            or not tickers_data
+                        ):
+                            print(
+                                f"[TICKER ERROR] "
+                                f"API code: {api_code} | "
+                                f"Повідомлення: {api_msg} | "
+                                f"Тип data: {type(res.get('data')).__name__} | "
+                                f"Відповідь: {str(res)[:500]}",
+                                flush=True
+                            )
+                            cycle_ok = False
 
                 # 3. Фільтруємо монети за добовим оборотом
                 if cycle_ok:
