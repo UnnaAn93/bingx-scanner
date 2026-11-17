@@ -136,7 +136,7 @@ async def get_klines(session, symbol, interval, limit=100):
     global KLINES_STATS_100410
     global KLINES_BLOCK_REASON
 
-    url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
+    url = f"{BINGX_BASE_URL}/openApi/swap/v2/quote/klines"
 
     params = {
         "symbol": symbol,
