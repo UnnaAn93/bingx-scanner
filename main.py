@@ -37,17 +37,59 @@ def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(("0.0.0.0", port), HealthCheckHandler).serve_forever()
 
+
 async def send_telegram(text: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TELEGRAM] Не задано токен або chat_id", flush=True)
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
+
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
+    # Розбиваємо повідомлення на частини до 3500 символів
+    chunks = []
+    current = ""
+
+    for line in text.split("\n"):
+        candidate = current + ("\n" if current else "") + line
+
+        if len(candidate) > 3500 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current)
+
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(url, json=payload, timeout=10) as resp:
-                pass
-        except:
-            pass
+        for chunk in chunks:
+            payload = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": chunk,
+                "parse_mode": "Markdown"
+            }
+
+            try:
+                async with session.post(
+                    url,
+                    json=payload,
+                    timeout=10
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        print(
+                            f"[TELEGRAM ERROR] {resp.status}: {error_text}",
+                            flush=True
+                        )
+
+            except Exception as e:
+                print(
+                    f"[TELEGRAM ERROR] {e}",
+                    flush=True
+                )
 
 async def get_klines(session, symbol, interval, limit=100):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
@@ -1010,6 +1052,7 @@ async def analyze_signal(session, symbol):
         print(f"[ERROR in {symbol}] {e}", flush=True)
         return None
  
+
 def create_scan_report():
     return {
         "high_correlation": [],
@@ -1021,10 +1064,51 @@ def create_scan_report():
         "invalid_stop": [],
         "invalid_tp": [],
         "signals": [],
-        "errors": []
+        "errors": [],
+        "cooldown": [],
+        "other_rejections": []
     }
-    
 
+
+def add_report_item(report, category, message):
+    if report is None or category not in report:
+        return
+
+    if message not in report[category]:
+        report[category].append(message)
+
+
+def format_scan_report(report):
+    sections = [
+        ("🎯 ТОРГОВІ СИГНАЛИ", "signals"),
+        ("📊 ВИСОКА КОРЕЛЯЦІЯ З BTC", "high_correlation"),
+        ("📉 НЕДОСТАТНІЙ ОБ'ЄМ", "low_volume"),
+        ("🔎 НЕМАЄ RANGE SWEEP", "no_sweep"),
+        ("🔎 НЕМАЄ ROUNDING", "no_rounding"),
+        ("🔎 НЕМАЄ IMPULSE RETEST", "no_impulse_retest"),
+        ("⏳ Є СТРУКТУРА, АЛЕ НЕМАЄ ПІДТВЕРДЖЕННЯ", "waiting_confirmation"),
+        ("🛑 НЕКОРЕКТНИЙ STOP LOSS", "invalid_stop"),
+        ("🎯 НЕКОРЕКТНІ TAKE PROFIT", "invalid_tp"),
+        ("⚠️ ІНШІ ВІДХИЛЕННЯ", "other_rejections"),
+        ("🔁 ПРОПУЩЕНО ЧЕРЕЗ COOLDOWN", "cooldown"),
+        ("❌ ПОМИЛКИ", "errors")
+    ]
+
+    lines = ["📋 ЗВІТ СКАНУВАННЯ РИНКУ"]
+
+    for title, key in sections:
+        items = report.get(key, [])
+
+        lines.append("")
+        lines.append(f"{title} ({len(items)}):")
+
+        if items:
+            lines.extend(f"• {item}" for item in items)
+        else:
+            lines.append("• Немає")
+
+    return "\n".join(lines)
+    
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку...", flush=True)
 
