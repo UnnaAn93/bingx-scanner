@@ -1498,15 +1498,25 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
                         )
 
     return None
-    
-async def analyze_signal(session, symbol):
+
+
+async def analyze_signal(session, symbol, report=None):
     try:
         now = time.time()
 
+        def log(category, reason):
+            add_report_item(
+                report,
+                category,
+                f"{symbol} — {reason}"
+            )
+
+        # Перевірка cooldown
         if (
             symbol in signal_cooldowns
             and now - signal_cooldowns[symbol] < COOLDOWN_PERIOD
         ):
+            log("cooldown", "пропущено через cooldown")
             return None
 
         if symbol == "BTC-USDT":
@@ -1519,12 +1529,21 @@ async def analyze_signal(session, symbol):
         )
 
         if not raw_1h or not raw_15m:
+            log("other_rejections", "не вдалося отримати свічки")
             return None
 
-        candles_1h = prepare_candles(raw_1h, 60 * 60 * 1000)
-        candles_15m = prepare_candles(raw_15m, 15 * 60 * 1000)
+        candles_1h = prepare_candles(
+            raw_1h,
+            60 * 60 * 1000
+        )
+
+        candles_15m = prepare_candles(
+            raw_15m,
+            15 * 60 * 1000
+        )
 
         if len(candles_1h) < 30 or len(candles_15m) < 48:
+            log("other_rejections", "недостатньо підготовлених свічок")
             return None
 
         # Фільтр об'єму: останні 3 свічки проти попередніх 20
@@ -1532,15 +1551,21 @@ async def analyze_signal(session, symbol):
         recent = candles_15m[-3:]
 
         if not historical or not recent:
+            log("other_rejections", "немає даних для перевірки об'єму")
             return None
 
-        avg_volume = sum(x["volume"] for x in historical) / len(historical)
+        avg_volume = (
+            sum(x["volume"] for x in historical) / len(historical)
+        )
+
         recent_volume = sum(x["volume"] for x in recent)
 
         if avg_volume <= 0:
+            log("low_volume", "некоректний середній об'єм")
             return None
 
         if recent_volume < avg_volume * 3 * VOLUME_MULTIPLIER:
+            log("low_volume", "об'єм нижче необхідного рівня")
             return None
 
         # Перевірка кореляції з BTC
@@ -1567,30 +1592,46 @@ async def analyze_signal(session, symbol):
 
                 # Відсікаємо тільки сильну позитивну кореляцію
                 if corr >= 0.60:
+                    log(
+                        "high_correlation",
+                        f"кореляція з BTC {corr:.2f}"
+                    )
                     return None
 
-        # Перевіряємо всі три стратегії незалежно
+        # Перевіряємо всі чотири стратегії незалежно
         detectors = [
             detect_range_sweep,
             detect_impulse_retest,
-            detect_rounding
+            detect_rounding,
+            detect_double_bottom_top
         ]
 
         setups = []
 
         for detector in detectors:
             try:
-                setup = detector(candles_1h, candles_15m)
+                setup = detector(
+                    candles_1h,
+                    candles_15m,
+                    report,
+                    symbol
+                )
 
                 if setup is not None:
                     setups.append(setup)
 
             except Exception as e:
+                log(
+                    "errors",
+                    f"{detector.__name__}: {e}"
+                )
+
                 print(
                     f"[STRATEGY ERROR] {symbol} "
                     f"{detector.__name__}: {e}",
                     flush=True
                 )
+
                 continue
 
         if not setups:
@@ -1607,11 +1648,13 @@ async def analyze_signal(session, symbol):
             timeout=5
         ) as resp:
             if resp.status != 200:
+                log("other_rejections", "помилка отримання актуальної ціни")
                 return None
 
             ticker_data = await resp.json()
 
         if ticker_data.get("code") != 0:
+            log("other_rejections", "BingX не повернув актуальну ціну")
             return None
 
         ticker = ticker_data.get("data")
@@ -1620,6 +1663,7 @@ async def analyze_signal(session, symbol):
             ticker = ticker[0] if ticker else None
 
         if not ticker or not ticker.get("lastPrice"):
+            log("other_rejections", "відсутня актуальна ціна")
             return None
 
         entry = float(ticker["lastPrice"])
@@ -1631,6 +1675,10 @@ async def analyze_signal(session, symbol):
             direction = setup.get("direction")
 
             if direction not in ("LONG", "SHORT"):
+                log(
+                    "other_rejections",
+                    f"{setup.get('strategy', 'UNKNOWN')}: невідомий напрямок"
+                )
                 continue
 
             try:
@@ -1639,17 +1687,29 @@ async def analyze_signal(session, symbol):
                 # Стоп повинен бути з правильного боку від входу
                 if direction == "LONG":
                     if stop >= entry:
+                        log(
+                            "invalid_stop",
+                            f"{setup['strategy']}: стоп не нижче входу"
+                        )
                         continue
 
                     risk = entry - stop
 
                 else:
                     if stop <= entry:
+                        log(
+                            "invalid_stop",
+                            f"{setup['strategy']}: стоп не вище входу"
+                        )
                         continue
 
                     risk = stop - entry
 
                 if risk <= 0:
+                    log(
+                        "invalid_stop",
+                        f"{setup['strategy']}: некоректний ризик"
+                    )
                     continue
 
                 # Перераховуємо цілі від актуальної ціни входу
@@ -1666,9 +1726,18 @@ async def analyze_signal(session, symbol):
                 # Перевіряємо правильність цілей
                 if direction == "LONG":
                     if not (entry < tp1 < tp2 < tp3):
+                        log(
+                            "invalid_tp",
+                            f"{setup['strategy']}: неправильний порядок TP"
+                        )
                         continue
+
                 else:
                     if not (entry > tp1 > tp2 > tp3):
+                        log(
+                            "invalid_tp",
+                            f"{setup['strategy']}: неправильний порядок TP"
+                        )
                         continue
 
                 levels = calculate_trade_levels(
@@ -1681,6 +1750,10 @@ async def analyze_signal(session, symbol):
                 )
 
                 if levels is None:
+                    log(
+                        "invalid_tp",
+                        f"{setup['strategy']}: не вдалося розрахувати торгові рівні"
+                    )
                     continue
 
                 # Успішно сформований сигнал
@@ -1702,7 +1775,17 @@ async def analyze_signal(session, symbol):
                     **levels
                 }
 
-            except (KeyError, TypeError, ValueError, ZeroDivisionError) as e:
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                ZeroDivisionError
+            ) as e:
+                log(
+                    "errors",
+                    f"{setup.get('strategy', 'UNKNOWN')}: {e}"
+                )
+
                 print(
                     f"[SETUP ERROR] {symbol} "
                     f"{setup.get('strategy', 'UNKNOWN')}: {e}",
@@ -1714,10 +1797,18 @@ async def analyze_signal(session, symbol):
         return None
 
     except Exception as e:
-        print(f"[ERROR in {symbol}] {e}", flush=True)
-        return None
- 
+        add_report_item(
+            report,
+            "errors",
+            f"{symbol} — загальна помилка: {e}"
+        )
 
+        print(
+            f"[ERROR in {symbol}] {e}",
+            flush=True
+        )
+        return None
+        
 def create_scan_report():
     return {
         "high_correlation": [],
