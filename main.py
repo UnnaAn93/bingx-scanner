@@ -1009,17 +1009,33 @@ async def analyze_signal(session, symbol):
     except Exception as e:
         print(f"[ERROR in {symbol}] {e}", flush=True)
         return None
-        
+ 
+def create_scan_report():
+    return {
+        "high_correlation": [],
+        "low_volume": [],
+        "no_sweep": [],
+        "no_rounding": [],
+        "no_impulse_retest": [],
+        "waiting_confirmation": [],
+        "invalid_stop": [],
+        "invalid_tp": [],
+        "signals": [],
+        "errors": []
+    }
+    
+
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку...", flush=True)
 
+    report = create_scan_report()
     batch_size = 20
 
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i + batch_size]
 
         tasks = [
-            analyze_signal(session, sym)
+            analyze_signal(session, sym, report)
             for sym in batch
         ]
 
@@ -1029,9 +1045,26 @@ async def scan_5min_loop(session, symbols):
                 return_exceptions=True
             )
 
-            for setup in results:
+            for sym, setup in zip(batch, results):
+
+                if isinstance(setup, Exception):
+                    report["errors"].append(
+                        f"{sym} — {str(setup)}"
+                    )
+                    print(
+                        f"[SCAN ERROR] {sym}: {setup}",
+                        flush=True
+                    )
+                    continue
+
                 if not isinstance(setup, dict):
                     continue
+
+                report["signals"].append(
+                    f"{setup['symbol']} — "
+                    f"{setup['direction']} — "
+                    f"{setup['strategy']}"
+                )
 
                 msg = (
                     f"🎯 **НОВИЙ СИГНАЛ**\n"
@@ -1058,10 +1091,18 @@ async def scan_5min_loop(session, symbols):
                 flush=True
             )
 
+            report["errors"].append(
+                f"Помилка пакета {i // batch_size + 1}: {e}"
+            )
+
         await asyncio.sleep(0.3)
 
-    print("[INFO] Сканування ринку завершено.", flush=True)
+    # Надсилаємо один звіт після завершення всього сканування
+    report_msg = format_scan_report(report)
+    await send_telegram(report_msg)
 
+    print("[INFO] Сканування ринку завершено.", flush=True)
+    
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 # Константа мінімального добового об'єму (в USD)
