@@ -261,20 +261,23 @@ async def job_daily_sweep_report(session, symbols):
 signal_cooldowns = {}
 COOLDOWN_PERIOD = 3600  # 1 година
 
+
 def candle_timestamp_ms(candle):
     ts = candle.get("time", candle.get("openTime"))
 
     if ts is None:
         return 0
 
-    ts = int(ts)
+    try:
+        ts = int(float(ts))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
     # Якщо час прийшов у секундах, переводимо в мілісекунди
-    if ts < 10_000_000_000:
+    if 0 < ts < 10_000_000_000:
         ts *= 1000
 
     return ts
-
 
 def get_closed_candles(raw_candles, interval_ms):
     now_ms = int(time.time() * 1000)
