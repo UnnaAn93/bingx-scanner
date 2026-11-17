@@ -732,12 +732,12 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
         "tp3": tp3
     }
 
-
 def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     """
-    Пошук боковика на 1H.
-    LONG: прокол нижньої межі та повернення всередину.
-    SHORT: прокол верхньої межі та повернення всередину.
+    Звичайний боковик:
+    - щонайменше 10 закритих свічок 1H;
+    - LONG: прокол нижньої межі та закриття назад усередині;
+    - SHORT: прокол верхньої межі та закриття назад усередині.
     """
 
     name = symbol or "Невідома монета"
@@ -745,130 +745,89 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    if len(candles_1h) < RANGE_LOOKBACK_1H:
-        log("other_rejections", "недостатньо свічок 1H для RANGE SWEEP")
+    if len(candles_1h) < 11 or len(candles_15m) < 3:
+        log("other_rejections", "недостатньо свічок для RANGE SWEEP")
         return None
 
-    if len(candles_15m) < ENTRY_LOOKBACK_15M:
-        log("other_rejections", "недостатньо свічок 15M для RANGE SWEEP")
-        return None
-
-    # Діапазон визначаємо за попередніми годинними свічками.
-    # Останню годинну свічку не включаємо.
-    range_candles = candles_1h[-RANGE_LOOKBACK_1H-1:-1]
+    # Останню годинну свічку не беремо до діапазону.
+    # Потрібно щонайменше 10 свічок для формування боковика.
+    range_candles = candles_1h[-11:-1]
 
     range_high = max(c["high"] for c in range_candles)
     range_low = min(c["low"] for c in range_candles)
+    range_size = range_high - range_low
 
-    if range_high <= range_low:
+    if range_size <= 0:
         log("no_sweep", "некоректний діапазон 1H")
         return None
 
-    range_size = range_high - range_low
+    atr_1h = calculate_atr(candles_1h[:-1], 14)
 
-    # Не беремо надто широкий діапазон
-    avg_price = sum(c["close"] for c in range_candles) / len(range_candles)
-
-    if range_size / avg_price > 0.08:
-        log("no_sweep", "діапазон 1H занадто широкий")
+    if atr_1h <= 0:
+        log("other_rejections", "не вдалося розрахувати ATR 1H")
         return None
 
-    # Перевіряємо, чи ціна торкалася обох меж
-    tolerance = range_size * 0.10
-
-    low_touches = sum(
-        1 for c in range_candles
-        if c["low"] <= range_low + tolerance
-    )
-
-    high_touches = sum(
-        1 for c in range_candles
-        if c["high"] >= range_high - tolerance
-    )
-
-    if low_touches < MIN_RANGE_TOUCHES:
-        log("no_sweep", "недостатньо торкань нижньої межі діапазону")
+    # Відсікаємо виражений рух, який не схожий на боковик.
+    if range_size > atr_1h * 6:
+        log("no_sweep", "останні 10 свічок 1H не утворюють боковик")
         return None
 
-    if high_touches < MIN_RANGE_TOUCHES:
-        log("no_sweep", "недостатньо торкань верхньої межі діапазону")
-        return None
+    recent = candles_15m[-8:]
 
-    recent = candles_15m[-ENTRY_LOOKBACK_15M:]
+    # Перевіряємо найсвіжіший свіп нижньої межі.
+    for i in range(len(recent) - 2, -1, -1):
+        candle = recent[i]
+        confirm = recent[i + 1]
 
-    long_sweep_seen = False
-    short_sweep_seen = False
+        if candle["low"] < range_low and candle["close"] > range_low:
+            if confirm["close"] > range_low:
+                stop = min(
+                    x["low"] for x in recent[max(0, i - 2):i + 2]
+                )
 
-    # LONG: свіп нижньої межі
-    for i in range(len(recent) - 1, max(-1, len(recent) - 9), -1):
-        c = recent[i]
+                return {
+                    "strategy": "RANGE SWEEP",
+                    "direction": "LONG",
+                    "entry": confirm["close"],
+                    "stop": stop - atr_1h * 0.10,
+                    "tp1": (range_low + range_high) / 2,
+                    "tp2": range_high,
+                    "tp3": range_high + range_size * 0.5
+                }
 
-        if c["low"] < range_low and c["close"] > range_low:
-            long_sweep_seen = True
+    # Перевіряємо найсвіжіший свіп верхньої межі.
+    for i in range(len(recent) - 2, -1, -1):
+        candle = recent[i]
+        confirm = recent[i + 1]
 
-            # Підтвердження: наступна закрита свічка утримує рівень
-            if i + 1 < len(recent):
-                confirm = recent[i + 1]
+        if candle["high"] > range_high and candle["close"] < range_high:
+            if confirm["close"] < range_high:
+                stop = max(
+                    x["high"] for x in recent[max(0, i - 2):i + 2]
+                )
 
-                if confirm["close"] > range_low:
-                    stop = min(
-                        x["low"] for x in recent[max(0, i-2):i+2]
-                    )
+                return {
+                    "strategy": "RANGE SWEEP",
+                    "direction": "SHORT",
+                    "entry": confirm["close"],
+                    "stop": stop + atr_1h * 0.10,
+                    "tp1": (range_low + range_high) / 2,
+                    "tp2": range_low,
+                    "tp3": range_low - range_size * 0.5
+                }
 
-                    return {
-                        "strategy": "RANGE SWEEP",
-                        "direction": "LONG",
-                        "entry": confirm["close"],
-                        "stop": stop - range_size * 0.03,
-                        "tp1": (range_low + range_high) / 2,
-                        "tp2": range_high,
-                        "tp3": range_high + range_size * 0.5
-                    }
-
-    # SHORT: свіп верхньої межі
-    for i in range(len(recent) - 1, max(-1, len(recent) - 9), -1):
-        c = recent[i]
-
-        if c["high"] > range_high and c["close"] < range_high:
-            short_sweep_seen = True
-
-            if i + 1 < len(recent):
-                confirm = recent[i + 1]
-
-                if confirm["close"] < range_high:
-                    stop = max(
-                        x["high"] for x in recent[max(0, i-2):i+2]
-                    )
-
-                    return {
-                        "strategy": "RANGE SWEEP",
-                        "direction": "SHORT",
-                        "entry": confirm["close"],
-                        "stop": stop + range_size * 0.03,
-                        "tp1": (range_low + range_high) / 2,
-                        "tp2": range_low,
-                        "tp3": range_low - range_size * 0.5
-                    }
-
-    if long_sweep_seen or short_sweep_seen:
-        log("waiting_confirmation", "RANGE SWEEP: свіп є, але немає підтвердження на 15M")
-    else:
-        log("no_sweep", "діапазон є, але свіпу межі на 15M немає")
-
+    log("no_sweep", "боковик 1H є, але підтвердженого свіпу на 15M немає")
     return None
-    
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
-    Рахує окремі ретести, а не кількість свічок у зоні.
+    Продовження руху після сильного імпульсу.
 
-    LONG:
-    1. Є сильна висхідна імпульсна свічка.
-    2. Ціна повертається до зони імпульсу.
-    3. Після ретесту ціна повинна відійти від зони.
-    4. Лише після цього наступне повернення рахується новим ретестом.
-
-    SHORT — дзеркально.
+    1. На 1H імпульс від початку до екстремуму має бути не менше 8 ATR.
+    2. Імпульс може складатися з однієї або кількох свічок.
+    3. Після імпульсу має бути рух ціни у зворотному напрямку.
+    4. Після відкату формується флет щонайменше з 8 свічок 15M.
+    5. Сигнал — закриття 15M за межами флета в напрямку початкового імпульсу.
     """
 
     name = symbol or "Невідома монета"
@@ -876,218 +835,189 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    if len(candles_1h) < 20 or len(candles_15m) < 20:
+    if len(candles_1h) < 20 or len(candles_15m) < 10:
         log("other_rejections", "недостатньо свічок для IMPULSE RETEST")
         return None
 
-    hourly = candles_1h[-20:]
-    recent = candles_15m[-48:]
+    atr_15m = calculate_atr(candles_15m[:-1], 14)
 
-    avg_range = sum(
-        x["high"] - x["low"] for x in hourly[:-5]
-    ) / max(1, len(hourly[:-5]))
-
-    if avg_range <= 0:
-        log("other_rejections", "некоректний середній діапазон свічок 1H")
+    if atr_15m <= 0:
+        log("other_rejections", "не вдалося розрахувати ATR 15M")
         return None
 
-    impulse_found = False
-    after_impulse_found = False
-    retest_found = False
-    confirmation_missing = False
-    invalid_risk = False
+    hourly = candles_1h
+    recent_15m = candles_15m
 
-    # Перевіряємо останні 5 годинних свічок
-    for i in range(len(hourly) - 1, len(hourly) - 6, -1):
-        impulse = hourly[i]
+    impulse_candidates = []
 
-        body = abs(impulse["close"] - impulse["open"])
-        candle_range = impulse["high"] - impulse["low"]
+    # Шукаємо імпульс на 1H.
+    # Він може тривати від 1 до 12 свічок.
+    # Останню годинну свічку не використовуємо як завершений імпульс.
+    last_hour_index = len(hourly) - 2
 
-        if candle_range <= 0:
-            continue
+    for end_idx in range(last_hour_index, max(13, last_hour_index - 36), -1):
+        for length in range(1, 13):
+            start_idx = end_idx - length + 1
 
-        # Перевіряємо, чи є сильний імпульс
-        is_bullish_impulse = (
-            impulse["close"] > impulse["open"]
-            and body >= avg_range * 1.5
-            and body / candle_range >= 0.60
-        )
+            if start_idx < 14:
+                continue
 
-        is_bearish_impulse = (
-            impulse["close"] < impulse["open"]
-            and body >= avg_range * 1.5
-            and body / candle_range >= 0.60
-        )
+            impulse_candles = hourly[start_idx:end_idx + 1]
 
-        if not is_bullish_impulse and not is_bearish_impulse:
-            continue
+            atr_before = calculate_atr(hourly[:start_idx], 14)
 
-        impulse_found = True
+            if atr_before <= 0:
+                continue
 
-        # Беремо тільки 15m свічки, які сформувалися
-        # ПІСЛЯ імпульсної 1H свічки
-        impulse_time = impulse["time"]
+            start_price = impulse_candles[0]["open"]
+            impulse_high = max(c["high"] for c in impulse_candles)
+            impulse_low = min(c["low"] for c in impulse_candles)
+
+            bullish_move = impulse_high - start_price
+            bearish_move = start_price - impulse_low
+
+            if bullish_move >= atr_before * 8:
+                direction = "LONG"
+                impulse_extreme = impulse_high
+                impulse_size = bullish_move
+            elif bearish_move >= atr_before * 8:
+                direction = "SHORT"
+                impulse_extreme = impulse_low
+                impulse_size = bearish_move
+            else:
+                continue
+
+            impulse_end_time = impulse_candles[-1]["time"]
+
+            impulse_candidates.append({
+                "direction": direction,
+                "extreme": impulse_extreme,
+                "size": impulse_size,
+                "end_time": impulse_end_time,
+                "end_idx": end_idx,
+                "atr": atr_before
+            })
+
+    if not impulse_candidates:
+        log("no_impulse_retest", "не знайдено імпульсу 1H від 8 ATR")
+        return None
+
+    # Спочатку перевіряємо найновіший знайдений імпульс.
+    impulse_candidates.sort(
+        key=lambda x: x["end_time"],
+        reverse=True
+    )
+
+    for impulse in impulse_candidates:
+        direction = impulse["direction"]
+        extreme = impulse["extreme"]
+        impulse_time = impulse["end_time"]
 
         after_impulse = [
-            x for x in recent
-            if x["time"] > impulse_time
+            c for c in recent_15m
+            if c["time"] > impulse_time
         ]
 
-        if len(after_impulse) < 5:
+        # Потрібні 8 свічок флета та окрема свічка пробою.
+        if len(after_impulse) < 10:
             continue
 
-        after_impulse_found = True
+        # Остання свічка — можлива свічка пробою.
+        breakout = after_impulse[-1]
 
-        # LONG: висхідний імпульс
-        if is_bullish_impulse:
-            zone_low = impulse["open"]
-            zone_high = impulse["open"] + body * 0.35
-            reset_level = zone_high + avg_range * 0.10
+        # Перед нею шукаємо щонайменше 8 свічок консолідації.
+        flat = after_impulse[-9:-1]
 
-            retests = 0
-            armed = True
-            last_retest_index = None
+        if len(flat) < 8:
+            continue
 
-            for j, candle in enumerate(after_impulse):
-                if not armed:
-                    if candle["close"] > reset_level:
-                        armed = True
-                    continue
+        flat_high = max(c["high"] for c in flat)
+        flat_low = min(c["low"] for c in flat)
+        flat_size = flat_high - flat_low
 
-                touched = (
-                    candle["low"] <= zone_high
-                    and candle["high"] >= zone_low
-                )
+        # Флет має бути компактним відносно волатильності 15M.
+        if flat_size <= 0 or flat_size > atr_15m * 4:
+            continue
 
-                if touched:
-                    retests += 1
-                    last_retest_index = j
-                    armed = False
+        # Переконуємося, що перед флетом був відкат проти імпульсу.
+        candles_before_flat = after_impulse[:-9]
 
-            last = after_impulse[-1]
+        if not candles_before_flat:
+            continue
 
-            if retests >= MIN_RETESTS:
-                retest_found = True
+        if direction == "LONG":
+            pullback_low = min(c["low"] for c in candles_before_flat)
 
-            if (
-                retests >= MIN_RETESTS
-                and last_retest_index is not None
-                and last["close"] > zone_high
-            ):
-                touched_candles = [
-                    x for x in after_impulse
-                    if x["low"] <= zone_high
-                    and x["high"] >= zone_low
-                ]
+            # Будь-який рух униз після висхідного імпульсу.
+            pullback_found = pullback_low < extreme
 
-                stop = min(x["low"] for x in touched_candles)
-                stop -= avg_range * 0.10
+            breakout_found = (
+                breakout["close"] > flat_high
+                and breakout["close"] > breakout["open"]
+            )
 
-                entry = last["close"]
-                risk = entry - stop
+            if not pullback_found or not breakout_found:
+                continue
 
-                if risk <= 0:
-                    invalid_risk = True
-                    continue
+            stop = min(
+                c["low"] for c in after_impulse
+            ) - atr_15m * 0.10
 
-                return {
-                    "strategy": "IMPULSE RETEST",
-                    "direction": "LONG",
-                    "entry": entry,
-                    "stop": stop,
-                    "tp1": entry + risk,
-                    "tp2": entry + risk * 2,
-                    "tp3": entry + risk * 3,
-                    "retests": retests
-                }
+            entry = breakout["close"]
+            risk = entry - stop
 
-            if retests >= MIN_RETESTS:
-                confirmation_missing = True
+            if risk <= 0:
+                continue
 
-        # SHORT: низхідний імпульс
-        if is_bearish_impulse:
-            zone_high = impulse["open"]
-            zone_low = impulse["open"] - body * 0.35
-            reset_level = zone_low - avg_range * 0.10
+            return {
+                "strategy": "IMPULSE RETEST",
+                "direction": "LONG",
+                "entry": entry,
+                "stop": stop,
+                "tp1": entry + risk,
+                "tp2": entry + risk * 2,
+                "tp3": entry + risk * 3
+            }
 
-            retests = 0
-            armed = True
-            last_retest_index = None
+        else:
+            pullback_high = max(c["high"] for c in candles_before_flat)
 
-            for j, candle in enumerate(after_impulse):
-                if not armed:
-                    if candle["close"] < reset_level:
-                        armed = True
-                    continue
+            # Будь-який рух угору після низхідного імпульсу.
+            pullback_found = pullback_high > extreme
 
-                touched = (
-                    candle["high"] >= zone_low
-                    and candle["low"] <= zone_high
-                )
+            breakout_found = (
+                breakout["close"] < flat_low
+                and breakout["close"] < breakout["open"]
+            )
 
-                if touched:
-                    retests += 1
-                    last_retest_index = j
-                    armed = False
+            if not pullback_found or not breakout_found:
+                continue
 
-            last = after_impulse[-1]
+            stop = max(
+                c["high"] for c in after_impulse
+            ) + atr_15m * 0.10
 
-            if retests >= MIN_RETESTS:
-                retest_found = True
+            entry = breakout["close"]
+            risk = stop - entry
 
-            if (
-                retests >= MIN_RETESTS
-                and last_retest_index is not None
-                and last["close"] < zone_low
-            ):
-                touched_candles = [
-                    x for x in after_impulse
-                    if x["high"] >= zone_low
-                    and x["low"] <= zone_high
-                ]
+            if risk <= 0:
+                continue
 
-                stop = max(x["high"] for x in touched_candles)
-                stop += avg_range * 0.10
+            return {
+                "strategy": "IMPULSE RETEST",
+                "direction": "SHORT",
+                "entry": entry,
+                "stop": stop,
+                "tp1": entry - risk,
+                "tp2": entry - risk * 2,
+                "tp3": entry - risk * 3
+            }
 
-                entry = last["close"]
-                risk = stop - entry
-
-                if risk <= 0:
-                    invalid_risk = True
-                    continue
-
-                return {
-                    "strategy": "IMPULSE RETEST",
-                    "direction": "SHORT",
-                    "entry": entry,
-                    "stop": stop,
-                    "tp1": entry - risk,
-                    "tp2": entry - risk * 2,
-                    "tp3": entry - risk * 3,
-                    "retests": retests
-                }
-
-            if retests >= MIN_RETESTS:
-                confirmation_missing = True
-
-    # Діагностика, якщо сигнал не знайдено
-    if invalid_risk:
-        log("invalid_stop", "IMPULSE RETEST: некоректний ризик або стоп")
-    elif not impulse_found:
-        log("no_impulse_retest", "немає сильного імпульсу на 1H")
-    elif not after_impulse_found:
-        log("waiting_confirmation", "імпульс 1H є, але недостатньо свічок 15M після нього")
-    elif not retest_found:
-        log("waiting_confirmation", "імпульс є, але немає потрібної кількості ретестів")
-    elif confirmation_missing:
-        log("waiting_confirmation", "ретести є, але немає підтвердження продовження руху на 15M")
-    else:
-        log("waiting_confirmation", "умови IMPULSE RETEST ще не виконані")
-
+    log(
+        "waiting_confirmation",
+        "імпульс 1H знайдено, але немає послідовності відкат → флет 8 свічок 15M → пробій"
+    )
     return None
-
-
 def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     """
     Ранній пошук заокруглення на 1H.
