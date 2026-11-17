@@ -25,6 +25,8 @@ MIN_RETESTS = 3
 
 VOLUME_MULTIPLIER = 1.8
 
+MIN_24H_VOLUME_USD = 400_000
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
