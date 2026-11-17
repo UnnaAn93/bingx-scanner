@@ -220,8 +220,9 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
         return [], [], []
         
 
+
 def calculate_correlation(prices_a, prices_b):
-    if len(prices_a) != len(prices_b) or len(prices_a) < 10:
+    if len(prices_a) != len(prices_b) or len(prices_a) < 11:
         return 0.0
 
     try:
@@ -229,27 +230,39 @@ def calculate_correlation(prices_a, prices_b):
         prices_b = [float(x) for x in prices_b]
 
         if not all(
-            math.isfinite(x) for x in prices_a + prices_b
+            math.isfinite(x) and x > 0
+            for x in prices_a + prices_b
         ):
             return 0.0
 
-        n = len(prices_a)
+        # Рахуємо відсоткові зміни між сусідніми свічками
+        returns_a = [
+            (prices_a[i] / prices_a[i - 1] - 1) * 100
+            for i in range(1, len(prices_a))
+        ]
 
-        mean_a = sum(prices_a) / n
-        mean_b = sum(prices_b) / n
+        returns_b = [
+            (prices_b[i] / prices_b[i - 1] - 1) * 100
+            for i in range(1, len(prices_b))
+        ]
+
+        n = len(returns_a)
+
+        mean_a = sum(returns_a) / n
+        mean_b = sum(returns_b) / n
 
         num = sum(
-            (prices_a[i] - mean_a) *
-            (prices_b[i] - mean_b)
+            (returns_a[i] - mean_a) *
+            (returns_b[i] - mean_b)
             for i in range(n)
         )
 
         den_a = sum(
-            (x - mean_a) ** 2 for x in prices_a
+            (x - mean_a) ** 2 for x in returns_a
         )
 
         den_b = sum(
-            (x - mean_b) ** 2 for x in prices_b
+            (x - mean_b) ** 2 for x in returns_b
         )
 
         if den_a <= 0 or den_b <= 0:
@@ -261,6 +274,7 @@ def calculate_correlation(prices_a, prices_b):
 
     except (TypeError, ValueError, OverflowError):
         return 0.0
+
     
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) З ДАНИМИ СВІЧОК ---
 # --- 1. СУВОРИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
