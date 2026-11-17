@@ -1828,8 +1828,8 @@ async def analyze_signal(session, symbol, report=None):
 
         # Завантажуємо свічки один раз
         raw_1h, raw_15m = await asyncio.gather(
-            get_klines(session, symbol, "1h", 100),
-            get_klines(session, symbol, "15m", 100)
+            get_cached_klines(session, symbol, "1h", 100),
+            get_cached_klines(session, symbol, "15m", 100)
         )
 
         if not raw_1h or not raw_15m:
