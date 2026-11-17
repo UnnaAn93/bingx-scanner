@@ -91,20 +91,69 @@ async def send_telegram(text: str):
                     flush=True
                 )
 
+
 async def get_klines(session, symbol, interval, limit=100):
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
+
     try:
-        async with session.get(url, params=params, timeout=5) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                klines = data.get("data", [])
-                if not klines and isinstance(data, list):
-                    klines = data
-                return klines
-    except:
-        pass
-    return []
+        async with session.get(
+            url,
+            params=params,
+            timeout=10
+        ) as resp:
+
+            if resp.status != 200:
+                error_text = await resp.text()
+
+                print(
+                    f"[KLINES HTTP ERROR] {symbol} {interval}: "
+                    f"HTTP {resp.status} — {error_text[:300]}",
+                    flush=True
+                )
+                return []
+
+            data = await resp.json()
+
+            if not isinstance(data, dict):
+                print(
+                    f"[KLINES ERROR] {symbol} {interval}: "
+                    f"неочікуваний формат відповіді",
+                    flush=True
+                )
+                return []
+
+            if data.get("code") != 0:
+                print(
+                    f"[KLINES API ERROR] {symbol} {interval}: "
+                    f"{data.get('code')} — {data.get('msg', 'Unknown error')}",
+                    flush=True
+                )
+                return []
+
+            klines = data.get("data", [])
+
+            if not isinstance(klines, list):
+                print(
+                    f"[KLINES ERROR] {symbol} {interval}: "
+                    f"data не є списком",
+                    flush=True
+                )
+                return []
+
+            return klines
+
+    except Exception as e:
+        print(
+            f"[KLINES EXCEPTION] {symbol} {interval}: {e}",
+            flush=True
+        )
+        return []
 
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
