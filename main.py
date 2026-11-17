@@ -1712,15 +1712,19 @@ async def analyze_signal(session, symbol, report=None):
         if len(btc_1h) >= 24:
             btc_map = {
                 candle_timestamp_ms(x): float(x["close"])
-                for x in btc_1h[-24:]
+                for x in btc_1h
             }
 
             coin_map = {
                 x["time"]: float(x["close"])
-                for x in candles_1h[-24:]
+                for x in candles_1h
             }
 
+            # Зіставляємо свічки за однаковим часом
             common = sorted(set(btc_map) & set(coin_map))
+
+            # Беремо останні 24 спільні свічки
+            common = common[-24:]
 
             if len(common) >= 15:
                 corr = calculate_correlation(
