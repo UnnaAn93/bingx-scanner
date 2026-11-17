@@ -492,7 +492,7 @@ def get_closed_candles(raw_candles, interval_ms):
     return closed
 
 btc_cache = {"time": 0, "candles": []}
-
+BTC_CACHE_LOCK = asyncio.Lock()
 
 async def get_btc_1h_candles(session):
     now = time.time()
