@@ -2397,7 +2397,9 @@ async def scan_5min_loop(session, symbols):
             flush=True
         )
 
+
 async def main_bot_loop():
+
     await send_telegram(
         "🚀 Торговий бот успішно запущено!\n"
         "• Щоденний звіт по закритих свіпах активний\n"
@@ -2409,12 +2411,15 @@ async def main_bot_loop():
     scan_interval = 300
 
     while True:
+
         cycle_start = time.monotonic()
 
         try:
             async with aiohttp.ClientSession() as session:
 
-                # 1. Отримуємо тікери з цінами та добовими об'ємами
+                cycle_ok = True
+
+                # 1. Отримуємо всі тікери BingX
                 ticker_url = (
                     f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
                 )
@@ -2429,142 +2434,183 @@ async def main_bot_loop():
                             f"[TICKER HTTP ERROR] HTTP {resp.status}",
                             flush=True
                         )
-                        continue
+                        cycle_ok = False
 
-                    res = await resp.json()
+                    else:
+                        res = await resp.json()
 
-                tickers_data = (
-                    res.get("data", [])
-                    if isinstance(res, dict)
-                    else []
-                )
+                # 2. Перевіряємо отримані тікери
+                if cycle_ok:
 
-                if isinstance(tickers_data, dict):
-                    tickers_data = [tickers_data]
+                    tickers_data = (
+                        res.get("data", [])
+                        if isinstance(res, dict)
+                        else []
+                    )
 
-                # 2. Фільтруємо монети за добовим об'ємом у USDT
-                valid_volume_symbols = set()
+                    if isinstance(tickers_data, dict):
+                        tickers_data = [tickers_data]
 
-                for t in tickers_data:
-                    if not isinstance(t, dict):
-                        continue
-
-                    sym = t.get("symbol", "")
-
-                    if not sym:
-                        continue
-
-                    try:
-                        quote_volume = float(
-                            t.get("quoteVolume") or 0
-                        )
-
-                        # Якщо quoteVolume відсутній,
-                        # розраховуємо обсяг через ціну
-                        if quote_volume <= 0:
-                            base_volume = float(
-                                t.get("volume") or 0
-                            )
-
-                            price = float(
-                                t.get("lastPrice")
-                                or t.get("price")
-                                or 0
-                            )
-
-                            quote_volume = base_volume * price
-
-                        if quote_volume >= MIN_24H_VOLUME_USD:
-                            valid_volume_symbols.add(sym)
-
-                    except (TypeError, ValueError, OverflowError):
-                        continue
-
-                # 3. Отримуємо список доступних контрактів
-                contracts_url = (
-                    f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts"
-                )
-
-                async with session.get(
-                    contracts_url,
-                    timeout=10
-                ) as resp:
-
-                    if resp.status != 200:
+                    if (
+                        not isinstance(tickers_data, list)
+                        or not tickers_data
+                    ):
                         print(
-                            f"[CONTRACTS HTTP ERROR] HTTP {resp.status}",
+                            "[TICKER ERROR] Порожня або некоректна відповідь",
                             flush=True
                         )
-                        continue
+                        cycle_ok = False
 
-                    res_c = await resp.json()
+                # 3. Фільтруємо монети за добовим оборотом
+                if cycle_ok:
 
-                if isinstance(res_c, list):
-                    contracts_data = res_c
+                    valid_volume_symbols = set()
 
-                elif isinstance(res_c, dict):
-                    contracts_data = res_c.get("data", [])
+                    for t in tickers_data:
 
-                else:
-                    contracts_data = []
+                        if not isinstance(t, dict):
+                            continue
 
-                if not isinstance(contracts_data, list):
+                        sym = t.get("symbol", "")
+
+                        if not sym:
+                            continue
+
+                        try:
+                            quote_volume = float(
+                                t.get("quoteVolume") or 0
+                            )
+
+                            # Якщо quoteVolume відсутній,
+                            # розраховуємо оборот через ціну
+                            if quote_volume <= 0:
+
+                                base_volume = float(
+                                    t.get("volume") or 0
+                                )
+
+                                price = float(
+                                    t.get("lastPrice")
+                                    or t.get("price")
+                                    or 0
+                                )
+
+                                quote_volume = base_volume * price
+
+                            if quote_volume >= MIN_24H_VOLUME_USD:
+                                valid_volume_symbols.add(sym)
+
+                        except (
+                            TypeError,
+                            ValueError,
+                            OverflowError
+                        ):
+                            continue
+
+                # 4. Отримуємо список доступних контрактів
+                if cycle_ok:
+
+                    contracts_url = (
+                        f"{BINGX_BASE_URL}/openApi/swap/v2/quote/contracts"
+                    )
+
+                    async with session.get(
+                        contracts_url,
+                        timeout=10
+                    ) as resp:
+
+                        if resp.status != 200:
+                            print(
+                                f"[CONTRACTS HTTP ERROR] HTTP {resp.status}",
+                                flush=True
+                            )
+                            cycle_ok = False
+
+                        else:
+                            res_c = await resp.json()
+
+                # 5. Перевіряємо відповідь контрактів
+                if cycle_ok:
+
+                    if isinstance(res_c, list):
+                        contracts_data = res_c
+
+                    elif isinstance(res_c, dict):
+                        contracts_data = res_c.get("data", [])
+
+                    else:
+                        contracts_data = []
+
+                    if (
+                        not isinstance(contracts_data, list)
+                        or not contracts_data
+                    ):
+                        print(
+                            "[CONTRACTS ERROR] Порожня або некоректна відповідь",
+                            flush=True
+                        )
+                        cycle_ok = False
+
+                # 6. Формуємо список монет для сканування
+                if cycle_ok:
+
+                    exclude_patterns = (
+                        "NCF",
+                        "NCS",
+                        "NCC",
+                        "-USDC"
+                    )
+
+                    symbols = [
+                        item["symbol"]
+                        for item in contracts_data
+                        if (
+                            isinstance(item, dict)
+                            and item.get("symbol")
+                            and not any(
+                                p in item["symbol"]
+                                for p in exclude_patterns
+                            )
+                            and item["symbol"] in valid_volume_symbols
+                        )
+                    ]
+
                     print(
-                        "[CONTRACTS ERROR] Некоректний формат відповіді",
+                        f"[INFO] Відфільтровано монет "
+                        f"з об'ємом >= $400K: {len(symbols)}",
                         flush=True
                     )
-                    continue
 
-                # 4. Виключаємо непотрібні контракти
-                exclude_patterns = (
-                    "NCF",
-                    "NCS",
-                    "NCC",
-                    "-USDC"
-                )
+                    # 7. Перевірка щоденного звіту
+                    now_utc = datetime.now(timezone.utc)
+                    today_str = now_utc.strftime("%Y-%m-%d")
 
-                symbols = [
-                    item["symbol"]
-                    for item in contracts_data
                     if (
-                        isinstance(item, dict)
-                        and item.get("symbol")
-                        and not any(
-                            p in item["symbol"]
-                            for p in exclude_patterns
+                        last_daily_report_date != today_str
+                        and now_utc.minute >= 5
+                    ):
+                        await job_daily_sweep_report(
+                            session,
+                            symbols
                         )
-                        and item["symbol"] in valid_volume_symbols
-                    )
-                ]
 
-                print(
-                    f"[INFO] Відфільтровано монет "
-                    f"з об'ємом >= $400K: {len(symbols)}",
-                    flush=True
-                )
+                        last_daily_report_date = today_str
 
-                # 5. Перевірка щоденного звіту
-                now_utc = datetime.now(timezone.utc)
-                today_str = now_utc.strftime("%Y-%m-%d")
-
-                if (
-                    last_daily_report_date != today_str
-                    and now_utc.minute >= 5
-                ):
-                    await job_daily_sweep_report(
+                    # 8. Запускаємо сканування ринку
+                    await scan_5min_loop(
                         session,
                         symbols
                     )
 
-                    last_daily_report_date = today_str
-
-                # 6. Запускаємо сканування ринку
-                await scan_5min_loop(
-                    session,
-                    symbols
-                )
+                else:
+                    print(
+                        "[INFO] Цикл пропущено через помилку API. "
+                        "Наступна спроба за розкладом.",
+                        flush=True
+                    )
 
         except Exception as e:
+
             import traceback
 
             print(
@@ -2573,7 +2619,7 @@ async def main_bot_loop():
                 flush=True
             )
 
-        # 7. Дотримуємося інтервалу між початками циклів
+        # 9. Дотримуємося інтервалу між початками циклів
         elapsed = time.monotonic() - cycle_start
         sleep_time = max(0, scan_interval - elapsed)
 
@@ -2583,7 +2629,7 @@ async def main_bot_loop():
         )
 
         await asyncio.sleep(sleep_time)
-
+        
 async def self_ping_loop():
     while True:
         await asyncio.sleep(240)
