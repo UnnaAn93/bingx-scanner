@@ -2268,7 +2268,6 @@ def format_scan_report(report):
 
     sections = [
         ("🎯 ТОРГОВІ СИГНАЛИ", "signals"),
-        ("📊 ВИСОКА КОРЕЛЯЦІЯ З BTC", "high_correlation"),
         ("🔎 НЕМАЄ RANGE SWEEP", "no_sweep"),
         ("🔎 НЕМАЄ ROUNDING", "no_rounding"),
         ("🔎 НЕМАЄ IMPULSE RETEST", "no_impulse_retest"),
