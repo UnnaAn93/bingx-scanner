@@ -97,11 +97,11 @@ async def send_telegram(text: str):
 
 
 # Глобальне обмеження запитів KLINES BingX
-KLINES_SEMAPHORE = asyncio.Semaphore(3)
+KLINES_SEMAPHORE = asyncio.Semaphore(1)
 KLINES_REQUEST_LOCK = asyncio.Lock()
 
 KLINES_LAST_REQUEST = 0.0
-KLINES_MIN_INTERVAL = 0.25
+KLINES_MIN_INTERVAL = 0.5
 
 # Час завершення блокування BingX
 KLINES_BLOCKED_UNTIL = 0.0
