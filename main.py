@@ -561,65 +561,58 @@ btc_cache = {"time": 0, "candles": []}
 BTC_CACHE_LOCK = asyncio.Lock()
 
 async def get_btc_1h_candles(session):
-    now = time.time()
+    async with BTC_CACHE_LOCK:
+        now = time.time()
 
-    # Оновлюємо кеш кожні 15 хвилин
-    if (
-        btc_cache["candles"]
-        and now - btc_cache["time"] < 900
-    ):
-        return btc_cache["candles"]
+        raw_btc = await get_cached_klines(
+            session,
+            "BTC-USDT",
+            "1h",
+            50
+        )
 
-    raw_btc = await get_cached_klines(
-        session,
-        "BTC-USDT",
-        "1h",
-        50
-    )
+        if not raw_btc:
+            # Використовуємо попередні дані, якщо їм не більше 30 хвилин
+            if (
+                btc_cache["candles"]
+                and now - btc_cache["time"] <= 1800
+            ):
+                print(
+                    "[BTC CACHE] Використовуємо попередні дані BTC",
+                    flush=True
+                )
+                return btc_cache["candles"]
 
-    if not raw_btc:
-        # Дозволяємо використати кеш лише до 30 хвилин
-        if (
-            btc_cache["candles"]
-            and now - btc_cache["time"] <= 1800
-        ):
             print(
-                "[BTC CACHE] Використовуємо попередні дані BTC",
+                "[BTC CACHE ERROR] Немає актуальних даних BTC",
                 flush=True
             )
-            return btc_cache["candles"]
+            return []
 
-        print(
-            "[BTC CACHE ERROR] Немає актуальних даних BTC",
-            flush=True
-        )
-        return []
-
-    closed_btc = prepare_candles(
-        raw_btc,
-        60 * 60 * 1000
-    )
-
-    if len(closed_btc) < 24:
-        print(
-            "[BTC CACHE ERROR] Недостатньо закритих свічок BTC",
-            flush=True
+        closed_btc = prepare_candles(
+            raw_btc,
+            60 * 60 * 1000
         )
 
-        if (
-            btc_cache["candles"]
-            and now - btc_cache["time"] <= 1800
-        ):
-            return btc_cache["candles"]
+        if len(closed_btc) < 24:
+            print(
+                "[BTC CACHE ERROR] Недостатньо закритих свічок BTC",
+                flush=True
+            )
 
-        return []
+            if (
+                btc_cache["candles"]
+                and now - btc_cache["time"] <= 1800
+            ):
+                return btc_cache["candles"]
 
-    btc_cache["candles"] = closed_btc
-    btc_cache["time"] = now
+            return []
 
-    return closed_btc
+        btc_cache["candles"] = closed_btc
+        btc_cache["time"] = now
 
-
+        return closed_btc
+        
 def prepare_candles(raw_candles, interval_ms):
     closed = get_closed_candles(raw_candles, interval_ms)
 
@@ -641,7 +634,6 @@ def prepare_candles(raw_candles, interval_ms):
             continue
 
     return result
-
 
 def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     risk_per_coin = abs(entry - stop)
