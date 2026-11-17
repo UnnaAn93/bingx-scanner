@@ -2333,11 +2333,12 @@ def add_report_item(report, category, message):
         report[category].append(message)
 
 
+
 def format_scan_report(report):
+
     sections = [
         ("🎯 ТОРГОВІ СИГНАЛИ", "signals"),
         ("📊 ВИСОКА КОРЕЛЯЦІЯ З BTC", "high_correlation"),
-        ("📉 НЕДОСТАТНІЙ ОБ'ЄМ", "low_volume"),
         ("🔎 НЕМАЄ RANGE SWEEP", "no_sweep"),
         ("🔎 НЕМАЄ ROUNDING", "no_rounding"),
         ("🔎 НЕМАЄ IMPULSE RETEST", "no_impulse_retest"),
@@ -2350,18 +2351,106 @@ def format_scan_report(report):
         ("❌ ПОМИЛКИ", "errors")
     ]
 
+    # Переклад типових причин українською
+    translations = {
+        "діапазон 1h занадто широкий":
+            "Діапазон 1H занадто широкий",
+
+        "немає сильного імпульсу на 1h":
+            "Немає сильного імпульсу на 1H",
+
+        "немає підтвердженого подвійного дна або вершини на 1h":
+            "Немає підтвердженого подвійного дна або вершини на 1H",
+
+        "немає потрібної кількості ретестів":
+            "Недостатньо ретестів",
+
+        "немає нижчого максимуму на 15m":
+            "Немає нижчого максимуму на 15M",
+
+        "немає локального дна на 15m":
+            "Немає локального дна на 15M",
+
+        "ціна вже відійшла від вершини більш ніж на 2 atr":
+            "Ціна відійшла від вершини більш ніж на 2 ATR",
+
+        "хибний пробій, ціна повернулася під рівень":
+            "Хибний пробій — ціна повернулася під рівень",
+
+        "немає зони j або перетину":
+            "Немає зони J або необхідного перетину",
+
+        "умови не збіглися (немає зони j або перетину)":
+            "Не виконані умови входу: немає зони J або необхідного перетину",
+
+        "об'єм нижче необхідного рівня":
+            "Об'єм нижче необхідного рівня"
+    }
+
     lines = ["📋 ЗВІТ СКАНУВАННЯ РИНКУ"]
 
     for title, key in sections:
+
         items = report.get(key, [])
 
         lines.append("")
         lines.append(f"{title} ({len(items)}):")
 
-        if items:
-            lines.extend(f"• {item}" for item in items)
-        else:
+        if not items:
             lines.append("• Немає")
+            continue
+
+        # Сигнали залишаємо окремими записами
+        if key == "signals":
+
+            for item in items:
+                lines.append(f"• {item}")
+
+            continue
+
+        # Групування монет за причинами
+        grouped = {}
+
+        for item in items:
+
+            item = str(item).strip()
+
+            if not item:
+                continue
+
+            if " — " in item:
+                symbol, reason = item.split(" — ", 1)
+                symbol = symbol.strip()
+                reason = reason.strip()
+            else:
+                symbol = item
+                reason = "Причину не вказано"
+
+            # Переклад причини
+            reason_lower = reason.lower()
+
+            for original, translated in translations.items():
+                if original in reason_lower:
+                    reason = translated
+                    break
+
+            if reason not in grouped:
+                grouped[reason] = []
+
+            if symbol not in grouped[reason]:
+                grouped[reason].append(symbol)
+
+        # Спочатку виводимо причини та кількість
+        for reason, symbols in grouped.items():
+
+            lines.append("")
+            lines.append(
+                f"Причина: {reason} ({len(symbols)} шт.)"
+            )
+
+            # Кожна монета окремим рядком
+            for symbol in symbols:
+                lines.append(f"• {symbol}")
 
     return "\n".join(lines)
     
