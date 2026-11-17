@@ -497,7 +497,8 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
     return None
     
-def detect_impulse_retest(candles_1h, candles_15m):
+
+def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
     Рахує окремі ретести, а не кількість свічок у зоні.
 
@@ -510,7 +511,13 @@ def detect_impulse_retest(candles_1h, candles_15m):
     SHORT — дзеркально.
     """
 
+    name = symbol or "Невідома монета"
+
+    def log(category, reason):
+        add_report_item(report, category, f"{name} — {reason}")
+
     if len(candles_1h) < 20 or len(candles_15m) < 20:
+        log("other_rejections", "недостатньо свічок для IMPULSE RETEST")
         return None
 
     hourly = candles_1h[-20:]
@@ -521,7 +528,14 @@ def detect_impulse_retest(candles_1h, candles_15m):
     ) / max(1, len(hourly[:-5]))
 
     if avg_range <= 0:
+        log("other_rejections", "некоректний середній діапазон свічок 1H")
         return None
+
+    impulse_found = False
+    after_impulse_found = False
+    retest_found = False
+    confirmation_missing = False
+    invalid_risk = False
 
     # Перевіряємо останні 5 годинних свічок
     for i in range(len(hourly) - 1, len(hourly) - 6, -1):
@@ -532,6 +546,24 @@ def detect_impulse_retest(candles_1h, candles_15m):
 
         if candle_range <= 0:
             continue
+
+        # Перевіряємо, чи є сильний імпульс
+        is_bullish_impulse = (
+            impulse["close"] > impulse["open"]
+            and body >= avg_range * 1.5
+            and body / candle_range >= 0.60
+        )
+
+        is_bearish_impulse = (
+            impulse["close"] < impulse["open"]
+            and body >= avg_range * 1.5
+            and body / candle_range >= 0.60
+        )
+
+        if not is_bullish_impulse and not is_bearish_impulse:
+            continue
+
+        impulse_found = True
 
         # Беремо тільки 15m свічки, які сформувалися
         # ПІСЛЯ імпульсної 1H свічки
@@ -545,18 +577,12 @@ def detect_impulse_retest(candles_1h, candles_15m):
         if len(after_impulse) < 5:
             continue
 
-        # =========================
-        # LONG: висхідний імпульс
-        # =========================
+        after_impulse_found = True
 
-        if (
-            impulse["close"] > impulse["open"]
-            and body >= avg_range * 1.5
-            and body / candle_range >= 0.60
-        ):
+        # LONG: висхідний імпульс
+        if is_bullish_impulse:
             zone_low = impulse["open"]
             zone_high = impulse["open"] + body * 0.35
-
             reset_level = zone_high + avg_range * 0.10
 
             retests = 0
@@ -564,15 +590,11 @@ def detect_impulse_retest(candles_1h, candles_15m):
             last_retest_index = None
 
             for j, candle in enumerate(after_impulse):
-
-                # Новий ретест можливий тільки після того,
-                # як ціна вийшла із зони вгору
                 if not armed:
                     if candle["close"] > reset_level:
                         armed = True
                     continue
 
-                # Один підхід до зони = один ретест
                 touched = (
                     candle["low"] <= zone_high
                     and candle["high"] >= zone_low
@@ -585,12 +607,14 @@ def detect_impulse_retest(candles_1h, candles_15m):
 
             last = after_impulse[-1]
 
+            if retests >= MIN_RETESTS:
+                retest_found = True
+
             if (
                 retests >= MIN_RETESTS
                 and last_retest_index is not None
                 and last["close"] > zone_high
             ):
-                # Стоп за найнижчою точкою ретестів
                 touched_candles = [
                     x for x in after_impulse
                     if x["low"] <= zone_high
@@ -604,6 +628,7 @@ def detect_impulse_retest(candles_1h, candles_15m):
                 risk = entry - stop
 
                 if risk <= 0:
+                    invalid_risk = True
                     continue
 
                 return {
@@ -617,18 +642,13 @@ def detect_impulse_retest(candles_1h, candles_15m):
                     "retests": retests
                 }
 
-        # =========================
-        # SHORT: низхідний імпульс
-        # =========================
+            if retests >= MIN_RETESTS:
+                confirmation_missing = True
 
-        if (
-            impulse["close"] < impulse["open"]
-            and body >= avg_range * 1.5
-            and body / candle_range >= 0.60
-        ):
+        # SHORT: низхідний імпульс
+        if is_bearish_impulse:
             zone_high = impulse["open"]
             zone_low = impulse["open"] - body * 0.35
-
             reset_level = zone_low - avg_range * 0.10
 
             retests = 0
@@ -636,9 +656,6 @@ def detect_impulse_retest(candles_1h, candles_15m):
             last_retest_index = None
 
             for j, candle in enumerate(after_impulse):
-
-                # Новий ретест можливий тільки після того,
-                # як ціна вийшла із зони вниз
                 if not armed:
                     if candle["close"] < reset_level:
                         armed = True
@@ -655,6 +672,9 @@ def detect_impulse_retest(candles_1h, candles_15m):
                     armed = False
 
             last = after_impulse[-1]
+
+            if retests >= MIN_RETESTS:
+                retest_found = True
 
             if (
                 retests >= MIN_RETESTS
@@ -674,6 +694,7 @@ def detect_impulse_retest(candles_1h, candles_15m):
                 risk = stop - entry
 
                 if risk <= 0:
+                    invalid_risk = True
                     continue
 
                 return {
@@ -687,9 +708,25 @@ def detect_impulse_retest(candles_1h, candles_15m):
                     "retests": retests
                 }
 
-    return None
-        
+            if retests >= MIN_RETESTS:
+                confirmation_missing = True
 
+    # Діагностика, якщо сигнал не знайдено
+    if invalid_risk:
+        log("invalid_stop", "IMPULSE RETEST: некоректний ризик або стоп")
+    elif not impulse_found:
+        log("no_impulse_retest", "немає сильного імпульсу на 1H")
+    elif not after_impulse_found:
+        log("waiting_confirmation", "імпульс 1H є, але недостатньо свічок 15M після нього")
+    elif not retest_found:
+        log("waiting_confirmation", "імпульс є, але немає потрібної кількості ретестів")
+    elif confirmation_missing:
+        log("waiting_confirmation", "ретести є, але немає підтвердження продовження руху на 15M")
+    else:
+        log("waiting_confirmation", "умови IMPULSE RETEST ще не виконані")
+
+    return None
+    
 def detect_rounding(candles_1h, candles_15m):
     """
     Ранній пошук заокруглення на 1H.
