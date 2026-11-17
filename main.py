@@ -948,6 +948,189 @@ def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     return None
 
 
+def evaluate_double_breakout(
+    candles,
+    level,
+    pivot,
+    second_extreme,
+    atr,
+    avg_volume,
+    direction
+):
+    """
+    Визначає сценарій входу після пробою локального рівня.
+
+    Повертає:
+    (setup, status)
+
+    status:
+    strong_breakout
+    retest
+    waiting
+    false_breakout
+    no_breakout
+    invalid_stop
+    """
+
+    buffer = atr * 0.05
+    max_extension = atr * 1.5
+
+    last_index = len(candles) - 1
+    last = candles[-1]
+
+    active_breakout = False
+    breakout_index = None
+    breakout_seen = False
+    invalidated = False
+
+    # Відновлюємо послідовність пробою за історією свічок
+    for i, candle in enumerate(candles):
+        if direction == "LONG":
+            crossed = candle["close"] > level + buffer
+            returned = candle["close"] <= level
+        else:
+            crossed = candle["close"] < level - buffer
+            returned = candle["close"] >= level
+
+        if not active_breakout and crossed:
+            active_breakout = True
+            breakout_index = i
+            breakout_seen = True
+            invalidated = False
+
+        elif active_breakout and returned:
+            active_breakout = False
+            breakout_index = None
+            invalidated = True
+
+    if not active_breakout:
+        if breakout_seen and invalidated:
+            return None, "false_breakout"
+
+        return None, "no_breakout"
+
+    # Сценарій 1: пробій відбувся на останній свічці
+    if breakout_index == last_index:
+        body = (
+            last["close"] - last["open"]
+            if direction == "LONG"
+            else last["open"] - last["close"]
+        )
+
+        strong = (
+            body >= atr * 0.60
+            and avg_volume > 0
+            and last["volume"] >= avg_volume * 1.30
+        )
+
+        if not strong:
+            return None, "waiting"
+
+        entry = last["close"]
+
+        if direction == "LONG":
+            if entry - level > max_extension:
+                return None, "waiting"
+
+            stop = min(pivot, second_extreme) - atr * 0.30
+            risk = entry - stop
+
+            if risk <= 0:
+                return None, "invalid_stop"
+
+            return {
+                "strategy": "DOUBLE BOTTOM — STRONG BREAKOUT",
+                "direction": "LONG",
+                "entry": entry,
+                "stop": stop,
+                "tp1": entry + risk,
+                "tp2": entry + risk * 2,
+                "tp3": entry + risk * 3
+            }, "strong_breakout"
+
+        else:
+            if level - entry > max_extension:
+                return None, "waiting"
+
+            stop = max(pivot, second_extreme) + atr * 0.30
+            risk = stop - entry
+
+            if risk <= 0:
+                return None, "invalid_stop"
+
+            return {
+                "strategy": "DOUBLE TOP — STRONG BREAKOUT",
+                "direction": "SHORT",
+                "entry": entry,
+                "stop": stop,
+                "tp1": entry - risk,
+                "tp2": entry - risk * 2,
+                "tp3": entry - risk * 3
+            }, "strong_breakout"
+
+    # Сценарій 2: пробій був раніше, зараз перевіряємо ретест
+    if direction == "LONG":
+        retest = (
+            last["low"] <= level + buffer
+            and last["close"] > level
+            and last["close"] > last["open"]
+        )
+
+        if not retest:
+            return None, "waiting"
+
+        entry = last["close"]
+
+        if entry - level > max_extension:
+            return None, "waiting"
+
+        stop = min(pivot, second_extreme) - atr * 0.30
+        risk = entry - stop
+
+        if risk <= 0:
+            return None, "invalid_stop"
+
+        return {
+            "strategy": "DOUBLE BOTTOM — RETEST",
+            "direction": "LONG",
+            "entry": entry,
+            "stop": stop,
+            "tp1": entry + risk,
+            "tp2": entry + risk * 2,
+            "tp3": entry + risk * 3
+        }, "retest"
+
+    else:
+        retest = (
+            last["high"] >= level - buffer
+            and last["close"] < level
+            and last["close"] < last["open"]
+        )
+
+        if not retest:
+            return None, "waiting"
+
+        entry = last["close"]
+
+        if level - entry > max_extension:
+            return None, "waiting"
+
+        stop = max(pivot, second_extreme) + atr * 0.30
+        risk = stop - entry
+
+        if risk <= 0:
+            return None, "invalid_stop"
+
+        return {
+            "strategy": "DOUBLE TOP — RETEST",
+            "direction": "SHORT",
+            "entry": entry,
+            "stop": stop,
+            "tp1": entry - risk,
+            "tp2": entry - risk * 2,
+            "tp3": entry - risk * 3
+        }, "retest"
+    
 def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
     """
     DOUBLE BOTTOM / DOUBLE TOP
