@@ -1867,14 +1867,28 @@ def format_scan_report(report):
 
     return "\n".join(lines)
     
+
 async def scan_5min_loop(session, symbols):
     print("[INFO] Початок сканування ринку...", flush=True)
 
     report = create_scan_report()
     batch_size = 20
 
-    for i in range(0, len(symbols), batch_size):
+    total_symbols = len(symbols)
+
+    print(
+        f"[INFO] До перевірки: {total_symbols} монет",
+        flush=True
+    )
+
+    for i in range(0, total_symbols, batch_size):
         batch = symbols[i:i + batch_size]
+
+        print(
+            f"[INFO] Пакет {i // batch_size + 1}: "
+            f"{len(batch)} монет",
+            flush=True
+        )
 
         tasks = [
             analyze_signal(session, sym, report)
@@ -1889,10 +1903,14 @@ async def scan_5min_loop(session, symbols):
 
             for sym, setup in zip(batch, results):
 
+                # Обробка помилки окремої монети
                 if isinstance(setup, Exception):
-                    report["errors"].append(
+                    add_report_item(
+                        report,
+                        "errors",
                         f"{sym} — {str(setup)}"
                     )
+
                     print(
                         f"[SCAN ERROR] {sym}: {setup}",
                         flush=True
@@ -1902,12 +1920,16 @@ async def scan_5min_loop(session, symbols):
                 if not isinstance(setup, dict):
                     continue
 
-                report["signals"].append(
+                # Записуємо знайдений сигнал у звіт
+                add_report_item(
+                    report,
+                    "signals",
                     f"{setup['symbol']} — "
                     f"{setup['direction']} — "
                     f"{setup['strategy']}"
                 )
 
+                # Окреме повідомлення про торговий сигнал
                 msg = (
                     f"🎯 **НОВИЙ СИГНАЛ**\n"
                     f"🪙 Монета: `{setup['symbol']}`\n"
@@ -1919,9 +1941,11 @@ async def scan_5min_loop(session, symbols):
                     f"🎯 TP2: `{setup['tp2']:.8f}` — закрити 25%\n"
                     f"🎯 TP3: `{setup['tp3']:.8f}` — закрити 25%\n\n"
                     f"📦 Кількість: `{setup['pos_qty']:.6f}`\n"
-                    f"💵 Обсяг позиції: `{setup['notional_usd']:.2f} USD`\n"
+                    f"💵 Обсяг позиції: "
+                    f"`{setup['notional_usd']:.2f} USD`\n"
                     f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
-                    f"🛡️ Ризик на стоп: `${setup['actual_risk']:.2f}`\n\n"
+                    f"🛡️ Ризик на стоп: "
+                    f"`${setup['actual_risk']:.2f}`\n\n"
                     f"⏳ Очікування ручного відкриття."
                 )
 
@@ -1933,18 +1957,28 @@ async def scan_5min_loop(session, symbols):
                 flush=True
             )
 
-            report["errors"].append(
+            add_report_item(
+                report,
+                "errors",
                 f"Помилка пакета {i // batch_size + 1}: {e}"
             )
 
         await asyncio.sleep(0.3)
 
-    # Надсилаємо один звіт після завершення всього сканування
+    # Формуємо один загальний звіт після всіх пакетів
     report_msg = format_scan_report(report)
+
     await send_telegram(report_msg)
 
-    print("[INFO] Сканування ринку завершено.", flush=True)
-    
+    print(
+        "[INFO] Сканування ринку завершено.",
+        flush=True
+    )
+
+    print(
+        f"[INFO] Знайдено сигналів: {len(report['signals'])}",
+        flush=True
+    )
 
 # --- ГОЛОВНИЙ ДЕМОН ---
 # Константа мінімального добового об'єму (в USD)
