@@ -1818,43 +1818,55 @@ async def analyze_signal(session, symbol, report=None):
         if symbol == "BTC-USDT":
             return None
 
-        # Завантажуємо свічки один раз
-        raw_1h, raw_15m = await asyncio.gather(
-            get_cached_klines(session, symbol, "1h", 100),
-            get_cached_klines(session, symbol, "15m", 100)
+        # =====================================================
+        # ЕТАП 1. СПОЧАТКУ ЗАВАНТАЖУЄМО ТІЛЬКИ 15m СВІЧКИ
+        # =====================================================
+
+        raw_15m = await get_cached_klines(
+            session,
+            symbol,
+            "15m",
+            100
         )
 
-        if not raw_1h or not raw_15m:
-            log("other_rejections", "не вдалося отримати свічки")
+        if not raw_15m:
+            log("other_rejections", "не вдалося отримати 15m свічки")
             return None
-
-        candles_1h = prepare_candles(
-            raw_1h,
-            60 * 60 * 1000
-        )
 
         candles_15m = prepare_candles(
             raw_15m,
             15 * 60 * 1000
         )
 
-        if len(candles_1h) < 30 or len(candles_15m) < 48:
-            log("other_rejections", "недостатньо підготовлених свічок")
+        if len(candles_15m) < 48:
+            log(
+                "other_rejections",
+                "недостатньо підготовлених 15m свічок"
+            )
             return None
 
-        # Фільтр об'єму: останні 3 свічки проти попередніх 20
+        # =====================================================
+        # ЕТАП 2. ПЕРЕВІРКА СПЛЕСКУ ОБ'ЄМУ
+        # =====================================================
+
+        # Останні 3 свічки проти попередніх 20
         historical = candles_15m[-23:-3]
         recent = candles_15m[-3:]
 
         if not historical or not recent:
-            log("other_rejections", "немає даних для перевірки об'єму")
+            log(
+                "other_rejections",
+                "немає даних для перевірки об'єму"
+            )
             return None
 
         avg_volume = (
             sum(x["volume"] for x in historical) / len(historical)
         )
 
-        recent_volume = sum(x["volume"] for x in recent)
+        recent_volume = sum(
+            x["volume"] for x in recent
+        )
 
         if avg_volume <= 0:
             log("low_volume", "некоректний середній об'єм")
@@ -1864,10 +1876,41 @@ async def analyze_signal(session, symbol, report=None):
             log("low_volume", "об'єм нижче необхідного рівня")
             return None
 
-        # Перевірка кореляції з BTC
+        # =====================================================
+        # ЕТАП 3. ТІЛЬКИ ТЕПЕР ЗАВАНТАЖУЄМО 1h СВІЧКИ
+        # =====================================================
+
+        raw_1h = await get_cached_klines(
+            session,
+            symbol,
+            "1h",
+            100
+        )
+
+        if not raw_1h:
+            log("other_rejections", "не вдалося отримати 1h свічки")
+            return None
+
+        candles_1h = prepare_candles(
+            raw_1h,
+            60 * 60 * 1000
+        )
+
+        if len(candles_1h) < 30:
+            log(
+                "other_rejections",
+                "недостатньо підготовлених 1h свічок"
+            )
+            return None
+
+        # =====================================================
+        # ЕТАП 4. ПЕРЕВІРКА КОРЕЛЯЦІЇ З BTC
+        # =====================================================
+
         btc_1h = await get_btc_1h_candles(session)
 
         if len(btc_1h) >= 24:
+
             btc_map = {
                 candle_timestamp_ms(x): float(x["close"])
                 for x in btc_1h
@@ -1885,6 +1928,7 @@ async def analyze_signal(session, symbol, report=None):
             common = common[-24:]
 
             if len(common) >= 15:
+
                 corr = calculate_correlation(
                     [btc_map[t] for t in common],
                     [coin_map[t] for t in common]
@@ -1898,7 +1942,10 @@ async def analyze_signal(session, symbol, report=None):
                     )
                     return None
 
-        # Перевіряємо всі чотири стратегії незалежно
+        # =====================================================
+        # ЕТАП 5. ПЕРЕВІРКА ЧОТИРЬОХ СТРАТЕГІЙ
+        # =====================================================
+
         detectors = [
             detect_range_sweep,
             detect_impulse_retest,
@@ -1937,7 +1984,10 @@ async def analyze_signal(session, symbol, report=None):
         if not setups:
             return None
 
-        # Отримуємо актуальну ціну один раз
+        # =====================================================
+        # ЕТАП 6. ОТРИМУЄМО АКТУАЛЬНУ ЦІНУ
+        # =====================================================
+
         ticker_url = (
             f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
         )
@@ -1947,14 +1997,21 @@ async def analyze_signal(session, symbol, report=None):
             params={"symbol": symbol},
             timeout=5
         ) as resp:
+
             if resp.status != 200:
-                log("other_rejections", "помилка отримання актуальної ціни")
+                log(
+                    "other_rejections",
+                    "помилка отримання актуальної ціни"
+                )
                 return None
 
             ticker_data = await resp.json()
 
         if ticker_data.get("code") != 0:
-            log("other_rejections", "BingX не повернув актуальну ціну")
+            log(
+                "other_rejections",
+                "BingX не повернув актуальну ціну"
+            )
             return None
 
         ticker = ticker_data.get("data")
@@ -1963,13 +2020,18 @@ async def analyze_signal(session, symbol, report=None):
             ticker = ticker[0] if ticker else None
 
         if not ticker or not ticker.get("lastPrice"):
-            log("other_rejections", "відсутня актуальна ціна")
+            log(
+                "other_rejections",
+                "відсутня актуальна ціна"
+            )
             return None
 
         entry = float(ticker["lastPrice"])
 
-        # Перевіряємо кожен сетап до кінця.
-        # Якщо один не підходить — переходимо до наступного.
+        # =====================================================
+        # ЕТАП 7. ПЕРЕВІРКА СТОПА ТА TAKE PROFIT
+        # =====================================================
+
         for setup in setups:
 
             direction = setup.get("direction")
@@ -1986,6 +2048,7 @@ async def analyze_signal(session, symbol, report=None):
 
                 # Стоп повинен бути з правильного боку від входу
                 if direction == "LONG":
+
                     if stop >= entry:
                         log(
                             "invalid_stop",
@@ -1996,6 +2059,7 @@ async def analyze_signal(session, symbol, report=None):
                     risk = entry - stop
 
                 else:
+
                     if stop <= entry:
                         log(
                             "invalid_stop",
@@ -2014,17 +2078,20 @@ async def analyze_signal(session, symbol, report=None):
 
                 # Перераховуємо цілі від актуальної ціни входу
                 if direction == "LONG":
+
                     tp1 = entry + risk
                     tp2 = entry + risk * 2
                     tp3 = entry + risk * 3
 
                 else:
+
                     tp1 = entry - risk
                     tp2 = entry - risk * 2
                     tp3 = entry - risk * 3
 
                 # Перевіряємо правильність цілей
                 if direction == "LONG":
+
                     if not (entry < tp1 < tp2 < tp3):
                         log(
                             "invalid_tp",
@@ -2033,6 +2100,7 @@ async def analyze_signal(session, symbol, report=None):
                         continue
 
                 else:
+
                     if not (entry > tp1 > tp2 > tp3):
                         log(
                             "invalid_tp",
@@ -2081,6 +2149,7 @@ async def analyze_signal(session, symbol, report=None):
                 ValueError,
                 ZeroDivisionError
             ) as e:
+
                 log(
                     "errors",
                     f"{setup.get('strategy', 'UNKNOWN')}: {e}"
@@ -2093,10 +2162,10 @@ async def analyze_signal(session, symbol, report=None):
                 )
                 continue
 
-        # Жоден із сетапів не пройшов перевірки
         return None
 
     except Exception as e:
+
         add_report_item(
             report,
             "errors",
@@ -2107,6 +2176,7 @@ async def analyze_signal(session, symbol, report=None):
             f"[ERROR in {symbol}] {e}",
             flush=True
         )
+
         return None
         
 def create_scan_report():
