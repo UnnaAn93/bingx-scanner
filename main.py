@@ -1,6 +1,7 @@
 import os
 import time
 import asyncio
+import re
 import aiohttp
 import math
 import threading
@@ -92,15 +93,24 @@ async def send_telegram(text: str):
                     flush=True
                 )
 
-# Обмеження запитів до KLINES API BingX
+
+# Глобальне обмеження запитів KLINES BingX
 KLINES_SEMAPHORE = asyncio.Semaphore(3)
 KLINES_REQUEST_LOCK = asyncio.Lock()
+
 KLINES_LAST_REQUEST = 0.0
 KLINES_MIN_INTERVAL = 0.25
+
+# Час завершення блокування BingX
+KLINES_BLOCKED_UNTIL = 0.0
+
+# Резервна пауза — 5 хвилин
+KLINES_FALLBACK_COOLDOWN = 300
 
 
 async def get_klines(session, symbol, interval, limit=100):
     global KLINES_LAST_REQUEST
+    global KLINES_BLOCKED_UNTIL
 
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
 
@@ -113,14 +123,34 @@ async def get_klines(session, symbol, interval, limit=100):
     try:
         async with KLINES_SEMAPHORE:
 
-            # Глобальна пауза між запуском запитів
+            # Перевіряємо глобальне блокування
             async with KLINES_REQUEST_LOCK:
-                elapsed = time.monotonic() - KLINES_LAST_REQUEST
 
+                now = time.monotonic()
+
+                if now < KLINES_BLOCKED_UNTIL:
+                    remaining = KLINES_BLOCKED_UNTIL - now
+
+                    print(
+                        f"[KLINES COOLDOWN] {symbol} {interval}: "
+                        f"запит пропущено, залишилось "
+                        f"{remaining:.0f} сек.",
+                        flush=True
+                    )
+                    return []
+
+                # Дотримуємося паузи між запитами
+                elapsed = now - KLINES_LAST_REQUEST
                 wait_time = KLINES_MIN_INTERVAL - elapsed
 
                 if wait_time > 0:
                     await asyncio.sleep(wait_time)
+
+                # Повторна перевірка після очікування
+                now = time.monotonic()
+
+                if now < KLINES_BLOCKED_UNTIL:
+                    return []
 
                 KLINES_LAST_REQUEST = time.monotonic()
 
@@ -138,6 +168,7 @@ async def get_klines(session, symbol, interval, limit=100):
                         f"HTTP {resp.status} — {error_text[:300]}",
                         flush=True
                     )
+
                     return []
 
                 data = await resp.json()
@@ -150,13 +181,50 @@ async def get_klines(session, symbol, interval, limit=100):
                     )
                     return []
 
-                if str(data.get("code")) != "0":
-                    error_code = data.get("code")
-                    error_msg = data.get("msg", "Unknown error")
+                error_code = str(data.get("code", "0"))
+
+                if error_code == "100410":
+
+                    error_msg = str(
+                        data.get("msg", "Unknown error")
+                    )
+
+                    # Шукаємо точний timestamp розблокування
+                    match = re.search(
+                        r"(\d{13})",
+                        error_msg
+                    )
+
+                    if match:
+                        unblock_timestamp = int(match.group(1))
+                        remaining = max(
+                            0,
+                            unblock_timestamp / 1000 - time.time()
+                        )
+                    else:
+                        remaining = KLINES_FALLBACK_COOLDOWN
+
+                    async with KLINES_REQUEST_LOCK:
+                        KLINES_BLOCKED_UNTIL = max(
+                            KLINES_BLOCKED_UNTIL,
+                            time.monotonic() + remaining
+                        )
 
                     print(
+                        f"[KLINES GLOBAL BLOCK] BingX 100410. "
+                        f"Усі нові KLINES-запити зупинено "
+                        f"приблизно на {remaining:.0f} сек. "
+                        f"Причина: {error_msg}",
+                        flush=True
+                    )
+
+                    return []
+
+                if error_code != "0":
+                    print(
                         f"[KLINES API ERROR] {symbol} {interval}: "
-                        f"{error_code} — {error_msg}",
+                        f"{error_code} — "
+                        f"{data.get('msg', 'Unknown error')}",
                         flush=True
                     )
                     return []
@@ -186,6 +254,7 @@ async def get_klines(session, symbol, interval, limit=100):
             flush=True
         )
         return []
+
         
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
