@@ -1860,6 +1860,63 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
     return None
 
 
+async def get_daily_sweep_status(session, symbol):
+    """
+    Перевіряє свіп за двома останніми закритими добовими свічками.
+    Не впливає на торговий сигнал.
+    """
+    try:
+        klines = await get_klines(session, symbol, "1d", 5)
+
+        if not klines or len(klines) < 3:
+            return "не вдалося перевірити"
+
+        klines = sorted(
+            klines,
+            key=lambda x: int(
+                x.get("time", x.get("openTime", 0))
+            )
+        )
+
+        # Позавчорашня та остання повністю закрита доба
+        c_prev = klines[-3]
+        c_closed = klines[-2]
+
+        high_prev = float(c_prev["high"])
+        low_prev = float(c_prev["low"])
+
+        high_closed = float(c_closed["high"])
+        low_closed = float(c_closed["low"])
+        close_closed = float(c_closed["close"])
+
+        is_low_sweep = (
+            low_closed < low_prev
+            and close_closed > low_prev
+        )
+
+        is_high_sweep = (
+            high_closed > high_prev
+            and close_closed < high_prev
+        )
+
+        if is_low_sweep and is_high_sweep:
+            return "зверху і знизу"
+
+        if is_low_sweep:
+            return "знизу"
+
+        if is_high_sweep:
+            return "зверху"
+
+        return "ні"
+
+    except Exception as e:
+        print(
+            f"[DAILY SWEEP ERROR] {symbol}: {e}",
+            flush=True
+        )
+        return "не вдалося перевірити"
+        
 async def analyze_signal(session, symbol, report=None):
     try:
         now = time.time()
@@ -2188,6 +2245,12 @@ async def analyze_signal(session, symbol, report=None):
                     )
                     continue
 
+                # Додаткова інформація про добовий свіп
+                daily_sweep = await get_daily_sweep_status(
+                    session,
+                    symbol
+                )
+
                 # Успішно сформований сигнал
                 signal_cooldowns[symbol] = time.time()
 
@@ -2204,6 +2267,7 @@ async def analyze_signal(session, symbol, report=None):
                     "strategy": setup["strategy"],
                     "direction": direction,
                     "entry": entry,
+                    "daily_sweep": daily_sweep,
                     **levels
                 }
 
@@ -2414,6 +2478,7 @@ async def scan_5min_loop(session, symbols):
                         f"🪙 Монета: `{setup['symbol']}`\n"
                         f"📊 Стратегія: `{setup['strategy']}`\n"
                         f"📈 Напрямок: `{setup['direction']}`\n\n"
+                        f"🔍 Свіп 1D: `{setup.get('daily_sweep', 'не вдалося перевірити')}`\n\n"
                         f"🟢 Вхід: `{setup['entry']:.8f}`\n"
                         f"🔴 Стоп: `{setup['stop_loss']:.8f}`\n\n"
                         f"🎯 TP1: `{setup['tp1']:.8f}` — закрити 50%\n"
@@ -2466,12 +2531,10 @@ async def main_bot_loop():
 
     await send_telegram(
         "🚀 Торговий бот успішно запущено!\n"
-        "• Щоденний звіт по закритих свіпах активний\n"
         "• Перевірка KDJ + Об'єм "
         "(24h Vol >= $400k) кожні 5 хв активна."
     )
 
-    last_daily_report_date = None
     scan_interval = 300
 
     while True:
@@ -2644,21 +2707,6 @@ async def main_bot_loop():
                         f"з об'ємом >= $400K: {len(symbols)}",
                         flush=True
                     )
-
-                    # 7. Перевірка щоденного звіту
-                    now_utc = datetime.now(timezone.utc)
-                    today_str = now_utc.strftime("%Y-%m-%d")
-
-                    if (
-                        last_daily_report_date != today_str
-                        and now_utc.minute >= 5
-                    ):
-                        await job_daily_sweep_report(
-                            session,
-                            symbols
-                        )
-
-                        last_daily_report_date = today_str
 
                     # 8. Запускаємо сканування ринку
                     await scan_5min_loop(
