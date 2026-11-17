@@ -570,7 +570,7 @@ async def get_btc_1h_candles(session):
     ):
         return btc_cache["candles"]
 
-    raw_btc = await get_klines(
+    raw_btc = await get_cached_klines(
         session,
         "BTC-USDT",
         "1h",
