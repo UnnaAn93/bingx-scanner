@@ -106,7 +106,15 @@ KLINES_BLOCKED_UNTIL = 0.0
 
 # Резервна пауза — 5 хвилин
 KLINES_FALLBACK_COOLDOWN = 300
+# Кеш свічок для кожної монети та таймфрейму
+CANDLE_CACHE = {}
 
+# Окремі блокування для оновлення кешу кожної монети
+CANDLE_CACHE_LOCKS = {}
+
+# Невелика затримка після закриття свічки,
+# щоб BingX встиг оновити дані
+CANDLE_CACHE_GRACE_MS = 5000
 
 async def get_klines(session, symbol, interval, limit=100):
     global KLINES_LAST_REQUEST
@@ -255,6 +263,64 @@ async def get_klines(session, symbol, interval, limit=100):
         )
         return []
 
+async def get_cached_klines(session, symbol, interval, limit=100):
+    interval_ms_map = {
+        "15m": 15 * 60 * 1000,
+        "1h": 60 * 60 * 1000
+    }
+
+    interval_ms = interval_ms_map.get(interval)
+
+    if interval_ms is None:
+        return await get_klines(session, symbol, interval, limit)
+
+    now_ms = int(time.time() * 1000)
+
+    # Номер останнього повністю закритого інтервалу
+    bucket = (
+        now_ms - CANDLE_CACHE_GRACE_MS
+    ) // interval_ms
+
+    key = (symbol, interval, limit)
+
+    cached = CANDLE_CACHE.get(key)
+
+    # Якщо кеш актуальний — API не викликаємо
+    if cached and cached["bucket"] == bucket:
+        return cached["data"]
+
+    # Створюємо окреме блокування для цієї монети
+    lock = CANDLE_CACHE_LOCKS.setdefault(
+        key,
+        asyncio.Lock()
+    )
+
+    async with lock:
+
+        # Повторна перевірка після очікування блокування
+        cached = CANDLE_CACHE.get(key)
+
+        if cached and cached["bucket"] == bucket:
+            return cached["data"]
+
+        # Отримуємо свіжі свічки з BingX
+        klines = await get_klines(
+            session,
+            symbol,
+            interval,
+            limit
+        )
+
+        if not klines:
+            return []
+
+        # Зберігаємо результат у кеші
+        CANDLE_CACHE[key] = {
+            "bucket": bucket,
+            "data": klines
+        }
+
+        return klines
         
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
