@@ -1131,6 +1131,7 @@ def evaluate_double_breakout(
             "tp3": entry - risk * 3
         }, "retest"
     
+
 def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
     """
     DOUBLE BOTTOM / DOUBLE TOP
@@ -1152,8 +1153,9 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
     - Пробій локального мінімуму.
 
     Вхід:
-    - Сильний пробій: вхід після закриття свічки.
+    - Сильний пробій: ранній вхід після закриття свічки.
     - Слабкий пробій: очікування ретесту.
+    - Підтверджений ретест: вхід.
     - Хибний пробій: відмова від входу.
     """
 
@@ -1179,8 +1181,6 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
 
     LEVEL_TOLERANCE = atr_1h * 0.5
     MIN_BOUNCE = atr_1h * 1.0
-    MAX_ENTRY_EXTENSION = atr_15m * 1.5
-    BREAKOUT_BUFFER = atr_15m * 0.05
 
     MIN_SEPARATION = 4
     MAX_SEPARATION = 24
@@ -1287,10 +1287,26 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
             break
 
     if bottom_pair is None and top_pair is None:
-        log("no_double_pattern", "немає підтвердженого подвійного дна або вершини на 1H")
+        log(
+            "no_double_pattern",
+            "немає підтвердженого подвійного дна або вершини на 1H"
+        )
         return None
 
-    # Обробка LONG — DOUBLE BOTTOM
+    # Середній об'єм попередніх 15M свічок
+    volume_values = [
+        x["volume"] for x in candles_15m[-21:-1]
+    ]
+
+    avg_volume = (
+        sum(volume_values) / len(volume_values)
+        if volume_values else 0
+    )
+
+    # --------------------------------------------------
+    # LONG — DOUBLE BOTTOM
+    # --------------------------------------------------
+
     if bottom_pair is not None:
         _, second_idx, first_low, second_low, _ = bottom_pair
 
@@ -1301,7 +1317,12 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
             if x["time"] > second_time
         ]
 
-        if len(after_pattern) >= 6:
+        if len(after_pattern) < 6:
+            log(
+                "waiting_confirmation",
+                "DOUBLE BOTTOM LONG: недостатньо свічок 15M після другого дна"
+            )
+        else:
             pivot_idx = None
 
             # Шукаємо останнє локальне дно на 15M
@@ -1313,11 +1334,15 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
                     pivot_idx = i
                     break
 
-            if pivot_idx is not None and pivot_idx + 3 < len(after_pattern):
+            if pivot_idx is None or pivot_idx + 3 >= len(after_pattern):
+                log(
+                    "waiting_confirmation",
+                    "DOUBLE BOTTOM LONG: немає локального дна на 15M"
+                )
+            else:
                 pivot_low = after_pattern[pivot_idx]["low"]
 
-                rebound_slice = after_pattern[pivot_idx + 1:-1]
-
+                # Знаходимо максимум відскоку після локального дна
                 rebound_idx = max(
                     range(pivot_idx + 1, len(after_pattern) - 1),
                     key=lambda i: after_pattern[i]["high"]
@@ -1325,116 +1350,60 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
 
                 rebound_high = after_pattern[rebound_idx]["high"]
 
+                # Перевіряємо формування вищого мінімуму
                 higher_low_found = any(
                     after_pattern[i]["low"] > pivot_low
                     and after_pattern[i]["low"] < rebound_high
                     for i in range(rebound_idx + 1, len(after_pattern) - 1)
                 )
 
-                last = after_pattern[-1]
-
-                if higher_low_found:
-                    # Хибний пробій: ціна повернулася під рівень
-                    previous_breakout = any(
-                        x["close"] > rebound_high
-                        for x in after_pattern[:-1]
+                if not higher_low_found:
+                    log(
+                        "waiting_confirmation",
+                        "DOUBLE BOTTOM LONG: немає вищого мінімуму на 15M"
+                    )
+                else:
+                    setup, status = evaluate_double_breakout(
+                        candles=after_pattern,
+                        level=rebound_high,
+                        pivot=pivot_low,
+                        second_extreme=second_low,
+                        atr=atr_15m,
+                        avg_volume=avg_volume,
+                        direction="LONG"
                     )
 
-                    if previous_breakout and last["close"] <= rebound_high:
-                        log("waiting_confirmation", "DOUBLE BOTTOM LONG: хибний пробій, ціна повернулася під локальний максимум")
+                    if setup is not None:
+                        return setup
+
+                    if status == "false_breakout":
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE BOTTOM LONG: хибний пробій, ціна повернулася під рівень"
+                        )
+
+                    elif status == "waiting":
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE BOTTOM LONG: слабкий пробій або очікування ретесту"
+                        )
+
+                    elif status == "invalid_stop":
+                        log(
+                            "invalid_stop",
+                            "DOUBLE BOTTOM LONG: некоректний стоп"
+                        )
+
                     else:
-                        body = last["close"] - last["open"]
-                        volume_values = [
-                            x["volume"] for x in candles_15m[-21:-1]
-                        ]
-                        avg_volume = (
-                            sum(volume_values) / len(volume_values)
-                            if volume_values else 0
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE BOTTOM LONG: очікуємо пробій локального максимуму"
                         )
 
-                        strong_breakout = (
-                            last["close"] > rebound_high + BREAKOUT_BUFFER
-                            and body >= atr_15m * 0.60
-                            and avg_volume > 0
-                            and last["volume"] >= avg_volume * 1.30
-                        )
+    # --------------------------------------------------
+    # SHORT — DOUBLE TOP
+    # --------------------------------------------------
 
-                        weak_breakout = (
-                            last["close"] > rebound_high + BREAKOUT_BUFFER
-                        )
-
-                        # Сценарій 1: сильний пробій без очікування ретесту
-                        if strong_breakout:
-                            entry = last["close"]
-
-                            if entry - rebound_high > MAX_ENTRY_EXTENSION:
-                                log("waiting_confirmation", "DOUBLE BOTTOM LONG: сильний пробій, але ціна вже далеко від рівня")
-                            else:
-                                stop = min(pivot_low, second_low) - atr_15m * 0.30
-                                risk = entry - stop
-
-                                if risk > 0:
-                                    return {
-                                        "strategy": "DOUBLE BOTTOM — STRONG BREAKOUT",
-                                        "direction": "LONG",
-                                        "entry": entry,
-                                        "stop": stop,
-                                        "tp1": entry + risk,
-                                        "tp2": entry + risk * 2,
-                                        "tp3": entry + risk * 3
-                                    }
-                                else:
-                                    log("invalid_stop", "DOUBLE BOTTOM LONG: некоректний стоп")
-
-                        # Сценарій 2: слабкий пробій — чекаємо ретест
-                        elif weak_breakout:
-                            log("waiting_confirmation", "DOUBLE BOTTOM LONG: слабкий пробій, очікуємо ретест")
-
-                        else:
-                            # Перевіряємо, чи був пробій раніше
-                            earlier_breakout = any(
-                                x["close"] > rebound_high
-                                for x in after_pattern[:-1]
-                            )
-
-                            # Ретест: ціна повернулася до рівня,
-                            # але закрилася знову вище нього
-                            retest = (
-                                earlier_breakout
-                                and last["low"] <= rebound_high + BREAKOUT_BUFFER
-                                and last["close"] > rebound_high
-                            )
-
-                            if retest:
-                                entry = last["close"]
-
-                                if entry - rebound_high > MAX_ENTRY_EXTENSION:
-                                    log("waiting_confirmation", "DOUBLE BOTTOM LONG: ретест підтверджено, але ціна вже далеко від рівня")
-                                else:
-                                    stop = min(pivot_low, second_low) - atr_15m * 0.30
-                                    risk = entry - stop
-
-                                    if risk > 0:
-                                        return {
-                                            "strategy": "DOUBLE BOTTOM — RETEST",
-                                            "direction": "LONG",
-                                            "entry": entry,
-                                            "stop": stop,
-                                            "tp1": entry + risk,
-                                            "tp2": entry + risk * 2,
-                                            "tp3": entry + risk * 3
-                                        }
-                                    else:
-                                        log("invalid_stop", "DOUBLE BOTTOM LONG RETEST: некоректний стоп")
-
-                else:
-                    log("waiting_confirmation", "DOUBLE BOTTOM LONG: немає вищого мінімуму на 15M")
-            else:
-                log("waiting_confirmation", "DOUBLE BOTTOM LONG: немає локального дна на 15M")
-        else:
-            log("waiting_confirmation", "DOUBLE BOTTOM LONG: недостатньо свічок 15M після другого дна")
-
-    # Обробка SHORT — DOUBLE TOP
     if top_pair is not None:
         _, second_idx, first_high, second_high, _ = top_pair
 
@@ -1445,7 +1414,12 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
             if x["time"] > second_time
         ]
 
-        if len(after_pattern) >= 6:
+        if len(after_pattern) < 6:
+            log(
+                "waiting_confirmation",
+                "DOUBLE TOP SHORT: недостатньо свічок 15M після другої вершини"
+            )
+        else:
             pivot_idx = None
 
             # Шукаємо останню локальну вершину на 15M
@@ -1457,9 +1431,15 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
                     pivot_idx = i
                     break
 
-            if pivot_idx is not None and pivot_idx + 3 < len(after_pattern):
+            if pivot_idx is None or pivot_idx + 3 >= len(after_pattern):
+                log(
+                    "waiting_confirmation",
+                    "DOUBLE TOP SHORT: немає локальної вершини на 15M"
+                )
+            else:
                 pivot_high = after_pattern[pivot_idx]["high"]
 
+                # Знаходимо мінімум відкату після локальної вершини
                 rebound_idx = min(
                     range(pivot_idx + 1, len(after_pattern) - 1),
                     key=lambda i: after_pattern[i]["low"]
@@ -1467,110 +1447,55 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
 
                 rebound_low = after_pattern[rebound_idx]["low"]
 
+                # Перевіряємо формування нижчого максимуму
                 lower_high_found = any(
                     after_pattern[i]["high"] < pivot_high
                     and after_pattern[i]["high"] > rebound_low
                     for i in range(rebound_idx + 1, len(after_pattern) - 1)
                 )
 
-                last = after_pattern[-1]
-
-                if lower_high_found:
-                    previous_breakout = any(
-                        x["close"] < rebound_low
-                        for x in after_pattern[:-1]
+                if not lower_high_found:
+                    log(
+                        "waiting_confirmation",
+                        "DOUBLE TOP SHORT: немає нижчого максимуму на 15M"
+                    )
+                else:
+                    setup, status = evaluate_double_breakout(
+                        candles=after_pattern,
+                        level=rebound_low,
+                        pivot=pivot_high,
+                        second_extreme=second_high,
+                        atr=atr_15m,
+                        avg_volume=avg_volume,
+                        direction="SHORT"
                     )
 
-                    if previous_breakout and last["close"] >= rebound_low:
-                        log("waiting_confirmation", "DOUBLE TOP SHORT: хибний пробій, ціна повернулася над локальний мінімум")
+                    if setup is not None:
+                        return setup
+
+                    if status == "false_breakout":
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE TOP SHORT: хибний пробій, ціна повернулася над рівень"
+                        )
+
+                    elif status == "waiting":
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE TOP SHORT: слабкий пробій або очікування ретесту"
+                        )
+
+                    elif status == "invalid_stop":
+                        log(
+                            "invalid_stop",
+                            "DOUBLE TOP SHORT: некоректний стоп"
+                        )
+
                     else:
-                        body = last["open"] - last["close"]
-                        volume_values = [
-                            x["volume"] for x in candles_15m[-21:-1]
-                        ]
-                        avg_volume = (
-                            sum(volume_values) / len(volume_values)
-                            if volume_values else 0
+                        log(
+                            "waiting_confirmation",
+                            "DOUBLE TOP SHORT: очікуємо пробій локального мінімуму"
                         )
-
-                        strong_breakout = (
-                            last["close"] < rebound_low - BREAKOUT_BUFFER
-                            and body >= atr_15m * 0.60
-                            and avg_volume > 0
-                            and last["volume"] >= avg_volume * 1.30
-                        )
-
-                        weak_breakout = (
-                            last["close"] < rebound_low - BREAKOUT_BUFFER
-                        )
-
-                        # Сценарій 1: сильний пробій
-                        if strong_breakout:
-                            entry = last["close"]
-
-                            if rebound_low - entry > MAX_ENTRY_EXTENSION:
-                                log("waiting_confirmation", "DOUBLE TOP SHORT: сильний пробій, але ціна вже далеко від рівня")
-                            else:
-                                stop = max(pivot_high, second_high) + atr_15m * 0.30
-                                risk = stop - entry
-
-                                if risk > 0:
-                                    return {
-                                        "strategy": "DOUBLE TOP — STRONG BREAKOUT",
-                                        "direction": "SHORT",
-                                        "entry": entry,
-                                        "stop": stop,
-                                        "tp1": entry - risk,
-                                        "tp2": entry - risk * 2,
-                                        "tp3": entry - risk * 3
-                                    }
-                                else:
-                                    log("invalid_stop", "DOUBLE TOP SHORT: некоректний стоп")
-
-                        # Сценарій 2: слабкий пробій
-                        elif weak_breakout:
-                            log("waiting_confirmation", "DOUBLE TOP SHORT: слабкий пробій, очікуємо ретест")
-
-                        else:
-                            earlier_breakout = any(
-                                x["close"] < rebound_low
-                                for x in after_pattern[:-1]
-                            )
-
-                            retest = (
-                                earlier_breakout
-                                and last["high"] >= rebound_low - BREAKOUT_BUFFER
-                                and last["close"] < rebound_low
-                            )
-
-                            if retest:
-                                entry = last["close"]
-
-                                if rebound_low - entry > MAX_ENTRY_EXTENSION:
-                                    log("waiting_confirmation", "DOUBLE TOP SHORT: ретест підтверджено, але ціна вже далеко від рівня")
-                                else:
-                                    stop = max(pivot_high, second_high) + atr_15m * 0.30
-                                    risk = stop - entry
-
-                                    if risk > 0:
-                                        return {
-                                            "strategy": "DOUBLE TOP — RETEST",
-                                            "direction": "SHORT",
-                                            "entry": entry,
-                                            "stop": stop,
-                                            "tp1": entry - risk,
-                                            "tp2": entry - risk * 2,
-                                            "tp3": entry - risk * 3
-                                        }
-                                    else:
-                                        log("invalid_stop", "DOUBLE TOP SHORT RETEST: некоректний стоп")
-
-                else:
-                    log("waiting_confirmation", "DOUBLE TOP SHORT: немає нижчого максимуму на 15M")
-            else:
-                log("waiting_confirmation", "DOUBLE TOP SHORT: немає локальної вершини на 15M")
-        else:
-            log("waiting_confirmation", "DOUBLE TOP SHORT: недостатньо свічок 15M після другої вершини")
 
     return None
     
