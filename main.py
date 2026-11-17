@@ -373,17 +373,24 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     }
 
 
-def detect_range_sweep(candles_1h, candles_15m):
+def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     """
     Пошук боковика на 1H.
     LONG: прокол нижньої межі та повернення всередину.
     SHORT: прокол верхньої межі та повернення всередину.
     """
 
+    name = symbol or "Невідома монета"
+
+    def log(category, reason):
+        add_report_item(report, category, f"{name} — {reason}")
+
     if len(candles_1h) < RANGE_LOOKBACK_1H:
+        log("other_rejections", "недостатньо свічок 1H для RANGE SWEEP")
         return None
 
     if len(candles_15m) < ENTRY_LOOKBACK_15M:
+        log("other_rejections", "недостатньо свічок 15M для RANGE SWEEP")
         return None
 
     # Діапазон визначаємо за попередніми годинними свічками.
@@ -394,6 +401,7 @@ def detect_range_sweep(candles_1h, candles_15m):
     range_low = min(c["low"] for c in range_candles)
 
     if range_high <= range_low:
+        log("no_sweep", "некоректний діапазон 1H")
         return None
 
     range_size = range_high - range_low
@@ -402,6 +410,7 @@ def detect_range_sweep(candles_1h, candles_15m):
     avg_price = sum(c["close"] for c in range_candles) / len(range_candles)
 
     if range_size / avg_price > 0.08:
+        log("no_sweep", "діапазон 1H занадто широкий")
         return None
 
     # Перевіряємо, чи ціна торкалася обох меж
@@ -418,18 +427,25 @@ def detect_range_sweep(candles_1h, candles_15m):
     )
 
     if low_touches < MIN_RANGE_TOUCHES:
+        log("no_sweep", "недостатньо торкань нижньої межі діапазону")
         return None
 
     if high_touches < MIN_RANGE_TOUCHES:
+        log("no_sweep", "недостатньо торкань верхньої межі діапазону")
         return None
 
     recent = candles_15m[-ENTRY_LOOKBACK_15M:]
+
+    long_sweep_seen = False
+    short_sweep_seen = False
 
     # LONG: свіп нижньої межі
     for i in range(len(recent) - 1, max(-1, len(recent) - 9), -1):
         c = recent[i]
 
         if c["low"] < range_low and c["close"] > range_low:
+            long_sweep_seen = True
+
             # Підтвердження: наступна закрита свічка утримує рівень
             if i + 1 < len(recent):
                 confirm = recent[i + 1]
@@ -454,6 +470,8 @@ def detect_range_sweep(candles_1h, candles_15m):
         c = recent[i]
 
         if c["high"] > range_high and c["close"] < range_high:
+            short_sweep_seen = True
+
             if i + 1 < len(recent):
                 confirm = recent[i + 1]
 
@@ -472,9 +490,13 @@ def detect_range_sweep(candles_1h, candles_15m):
                         "tp3": range_low - range_size * 0.5
                     }
 
+    if long_sweep_seen or short_sweep_seen:
+        log("waiting_confirmation", "RANGE SWEEP: свіп є, але немає підтвердження на 15M")
+    else:
+        log("no_sweep", "діапазон є, але свіпу межі на 15M немає")
+
     return None
-
-
+    
 def detect_impulse_retest(candles_1h, candles_15m):
     """
     Рахує окремі ретести, а не кількість свічок у зоні.
