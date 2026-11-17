@@ -726,8 +726,9 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
         log("waiting_confirmation", "умови IMPULSE RETEST ще не виконані")
 
     return None
-    
-def detect_rounding(candles_1h, candles_15m):
+
+
+def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     """
     Ранній пошук заокруглення на 1H.
     Вхід біля основи після підтвердження розвороту на 15M.
@@ -741,7 +742,13 @@ def detect_rounding(candles_1h, candles_15m):
     SHORT — дзеркальна логіка.
     """
 
+    name = symbol or "Невідома монета"
+
+    def log(category, reason):
+        add_report_item(report, category, f"{name} — {reason}")
+
     if len(candles_1h) < 30 or len(candles_15m) < 12:
+        log("other_rejections", "недостатньо свічок для ROUNDING")
         return None
 
     c = candles_1h[-30:]
@@ -762,23 +769,39 @@ def detect_rounding(candles_1h, candles_15m):
     atr_15m = calculate_atr(candles_15m, 14)
 
     if atr_1h <= 0 or atr_15m <= 0:
+        log("other_rejections", "некоректний ATR для ROUNDING")
         return None
 
     recent = candles_15m[-12:]
     last = recent[-1]
     prev = recent[-2]
 
-    # ==========================================
-    # LONG — ЗАОКРУГЛЕНЕ ДНО
-    # ==========================================
-
-    if (
+    long_shape = (
         middle_low < left_low
         and middle_low < right_low
         and right_low > middle_low
-    ):
-        # Шукаємо локальний мінімум на 15M
-        # серед останніх 8 свічок, крім двох останніх.
+    )
+
+    short_shape = (
+        middle_high > left_high
+        and middle_high > right_high
+        and right_high < middle_high
+    )
+
+    long_pivot_found = False
+    short_pivot_found = False
+
+    long_higher_low_found = False
+    short_lower_high_found = False
+
+    long_breakout = False
+    short_breakout = False
+
+    long_not_extended = False
+    short_not_extended = False
+
+    # LONG — ROUNDING BOTTOM
+    if long_shape:
         pivot_idx = None
 
         for i in range(len(recent) - 3, 1, -1):
@@ -790,37 +813,41 @@ def detect_rounding(candles_1h, candles_15m):
                 break
 
         if pivot_idx is not None:
+            long_pivot_found = True
+
             pivot_low = recent[pivot_idx]["low"]
 
-            # Після першого дна ціна повинна відскочити.
             rebound_high = max(
                 x["high"] for x in recent[pivot_idx + 1:-1]
             )
 
-            # Після відскоку формується вищий мінімум.
             higher_low_found = any(
                 recent[i]["low"] > pivot_low
                 and recent[i]["low"] < rebound_high
                 for i in range(pivot_idx + 2, len(recent) - 1)
             )
 
-            # Підтвердження: остання закрита свічка
-            # пробиває максимум попереднього відскоку.
+            long_higher_low_found = higher_low_found
+
             breakout = (
                 last["close"] > rebound_high
                 and last["close"] > last["open"]
             )
 
-            # Не наздоганяємо ціну, якщо вона вже далеко від дна.
+            long_breakout = breakout
+
             not_extended = (
                 last["close"] - pivot_low <= atr_15m * 2.0
             )
+
+            long_not_extended = not_extended
 
             if higher_low_found and breakout and not_extended:
                 stop = pivot_low - atr_15m * 0.3
                 risk = last["close"] - stop
 
                 if risk <= 0:
+                    log("invalid_stop", "ROUNDING LONG: некоректний ризик або стоп")
                     return None
 
                 return {
@@ -833,15 +860,8 @@ def detect_rounding(candles_1h, candles_15m):
                     "tp3": last["close"] + 3 * risk
                 }
 
-    # ==========================================
-    # SHORT — ЗАОКРУГЛЕНА ВЕРШИНА
-    # ==========================================
-
-    if (
-        middle_high > left_high
-        and middle_high > right_high
-        and right_high < middle_high
-    ):
+    # SHORT — ROUNDING TOP
+    if short_shape:
         pivot_idx = None
 
         for i in range(len(recent) - 3, 1, -1):
@@ -853,6 +873,8 @@ def detect_rounding(candles_1h, candles_15m):
                 break
 
         if pivot_idx is not None:
+            short_pivot_found = True
+
             pivot_high = recent[pivot_idx]["high"]
 
             rebound_low = min(
@@ -865,20 +887,27 @@ def detect_rounding(candles_1h, candles_15m):
                 for i in range(pivot_idx + 2, len(recent) - 1)
             )
 
+            short_lower_high_found = lower_high_found
+
             breakout = (
                 last["close"] < rebound_low
                 and last["close"] < last["open"]
             )
 
+            short_breakout = breakout
+
             not_extended = (
                 pivot_high - last["close"] <= atr_15m * 2.0
             )
+
+            short_not_extended = not_extended
 
             if lower_high_found and breakout and not_extended:
                 stop = pivot_high + atr_15m * 0.3
                 risk = stop - last["close"]
 
                 if risk <= 0:
+                    log("invalid_stop", "ROUNDING SHORT: некоректний ризик або стоп")
                     return None
 
                 return {
@@ -891,8 +920,33 @@ def detect_rounding(candles_1h, candles_15m):
                     "tp3": last["close"] - 3 * risk
                 }
 
-    return None
+    # Діагностика LONG
+    if long_shape:
+        if not long_pivot_found:
+            log("waiting_confirmation", "ROUNDING LONG: заокруглене дно на 1H є, але локального дна на 15M немає")
+        elif not long_higher_low_found:
+            log("waiting_confirmation", "ROUNDING LONG: локальне дно є, але немає вищого мінімуму")
+        elif not long_breakout:
+            log("waiting_confirmation", "ROUNDING LONG: структура є, але немає пробою локального максимуму")
+        elif not long_not_extended:
+            log("waiting_confirmation", "ROUNDING LONG: ціна вже відійшла від дна більш ніж на 2 ATR")
 
+    # Діагностика SHORT
+    if short_shape:
+        if not short_pivot_found:
+            log("waiting_confirmation", "ROUNDING SHORT: заокруглена вершина на 1H є, але локального максимуму на 15M немає")
+        elif not short_lower_high_found:
+            log("waiting_confirmation", "ROUNDING SHORT: локальна вершина є, але немає нижчого максимуму")
+        elif not short_breakout:
+            log("waiting_confirmation", "ROUNDING SHORT: структура є, але немає пробою локального мінімуму")
+        elif not short_not_extended:
+            log("waiting_confirmation", "ROUNDING SHORT: ціна вже відійшла від вершини більш ніж на 2 ATR")
+
+    if not long_shape and not short_shape:
+        log("no_rounding", "немає заокругленого дна або вершини на 1H")
+
+    return None
+                
 async def analyze_signal(session, symbol):
     try:
         now = time.time()
