@@ -1993,7 +1993,7 @@ async def analyze_signal(session, symbol, report=None):
             log("low_volume", "некоректний середній об'єм")
             return None
 
-        if recent_volume < avg_volume * 3 * VOLUME_MULTIPLIER:
+        if recent_volume < avg_volume * VOLUME_MULTIPLIER:
             log("low_volume", "об'єм нижче необхідного рівня")
             return None
 
