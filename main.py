@@ -218,22 +218,48 @@ def calculate_kd(candles, n=9, m1=3, m2=3):
         print(f"[KDJ ERROR] {e}", flush=True)
         return [], [], []
         
+
 def calculate_correlation(prices_a, prices_b):
     if len(prices_a) != len(prices_b) or len(prices_a) < 10:
         return 0.0
-    
-    n = len(prices_a)
-    mean_a = sum(prices_a) / n
-    mean_b = sum(prices_b) / n
-    
-    num = sum((prices_a[i] - mean_a) * (prices_b[i] - mean_b) for i in range(n))
-    den_a = sum((prices_a[i] - mean_a) ** 2 for i in range(n))
-    den_b = sum((prices_b[i] - mean_b) ** 2 for i in range(n))
-    
-    if den_a == 0 or den_b == 0:
+
+    try:
+        prices_a = [float(x) for x in prices_a]
+        prices_b = [float(x) for x in prices_b]
+
+        if not all(
+            math.isfinite(x) for x in prices_a + prices_b
+        ):
+            return 0.0
+
+        n = len(prices_a)
+
+        mean_a = sum(prices_a) / n
+        mean_b = sum(prices_b) / n
+
+        num = sum(
+            (prices_a[i] - mean_a) *
+            (prices_b[i] - mean_b)
+            for i in range(n)
+        )
+
+        den_a = sum(
+            (x - mean_a) ** 2 for x in prices_a
+        )
+
+        den_b = sum(
+            (x - mean_b) ** 2 for x in prices_b
+        )
+
+        if den_a <= 0 or den_b <= 0:
+            return 0.0
+
+        corr = num / math.sqrt(den_a * den_b)
+
+        return max(-1.0, min(1.0, corr))
+
+    except (TypeError, ValueError, OverflowError):
         return 0.0
-        
-    return num / ((den_a * den_b) ** 0.5)
     
 # --- 1. ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) З ДАНИМИ СВІЧОК ---
 # --- 1. СУВОРИЙ ЩОДЕННИЙ ЗВІТ ПО ЗАКРИТИХ СВІПАХ (1D) ---
