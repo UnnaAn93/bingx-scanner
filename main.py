@@ -92,8 +92,16 @@ async def send_telegram(text: str):
                     flush=True
                 )
 
+# Обмеження запитів до KLINES API BingX
+KLINES_SEMAPHORE = asyncio.Semaphore(3)
+KLINES_REQUEST_LOCK = asyncio.Lock()
+KLINES_LAST_REQUEST = 0.0
+KLINES_MIN_INTERVAL = 0.25
+
 
 async def get_klines(session, symbol, interval, limit=100):
+    global KLINES_LAST_REQUEST
+
     url = f"{BINGX_BASE_URL}/openApi/swap/v3/quote/klines"
 
     params = {
@@ -103,51 +111,74 @@ async def get_klines(session, symbol, interval, limit=100):
     }
 
     try:
-        async with session.get(
-            url,
-            params=params,
-            timeout=10
-        ) as resp:
+        async with KLINES_SEMAPHORE:
 
-            if resp.status != 200:
-                error_text = await resp.text()
+            # Глобальна пауза між запуском запитів
+            async with KLINES_REQUEST_LOCK:
+                elapsed = time.monotonic() - KLINES_LAST_REQUEST
 
-                print(
-                    f"[KLINES HTTP ERROR] {symbol} {interval}: "
-                    f"HTTP {resp.status} — {error_text[:300]}",
-                    flush=True
-                )
-                return []
+                wait_time = KLINES_MIN_INTERVAL - elapsed
 
-            data = await resp.json()
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
 
-            if not isinstance(data, dict):
-                print(
-                    f"[KLINES ERROR] {symbol} {interval}: "
-                    f"неочікуваний формат відповіді",
-                    flush=True
-                )
-                return []
+                KLINES_LAST_REQUEST = time.monotonic()
 
-            if data.get("code") != 0:
-                print(
-                    f"[KLINES API ERROR] {symbol} {interval}: "
-                    f"{data.get('code')} — {data.get('msg', 'Unknown error')}",
-                    flush=True
-                )
-                return []
+            async with session.get(
+                url,
+                params=params,
+                timeout=10
+            ) as resp:
 
-            klines = data.get("data", [])
+                if resp.status != 200:
+                    error_text = await resp.text()
 
-            if not isinstance(klines, list):
-                print(
-                    f"[KLINES ERROR] {symbol} {interval}: "
-                    f"data не є списком",
-                    flush=True
-                )
-                return []
+                    print(
+                        f"[KLINES HTTP ERROR] {symbol} {interval}: "
+                        f"HTTP {resp.status} — {error_text[:300]}",
+                        flush=True
+                    )
+                    return []
 
-            return klines
+                data = await resp.json()
+
+                if not isinstance(data, dict):
+                    print(
+                        f"[KLINES ERROR] {symbol} {interval}: "
+                        "неочікуваний формат відповіді",
+                        flush=True
+                    )
+                    return []
+
+                if str(data.get("code")) != "0":
+                    error_code = data.get("code")
+                    error_msg = data.get("msg", "Unknown error")
+
+                    print(
+                        f"[KLINES API ERROR] {symbol} {interval}: "
+                        f"{error_code} — {error_msg}",
+                        flush=True
+                    )
+                    return []
+
+                klines = data.get("data", [])
+
+                if not isinstance(klines, list):
+                    print(
+                        f"[KLINES ERROR] {symbol} {interval}: "
+                        "data не є списком",
+                        flush=True
+                    )
+                    return []
+
+                return klines
+
+    except asyncio.TimeoutError:
+        print(
+            f"[KLINES TIMEOUT] {symbol} {interval}",
+            flush=True
+        )
+        return []
 
     except Exception as e:
         print(
@@ -155,7 +186,7 @@ async def get_klines(session, symbol, interval, limit=100):
             flush=True
         )
         return []
-
+        
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
         return 0.0
