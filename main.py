@@ -821,13 +821,16 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
-    Продовження руху після сильного імпульсу.
+    IMPULSE RETEST:
+    1H: імпульс не менше 8 ATR(14), може складатися з кількох свічок.
 
-    1. На 1H імпульс від початку до екстремуму має бути не менше 8 ATR.
-    2. Імпульс може складатися з однієї або кількох свічок.
-    3. Після імпульсу має бути рух ціни у зворотному напрямку.
-    4. Після відкату формується флет щонайменше з 8 свічок 15M.
-    5. Сигнал — закриття 15M за межами флета в напрямку початкового імпульсу.
+    Сценарій 1:
+    Відкат понад 60% імпульсу -> боковик 8 свічок 15M ->
+    пробій у напрямку імпульсу або свіп протилежної межі з поверненням.
+
+    Сценарій 2:
+    Відкат не більше 40% -> боковик 8 свічок 15M біля екстремуму ->
+    пробій проти імпульсу або свіп межі з боку екстремуму з поверненням.
     """
 
     name = symbol or "Невідома монета"
@@ -835,189 +838,312 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    if len(candles_1h) < 20 or len(candles_15m) < 10:
-        log("other_rejections", "недостатньо свічок для IMPULSE RETEST")
+    MIN_IMPULSE_ATR = 8.0
+    ATR_PERIOD = 14
+    MIN_CONSOLIDATION_CANDLES = 8
+    MAX_IMPULSE_CANDLES = 8
+    MAX_HOURLY_LOOKBACK = 36
+
+    # Сортуємо свічки за часом.
+    hourly = sorted(candles_1h, key=lambda c: c.get("time", 0))
+    fifteen = sorted(candles_15m, key=lambda c: c.get("time", 0))
+
+    if (
+        len(hourly) < ATR_PERIOD + MAX_IMPULSE_CANDLES + 1
+        or len(fifteen) < MIN_CONSOLIDATION_CANDLES + 1
+    ):
+        log("other_rejections", "недостатньо закритих свічок для IMPULSE RETEST")
         return None
 
-    atr_15m = calculate_atr(candles_15m[:-1], 14)
+    recent_hourly = hourly[-MAX_HOURLY_LOOKBACK:]
+    impulses = []
 
-    if atr_15m <= 0:
-        log("other_rejections", "не вдалося розрахувати ATR 15M")
-        return None
+    last_start = len(recent_hourly) - 1
 
-    hourly = candles_1h
-    recent_15m = candles_15m
+    # Шукаємо імпульс із кількох послідовних годинних свічок.
+    for end_idx in range(
+        last_start,
+        max(ATR_PERIOD, last_start - 12),
+        -1
+    ):
+        for length in range(1, MAX_IMPULSE_CANDLES + 1):
 
-    impulse_candidates = []
-
-    # Шукаємо імпульс на 1H.
-    # Він може тривати від 1 до 12 свічок.
-    # Останню годинну свічку не використовуємо як завершений імпульс.
-    last_hour_index = len(hourly) - 2
-
-    for end_idx in range(last_hour_index, max(13, last_hour_index - 36), -1):
-        for length in range(1, 13):
             start_idx = end_idx - length + 1
 
-            if start_idx < 14:
+            if start_idx < ATR_PERIOD + 1:
                 continue
 
-            impulse_candles = hourly[start_idx:end_idx + 1]
+            leg = recent_hourly[start_idx:end_idx + 1]
 
-            atr_before = calculate_atr(hourly[:start_idx], 14)
+            # ATR(14) перед початком імпульсу.
+            prior = recent_hourly[
+                start_idx - ATR_PERIOD - 1:start_idx
+            ]
 
-            if atr_before <= 0:
+            atr = calculate_atr(prior, ATR_PERIOD)
+
+            if atr <= 0:
                 continue
 
-            start_price = impulse_candles[0]["open"]
-            impulse_high = max(c["high"] for c in impulse_candles)
-            impulse_low = min(c["low"] for c in impulse_candles)
+            start_price = float(leg[0]["open"])
+            end_high = max(float(c["high"]) for c in leg)
+            end_low = min(float(c["low"]) for c in leg)
+            end_close = float(leg[-1]["close"])
 
-            bullish_move = impulse_high - start_price
-            bearish_move = start_price - impulse_low
+            move_up = end_high - start_price
+            move_down = start_price - end_low
 
-            if bullish_move >= atr_before * 8:
-                direction = "LONG"
-                impulse_extreme = impulse_high
-                impulse_size = bullish_move
-            elif bearish_move >= atr_before * 8:
-                direction = "SHORT"
-                impulse_extreme = impulse_low
-                impulse_size = bearish_move
-            else:
-                continue
+            # Висхідний імпульс.
+            if (
+                move_up >= MIN_IMPULSE_ATR * atr
+                and end_close > start_price
+            ):
+                impulses.append({
+                    "direction": "LONG",
+                    "start_idx": start_idx,
+                    "end_idx": end_idx,
+                    "length": length,
+                    "start": start_price,
+                    "extreme": end_high,
+                    "atr": atr,
+                    "size": move_up,
+                    "time": leg[-1]["time"]
+                })
 
-            impulse_end_time = impulse_candles[-1]["time"]
+            # Низхідний імпульс.
+            if (
+                move_down >= MIN_IMPULSE_ATR * atr
+                and end_close < start_price
+            ):
+                impulses.append({
+                    "direction": "SHORT",
+                    "start_idx": start_idx,
+                    "end_idx": end_idx,
+                    "length": length,
+                    "start": start_price,
+                    "extreme": end_low,
+                    "atr": atr,
+                    "size": move_down,
+                    "time": leg[-1]["time"]
+                })
 
-            impulse_candidates.append({
-                "direction": direction,
-                "extreme": impulse_extreme,
-                "size": impulse_size,
-                "end_time": impulse_end_time,
-                "end_idx": end_idx,
-                "atr": atr_before
-            })
-
-    if not impulse_candidates:
-        log("no_impulse_retest", "не знайдено імпульсу 1H від 8 ATR")
+    if not impulses:
+        log(
+            "no_impulse_retest",
+            "немає руху на 1H щонайменше 8 ATR(14)"
+        )
         return None
 
-    # Спочатку перевіряємо найновіший знайдений імпульс.
-    impulse_candidates.sort(
-        key=lambda x: x["end_time"],
+    # Спочатку перевіряємо найсвіжіші імпульси.
+    impulses.sort(
+        key=lambda x: (x["end_idx"], x["length"]),
         reverse=True
     )
 
-    for impulse in impulse_candidates:
-        direction = impulse["direction"]
-        extreme = impulse["extreme"]
-        impulse_time = impulse["end_time"]
+    waiting_for_confirmation = False
+    saw_post_impulse = False
+    saw_consolidation = False
+    invalid_risk = False
 
-        after_impulse = [
-            c for c in recent_15m
-            if c["time"] > impulse_time
+    for impulse in impulses:
+
+        direction = impulse["direction"]
+        impulse_time = impulse["time"]
+
+        # Беремо 15M свічки тільки після завершення імпульсу.
+        post = [
+            c for c in fifteen
+            if c.get("time", 0) > impulse_time
         ]
 
-        # Потрібні 8 свічок флета та окрема свічка пробою.
-        if len(after_impulse) < 10:
+        if len(post) < MIN_CONSOLIDATION_CANDLES + 1:
             continue
 
-        # Остання свічка — можлива свічка пробою.
-        breakout = after_impulse[-1]
+        saw_post_impulse = True
 
-        # Перед нею шукаємо щонайменше 8 свічок консолідації.
-        flat = after_impulse[-9:-1]
+        # Остання свічка — свічка підтвердження.
+        # Попередні 8 свічок формують межі боковика.
+        for confirm_idx in range(
+            len(post) - 1,
+            MIN_CONSOLIDATION_CANDLES - 1,
+            -1
+        ):
 
-        if len(flat) < 8:
-            continue
+            box = post[
+                confirm_idx - MIN_CONSOLIDATION_CANDLES:confirm_idx
+            ]
 
-        flat_high = max(c["high"] for c in flat)
-        flat_low = min(c["low"] for c in flat)
-        flat_size = flat_high - flat_low
+            confirm = post[confirm_idx]
 
-        # Флет має бути компактним відносно волатильності 15M.
-        if flat_size <= 0 or flat_size > atr_15m * 4:
-            continue
+            if len(box) != MIN_CONSOLIDATION_CANDLES:
+                continue
 
-        # Переконуємося, що перед флетом був відкат проти імпульсу.
-        candles_before_flat = after_impulse[:-9]
+            box_high = max(float(c["high"]) for c in box)
+            box_low = min(float(c["low"]) for c in box)
 
-        if not candles_before_flat:
-            continue
+            if box_high <= box_low:
+                continue
 
-        if direction == "LONG":
-            pullback_low = min(c["low"] for c in candles_before_flat)
+            saw_consolidation = True
 
-            # Будь-який рух униз після висхідного імпульсу.
-            pullback_found = pullback_low < extreme
+            # Визначаємо глибину відкату.
+            if direction == "LONG":
+                pullback = max(
+                    0.0,
+                    impulse["extreme"] -
+                    min(float(c["low"]) for c in post[:confirm_idx])
+                )
+            else:
+                pullback = max(
+                    0.0,
+                    max(float(c["high"]) for c in post[:confirm_idx]) -
+                    impulse["extreme"]
+                )
 
-            breakout_found = (
-                breakout["close"] > flat_high
-                and breakout["close"] > breakout["open"]
+            pullback_pct = (
+                pullback / impulse["size"]
+                if impulse["size"] > 0
+                else 1.0
             )
 
-            if not pullback_found or not breakout_found:
+            # СЦЕНАРІЙ 1:
+            # Глибокий відкат понад 60%.
+            # Очікуємо продовження початкового імпульсу.
+            if pullback_pct > 0.60:
+                scenario = 1
+                expected = direction
+
+            # СЦЕНАРІЙ 2:
+            # Неглибокий відкат до 40%.
+            # Очікуємо розворот проти початкового імпульсу.
+            elif pullback_pct <= 0.40:
+                scenario = 2
+                expected = (
+                    "SHORT" if direction == "LONG" else "LONG"
+                )
+
+            else:
                 continue
 
-            stop = min(
-                c["low"] for c in after_impulse
-            ) - atr_15m * 0.10
+            # LONG: пробій верхньої межі або свіп нижньої межі.
+            if expected == "LONG":
 
-            entry = breakout["close"]
-            risk = entry - stop
+                breakout = (
+                    float(confirm["close"]) > box_high
+                )
 
-            if risk <= 0:
-                continue
+                sweep_reentry = (
+                    float(confirm["low"]) < box_low
+                    and float(confirm["close"]) > box_low
+                    and float(confirm["close"]) <= box_high
+                )
 
-            return {
-                "strategy": "IMPULSE RETEST",
-                "direction": "LONG",
-                "entry": entry,
-                "stop": stop,
-                "tp1": entry + risk,
-                "tp2": entry + risk * 2,
-                "tp3": entry + risk * 3
-            }
+                if not (breakout or sweep_reentry):
+                    waiting_for_confirmation = True
+                    continue
 
-        else:
-            pullback_high = max(c["high"] for c in candles_before_flat)
+                entry = float(confirm["close"])
 
-            # Будь-який рух угору після низхідного імпульсу.
-            pullback_found = pullback_high > extreme
+                stop_base = min(
+                    [float(c["low"]) for c in box]
+                    + [float(confirm["low"])]
+                )
 
-            breakout_found = (
-                breakout["close"] < flat_low
-                and breakout["close"] < breakout["open"]
-            )
+                stop = stop_base - impulse["atr"] * 0.10
+                risk = entry - stop
 
-            if not pullback_found or not breakout_found:
-                continue
+                if risk <= 0:
+                    invalid_risk = True
+                    continue
 
-            stop = max(
-                c["high"] for c in after_impulse
-            ) + atr_15m * 0.10
+                return {
+                    "strategy": "IMPULSE RETEST",
+                    "direction": "LONG",
+                    "entry": entry,
+                    "stop": stop,
+                    "tp1": entry + risk,
+                    "tp2": entry + risk * 2,
+                    "tp3": entry + risk * 3,
+                    "retests": MIN_CONSOLIDATION_CANDLES,
+                    "scenario": scenario
+                }
 
-            entry = breakout["close"]
-            risk = stop - entry
+            # SHORT: пробій нижньої межі або свіп верхньої межі.
+            else:
 
-            if risk <= 0:
-                continue
+                breakout = (
+                    float(confirm["close"]) < box_low
+                )
 
-            return {
-                "strategy": "IMPULSE RETEST",
-                "direction": "SHORT",
-                "entry": entry,
-                "stop": stop,
-                "tp1": entry - risk,
-                "tp2": entry - risk * 2,
-                "tp3": entry - risk * 3
-            }
+                sweep_reentry = (
+                    float(confirm["high"]) > box_high
+                    and float(confirm["close"]) < box_high
+                    and float(confirm["close"]) >= box_low
+                )
 
-    log(
-        "waiting_confirmation",
-        "імпульс 1H знайдено, але немає послідовності відкат → флет 8 свічок 15M → пробій"
-    )
+                if not (breakout or sweep_reentry):
+                    waiting_for_confirmation = True
+                    continue
+
+                entry = float(confirm["close"])
+
+                stop_base = max(
+                    [float(c["high"]) for c in box]
+                    + [float(confirm["high"])]
+                )
+
+                stop = stop_base + impulse["atr"] * 0.10
+                risk = stop - entry
+
+                if risk <= 0:
+                    invalid_risk = True
+                    continue
+
+                return {
+                    "strategy": "IMPULSE RETEST",
+                    "direction": "SHORT",
+                    "entry": entry,
+                    "stop": stop,
+                    "tp1": entry - risk,
+                    "tp2": entry - risk * 2,
+                    "tp3": entry - risk * 3,
+                    "retests": MIN_CONSOLIDATION_CANDLES,
+                    "scenario": scenario
+                }
+
+    # Діагностика.
+    if invalid_risk:
+        log(
+            "invalid_stop",
+            "IMPULSE RETEST: некоректний ризик або стоп"
+        )
+
+    elif not saw_post_impulse:
+        log(
+            "waiting_confirmation",
+            "імпульс 1H є, але ще немає 9 закритих свічок 15M після нього"
+        )
+
+    elif not saw_consolidation:
+        log(
+            "waiting_confirmation",
+            "після імпульсу ще не сформовано 8 свічок боковика 15M"
+        )
+
+    elif waiting_for_confirmation:
+        log(
+            "waiting_confirmation",
+            "боковик 15M є, очікується пробій або свіп із поверненням усередину"
+        )
+
+    else:
+        log(
+            "waiting_confirmation",
+            "відкат не відповідає жодному з двох сценаріїв IMPULSE RETEST"
+        )
+
     return None
+    
 def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     """
     Ранній пошук заокруглення на 1H.
