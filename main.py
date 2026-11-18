@@ -895,16 +895,25 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
-    IMPULSE RETEST:
-    1H: імпульс не менше 8 ATR(14), може складатися з кількох свічок.
+    IMPULSE RETEST
 
-    Сценарій 1:
-    Відкат понад 60% імпульсу -> боковик 16 свічок 15M ->
-    пробій у напрямку імпульсу або свіп протилежної межі з поверненням.
+    Сценарій 1 — ПРОДОВЖЕННЯ ІМПУЛЬСУ:
+    - імпульс 1H не менше 8 ATR;
+    - відкат не менше 60% імпульсу;
+    - боковик із 16 свічок 15M;
+    - свіп протилежної межі боковика;
+    - закриття назад усередині боковика;
+    - вхід у напрямку початкового імпульсу.
 
-    Сценарій 2:
-    Відкат не більше 40% -> боковик 16 свічок 15M біля екстремуму ->
-    пробій проти імпульсу або свіп межі з боку екстремуму з поверненням.
+    Сценарій 2 — ПОГЛИНАННЯ ІМПУЛЬСУ:
+    - ціна зупиняється біля екстремуму імпульсу;
+    - боковик із 16 свічок 15M;
+    - свіп межі з боку екстремуму;
+    - закриття назад усередині боковика;
+    - вхід проти початкового імпульсу.
+
+    Стоп — за екстремумом свіпу з буфером 0.1 ATR 1H.
+    TP розраховуються від ціни входу.
     """
 
     name = symbol or "Невідома монета"
@@ -917,8 +926,8 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     MIN_CONSOLIDATION_CANDLES = 16
     MAX_IMPULSE_CANDLES = 8
     MAX_HOURLY_LOOKBACK = 36
+    STOP_ATR_BUFFER = 0.10
 
-    # Сортуємо свічки за часом.
     hourly = sorted(candles_1h, key=lambda c: c.get("time", 0))
     fifteen = sorted(candles_15m, key=lambda c: c.get("time", 0))
 
@@ -926,32 +935,26 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
         len(hourly) < ATR_PERIOD + MAX_IMPULSE_CANDLES + 1
         or len(fifteen) < MIN_CONSOLIDATION_CANDLES + 1
     ):
-        log("other_rejections", "недостатньо закритих свічок для IMPULSE RETEST")
+        log("other_rejections", "недостатньо свічок для IMPULSE RETEST")
         return None
 
     recent_hourly = hourly[-MAX_HOURLY_LOOKBACK:]
     impulses = []
 
-    last_start = len(recent_hourly) - 1
+    # Шукаємо імпульси на 1H.
+    for end_idx in range(len(recent_hourly) - 1, ATR_PERIOD, -1):
 
-    # Шукаємо імпульс із кількох послідовних годинних свічок.
-    for end_idx in range(
-        last_start,
-        max(ATR_PERIOD, last_start - 12),
-        -1
-    ):
         for length in range(1, MAX_IMPULSE_CANDLES + 1):
 
             start_idx = end_idx - length + 1
 
-            if start_idx < ATR_PERIOD + 1:
+            if start_idx < ATR_PERIOD:
                 continue
 
             leg = recent_hourly[start_idx:end_idx + 1]
 
-            # ATR(14) перед початком імпульсу.
             prior = recent_hourly[
-                start_idx - ATR_PERIOD - 1:start_idx
+                start_idx - ATR_PERIOD:start_idx
             ]
 
             atr = calculate_atr(prior, ATR_PERIOD)
@@ -967,67 +970,46 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
             move_up = end_high - start_price
             move_down = start_price - end_low
 
-            # Висхідний імпульс.
-            if (
-                move_up >= MIN_IMPULSE_ATR * atr
-                and end_close > start_price
-            ):
+            if move_up >= MIN_IMPULSE_ATR * atr and end_close > start_price:
                 impulses.append({
                     "direction": "LONG",
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                    "length": length,
                     "start": start_price,
                     "extreme": end_high,
-                    "atr": atr,
                     "size": move_up,
-                    "time": leg[-1]["time"]
+                    "atr": atr,
+                    "time": leg[-1]["time"],
+                    "end_idx": end_idx
                 })
 
-            # Низхідний імпульс.
-            if (
-                move_down >= MIN_IMPULSE_ATR * atr
-                and end_close < start_price
-            ):
+            if move_down >= MIN_IMPULSE_ATR * atr and end_close < start_price:
                 impulses.append({
                     "direction": "SHORT",
-                    "start_idx": start_idx,
-                    "end_idx": end_idx,
-                    "length": length,
                     "start": start_price,
                     "extreme": end_low,
-                    "atr": atr,
                     "size": move_down,
-                    "time": leg[-1]["time"]
+                    "atr": atr,
+                    "time": leg[-1]["time"],
+                    "end_idx": end_idx
                 })
 
     if not impulses:
-        log(
-            "no_impulse_retest",
-            "немає руху на 1H щонайменше 8 ATR(14)"
-        )
+        log("no_impulse_retest", "немає імпульсу 1H щонайменше 8 ATR")
         return None
 
-    # Спочатку перевіряємо найсвіжіші імпульси.
-    impulses.sort(
-        key=lambda x: (x["end_idx"], x["length"]),
-        reverse=True
-    )
+    impulses.sort(key=lambda x: x["end_idx"], reverse=True)
 
-    waiting_for_confirmation = False
     saw_post_impulse = False
     saw_consolidation = False
-    invalid_risk = False
+    waiting_for_confirmation = False
 
+    # Перевіряємо найсвіжіші імпульси.
     for impulse in impulses:
 
         direction = impulse["direction"]
-        impulse_time = impulse["time"]
 
-        # Беремо 15M свічки тільки після завершення імпульсу.
         post = [
             c for c in fifteen
-            if c.get("time", 0) > impulse_time
+            if c.get("time", 0) > impulse["time"]
         ]
 
         if len(post) < MIN_CONSOLIDATION_CANDLES + 1:
@@ -1035,8 +1017,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
 
         saw_post_impulse = True
 
-        # Остання свічка — свічка підтвердження.
-        # Попередні 16 свічок формують межі боковика.
+        # 16 свічок формують боковик, наступна перевіряється на свіп.
         for confirm_idx in range(
             len(post) - 1,
             MIN_CONSOLIDATION_CANDLES - 1,
@@ -1047,7 +1028,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                 confirm_idx - MIN_CONSOLIDATION_CANDLES:confirm_idx
             ]
 
-            confirm = post[confirm_idx]
+            sweep = post[confirm_idx]
 
             if len(box) != MIN_CONSOLIDATION_CANDLES:
                 continue
@@ -1060,75 +1041,126 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
 
             saw_consolidation = True
 
-            # Визначаємо глибину відкату.
+            # Визначаємо розташування боковика відносно імпульсу.
             if direction == "LONG":
-                pullback = max(
-                    0.0,
-                    impulse["extreme"] -
-                    min(float(c["low"]) for c in post[:confirm_idx])
-                )
-            else:
-                pullback = max(
-                    0.0,
-                    max(float(c["high"]) for c in post[:confirm_idx]) -
-                    impulse["extreme"]
-                )
 
-            pullback_pct = (
-                pullback / impulse["size"]
-                if impulse["size"] > 0
-                else 1.0
-            )
+                pullback_low = min(float(c["low"]) for c in post[:confirm_idx])
 
-            # СЦЕНАРІЙ 1:
-            # Глибокий відкат понад 60%.
-            # Очікуємо продовження початкового імпульсу.
-            if pullback_pct > 0.60:
-                scenario = 1
-                expected = direction
+                pullback_pct = (
+                    impulse["extreme"] - pullback_low
+                ) / impulse["size"]
 
-            # СЦЕНАРІЙ 2:
-            # Неглибокий відкат до 40%.
-            # Очікуємо розворот проти початкового імпульсу.
-            elif pullback_pct <= 0.40:
-                scenario = 2
-                expected = (
-                    "SHORT" if direction == "LONG" else "LONG"
+                # СЦЕНАРІЙ 1: глибокий відкат — продовження LONG.
+                continuation = pullback_pct >= 0.60
+
+                # СЦЕНАРІЙ 2: боковик біля максимуму — поглинання SHORT.
+                near_extreme = (
+                    box_low >= impulse["start"] + impulse["size"] * 0.60
                 )
 
-            else:
-                continue
+                # LONG: свіп нижньої межі та повернення в боковик.
+                if continuation:
+                    if not (
+                        float(sweep["low"]) < box_low
+                        and float(sweep["close"]) > box_low
+                        and float(sweep["close"]) < box_high
+                    ):
+                        waiting_for_confirmation = True
+                        continue
 
-            # LONG: пробій верхньої межі або свіп нижньої межі.
-            if expected == "LONG":
+                    direction_signal = "LONG"
+                    scenario = 1
+                    stop = (
+                        float(sweep["low"])
+                        - impulse["atr"] * STOP_ATR_BUFFER
+                    )
 
-                breakout = (
-                    float(confirm["close"]) > box_high
-                )
+                # SHORT: свіп верхньої межі біля максимуму імпульсу.
+                elif near_extreme:
+                    if not (
+                        float(sweep["high"]) > box_high
+                        and float(sweep["close"]) < box_high
+                        and float(sweep["close"]) > box_low
+                    ):
+                        waiting_for_confirmation = True
+                        continue
 
-                sweep_reentry = (
-                    float(confirm["low"]) < box_low
-                    and float(confirm["close"]) > box_low
-                    and float(confirm["close"]) <= box_high
-                )
+                    direction_signal = "SHORT"
+                    scenario = 2
+                    stop = (
+                        float(sweep["high"])
+                        + impulse["atr"] * STOP_ATR_BUFFER
+                    )
 
-                if not (breakout or sweep_reentry):
-                    waiting_for_confirmation = True
+                else:
                     continue
 
-                entry = float(confirm["close"])
+            else:
 
-                stop_base = min(
-                    [float(c["low"]) for c in box]
-                    + [float(confirm["low"])]
+                pullback_high = max(float(c["high"]) for c in post[:confirm_idx])
+
+                pullback_pct = (
+                    pullback_high - impulse["extreme"]
+                ) / impulse["size"]
+
+                # СЦЕНАРІЙ 1: глибокий відкат — продовження SHORT.
+                continuation = pullback_pct >= 0.60
+
+                # СЦЕНАРІЙ 2: боковик біля мінімуму — поглинання LONG.
+                near_extreme = (
+                    box_high <= impulse["start"] - impulse["size"] * 0.60
                 )
 
-                stop = stop_base - impulse["atr"] * 0.10
+                # SHORT: свіп верхньої межі та повернення в боковик.
+                if continuation:
+                    if not (
+                        float(sweep["high"]) > box_high
+                        and float(sweep["close"]) < box_high
+                        and float(sweep["close"]) > box_low
+                    ):
+                        waiting_for_confirmation = True
+                        continue
+
+                    direction_signal = "SHORT"
+                    scenario = 1
+                    stop = (
+                        float(sweep["high"])
+                        + impulse["atr"] * STOP_ATR_BUFFER
+                    )
+
+                # LONG: свіп нижньої межі біля мінімуму імпульсу.
+                elif near_extreme:
+                    if not (
+                        float(sweep["low"]) < box_low
+                        and float(sweep["close"]) > box_low
+                        and float(sweep["close"]) < box_high
+                    ):
+                        waiting_for_confirmation = True
+                        continue
+
+                    direction_signal = "LONG"
+                    scenario = 2
+                    stop = (
+                        float(sweep["low"])
+                        - impulse["atr"] * STOP_ATR_BUFFER
+                    )
+
+                else:
+                    continue
+
+            # Вхід — закриття свічки, яка зробила свіп і повернулася в боковик.
+            entry = float(sweep["close"])
+
+            if direction_signal == "LONG":
                 risk = entry - stop
 
                 if risk <= 0:
-                    invalid_risk = True
                     continue
+
+                log(
+                    "signals",
+                    f"IMPULSE RETEST LONG, сценарій {scenario}"
+                )
 
                 return {
                     "strategy": "IMPULSE RETEST",
@@ -1142,36 +1174,16 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                     "scenario": scenario
                 }
 
-            # SHORT: пробій нижньої межі або свіп верхньої межі.
             else:
-
-                breakout = (
-                    float(confirm["close"]) < box_low
-                )
-
-                sweep_reentry = (
-                    float(confirm["high"]) > box_high
-                    and float(confirm["close"]) < box_high
-                    and float(confirm["close"]) >= box_low
-                )
-
-                if not (breakout or sweep_reentry):
-                    waiting_for_confirmation = True
-                    continue
-
-                entry = float(confirm["close"])
-
-                stop_base = max(
-                    [float(c["high"]) for c in box]
-                    + [float(confirm["high"])]
-                )
-
-                stop = stop_base + impulse["atr"] * 0.10
                 risk = stop - entry
 
                 if risk <= 0:
-                    invalid_risk = True
                     continue
+
+                log(
+                    "signals",
+                    f"IMPULSE RETEST SHORT, сценарій {scenario}"
+                )
 
                 return {
                     "strategy": "IMPULSE RETEST",
@@ -1185,35 +1197,25 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                     "scenario": scenario
                 }
 
-    # Діагностика.
-    if invalid_risk:
-        log(
-            "invalid_stop",
-            "IMPULSE RETEST: некоректний ризик або стоп"
-        )
-
-    elif not saw_post_impulse:
+    if not saw_post_impulse:
         log(
             "waiting_confirmation",
-            "імпульс 1H є, але ще немає 17 закритих свічок 15M після нього"
+            "після імпульсу ще немає достатньої кількості свічок 15M"
         )
-
     elif not saw_consolidation:
         log(
             "waiting_confirmation",
-            "після імпульсу ще не сформовано 18 свічок боковика 15M"
+            "ще не сформовано 16 свічок боковика 15M"
         )
-
     elif waiting_for_confirmation:
         log(
             "waiting_confirmation",
-            "боковик 15M є, очікується пробій або свіп із поверненням усередину"
+            "боковик є, очікується свіп потрібної межі та повернення"
         )
-
     else:
         log(
             "waiting_confirmation",
-            "відкат не відповідає жодному з двох сценаріїв IMPULSE RETEST"
+            "боковик не відповідає умовам продовження або поглинання імпульсу"
         )
 
     return None
