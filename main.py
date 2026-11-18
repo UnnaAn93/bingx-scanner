@@ -702,23 +702,26 @@ def prepare_candles(raw_candles, interval_ms):
 def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     risk_per_coin = abs(entry - stop)
 
-    if risk_per_coin <= 0:
+    if risk_per_coin <= 0 or entry <= 0:
         return None
 
-    # Максимальний ризик $0.60
-    qty_by_risk = RISK_USD / risk_per_coin
-
-    # Не використовуємо більше доступної маржі депозиту
-    max_notional = DEPOSIT_USD * LEVERAGE
-    qty_by_margin = max_notional / entry
-
-    qty = min(qty_by_risk, qty_by_margin)
+    # Максимальний ризик на позицію — $0.60
+    qty = RISK_USD / risk_per_coin
 
     if qty <= 0:
         return None
 
     notional = qty * entry
+
+    # Маржа за поточного плеча
     margin = notional / LEVERAGE
+
+    # Рекомендація плеча, якщо маржа перевищує $3
+    recommended_leverage = None
+
+    if margin > 3.0:
+        recommended_leverage = math.ceil(notional / 3.0)
+
     actual_risk = qty * risk_per_coin
 
     return {
@@ -726,6 +729,7 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
         "notional_usd": notional,
         "margin_usd": margin,
         "actual_risk": actual_risk,
+        "recommended_leverage": recommended_leverage,
         "stop_loss": stop,
         "tp1": tp1,
         "tp2": tp2,
@@ -2254,17 +2258,29 @@ async def analyze_signal(session, symbol, report=None):
                     continue
 
                 # Перераховуємо цілі від актуальної ціни входу
-                if direction == "LONG":
+                # ATR для розрахунку TP2 і TP3 — таймфрейм 15M
+                atr_15m = calculate_atr(candles_15m, 14)
 
-                    tp1 = entry + risk
-                    tp2 = entry + risk * 2
-                    tp3 = entry + risk * 3
+                if atr_15m <= 0:
+                    log(
+                        "invalid_tp",
+                        f"{setup['strategy']}: некоректний ATR для тейків"
+                    )
+                    continue
+
+                # TP1 = 1.3R
+                # TP2 = TP1 + 2 ATR
+                # TP3 = TP2 + 2 ATR
+
+                if direction == "LONG":
+                    tp1 = entry + risk * 1.3
+                    tp2 = tp1 + atr_15m * 2
+                    tp3 = tp2 + atr_15m * 2
 
                 else:
-
-                    tp1 = entry - risk
-                    tp2 = entry - risk * 2
-                    tp3 = entry - risk * 3
+                    tp1 = entry - risk * 1.3
+                    tp2 = tp1 - atr_15m * 2
+                    tp3 = tp2 - atr_15m * 2
 
                 # Перевіряємо правильність цілей
                 if direction == "LONG":
@@ -2629,7 +2645,13 @@ async def scan_5min_loop(session, symbols):
                         f"{setup['direction']} — "
                         f"{get_strategy_name_uk(setup['strategy'])}"
                     )
-
+                    
+                    leverage_note = ""
+                    if setup.get("recommended_leverage"):
+                        leverage_note = (
+                            f"⚙️ Рекомендоване плече: "
+                            f"`{setup['recommended_leverage']}x`\n"
+                        )
                     msg = (
                         f"🎯 **НОВИЙ СИГНАЛ**\n"
                         f"🪙 Монета: `{setup['symbol']}`\n"
@@ -2645,6 +2667,7 @@ async def scan_5min_loop(session, symbols):
                         f"💵 Обсяг позиції: "
                         f"`{setup['notional_usd']:.2f} USD`\n"
                         f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
+                        f"{leverage_note}"
                         f"🛡️ Ризик на стоп: "
                         f"`${setup['actual_risk']:.2f}`\n\n"
                         f"⏳ Очікування ручного відкриття."
