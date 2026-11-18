@@ -1220,18 +1220,29 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
 
     return None
     
+
 def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     """
-    Ранній пошук заокруглення на 1H.
-    Вхід біля основи після підтвердження розвороту на 15M.
+    ROUNDING — пошук заокруглення на 1H та входу на 15M.
 
-    LONG:
-    1. На 1H формується заокруглене дно.
-    2. На 15M з'являється локальне дно.
-    3. Формується вищий мінімум.
-    4. Закрита свічка пробиває локальний максимум відскоку.
+    1H:
+        10 свічок попереднього руху
+        1 центральна свічка-екстремум
+        2 закриті свічки підтвердження
 
-    SHORT — дзеркальна логіка.
+    15M — два варіанти входу:
+        1. Ранній відскок від локального екстремуму.
+        2. Свіп рівня та повернення закриттям назад.
+
+    SL:
+        За локальний екстремум + 0.3 ATR.
+
+    TP:
+        TP1 = 2.5 ATR
+        TP2 = 4.5 ATR
+        TP3 = 6.5 ATR
+
+    Мінімальне співвідношення прибутку до ризику до TP1 = 1.3.
     """
 
     name = symbol or "Невідома монета"
@@ -1239,207 +1250,297 @@ def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    if len(candles_1h) < 30 or len(candles_15m) < 12:
-        log("other_rejections", "недостатньо свічок для ROUNDING")
+    # -------------------------------------------------
+    # 1. ПЕРЕВІРКА КІЛЬКОСТІ СВІЧОК
+    # -------------------------------------------------
+
+    if len(candles_1h) < 13:
+        log("other_rejections", "ROUNDING: недостатньо свічок 1H")
         return None
 
-    c = candles_1h[-30:]
-
-    left = c[:10]
-    middle = c[10:20]
-    right = c[20:]
-
-    left_low = min(x["low"] for x in left)
-    middle_low = min(x["low"] for x in middle)
-    right_low = min(x["low"] for x in right)
-
-    left_high = max(x["high"] for x in left)
-    middle_high = max(x["high"] for x in middle)
-    right_high = max(x["high"] for x in right)
-
-    atr_1h = calculate_atr(candles_1h, 14)
-    atr_15m = calculate_atr(candles_15m, 14)
-
-    if atr_1h <= 0 or atr_15m <= 0:
-        log("other_rejections", "некоректний ATR для ROUNDING")
+    if len(candles_15m) < 15:
+        log("other_rejections", "ROUNDING: недостатньо свічок 15M для ATR")
         return None
 
-    recent = candles_15m[-12:]
+    # Дані prepare_candles вже містять тільки закриті свічки.
+    # Додатково сортуємо за часом.
+    candles_1h = sorted(candles_1h, key=lambda x: x["time"])
+    candles_15m = sorted(candles_15m, key=lambda x: x["time"])
+
+    # -------------------------------------------------
+    # 2. ПОШУК ЗАОКРУГЛЕННЯ НА 1H
+    # -------------------------------------------------
+
+    hourly = candles_1h[-13:]
+
+    left = hourly[:10]
+    center = hourly[10]
+    right = hourly[11:]
+
+    center_low = float(center["low"])
+    center_high = float(center["high"])
+
+    left_lows = [float(x["low"]) for x in left]
+    right_lows = [float(x["low"]) for x in right]
+
+    left_highs = [float(x["high"]) for x in left]
+    right_highs = [float(x["high"]) for x in right]
+
+    # Попередній спад + центральне дно + початок відновлення.
+    long_shape = (
+        float(left[0]["close"]) > float(left[-1]["close"])
+        and center_low < min(left_lows)
+        and center_low < min(right_lows)
+        and float(right[-1]["close"]) > float(right[0]["close"])
+    )
+
+    # Попереднє зростання + центральна вершина + початок зниження.
+    short_shape = (
+        float(left[0]["close"]) < float(left[-1]["close"])
+        and center_high > max(left_highs)
+        and center_high > max(right_highs)
+        and float(right[-1]["close"]) < float(right[0]["close"])
+    )
+
+    if not long_shape and not short_shape:
+        log("no_rounding", "немає підтвердженого заокруглення на 1H")
+        return None
+
+    # -------------------------------------------------
+    # 3. ATR НА 15M
+    # -------------------------------------------------
+
+    atr = calculate_atr(candles_15m, 14)
+
+    if atr <= 0:
+        log("other_rejections", "ROUNDING: некоректний ATR на 15M")
+        return None
+
+    recent = candles_15m[-8:]
+
     last = recent[-1]
     prev = recent[-2]
 
-    long_shape = (
-        middle_low < left_low
-        and middle_low < right_low
-        and right_low > middle_low
-    )
+    entry = float(last["close"])
+    last_open = float(last["open"])
+    last_high = float(last["high"])
+    last_low = float(last["low"])
 
-    short_shape = (
-        middle_high > left_high
-        and middle_high > right_high
-        and right_high < middle_high
-    )
+    # -------------------------------------------------
+    # 4. СПІЛЬНИЙ РОЗРАХУНОК SL / TP / RR
+    # -------------------------------------------------
 
-    long_pivot_found = False
-    short_pivot_found = False
+    def build_setup(direction, stop_level, strategy, entry_type):
 
-    long_higher_low_found = False
-    short_lower_high_found = False
+        if direction == "LONG":
 
-    long_breakout = False
-    short_breakout = False
+            stop = stop_level - atr * 0.3
 
-    long_not_extended = False
-    short_not_extended = False
+            if stop >= entry:
+                log("invalid_stop", "ROUNDING LONG: стоп не нижче входу")
+                return None
 
-    # LONG — ROUNDING BOTTOM
+            risk = entry - stop
+
+            tp1 = entry + atr * 2.5
+            tp2 = tp1 + atr * 2.0
+            tp3 = tp2 + atr * 2.0
+
+            reward = tp1 - entry
+
+        else:
+
+            stop = stop_level + atr * 0.3
+
+            if stop <= entry:
+                log("invalid_stop", "ROUNDING SHORT: стоп не вище входу")
+                return None
+
+            risk = stop - entry
+
+            tp1 = entry - atr * 2.5
+            tp2 = tp1 - atr * 2.0
+            tp3 = tp2 - atr * 2.0
+
+            reward = entry - tp1
+
+        if risk <= 0 or reward <= 0:
+            log("invalid_stop", "ROUNDING: некоректний ризик або тейк")
+            return None
+
+        rr = reward / risk
+
+        if rr < 1.3:
+            log(
+                "invalid_tp",
+                f"ROUNDING {direction}: RR до TP1 = 1:{rr:.2f}, потрібно мінімум 1:1.3"
+            )
+            return None
+
+        return {
+            "strategy": strategy,
+            "direction": direction,
+            "entry_type": entry_type,
+            "entry": entry,
+            "stop": stop,
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3,
+            "rr": rr
+        }
+
+    # -------------------------------------------------
+    # 5. LONG — ЗАОКРУГЛЕНЕ ДНО
+    # -------------------------------------------------
+
     if long_shape:
+
+        # ВАРІАНТ 1:
+        # Ранній вхід від локального мінімуму.
+        # Ціна перестала оновлювати мінімум і почала відскок.
+
         pivot_idx = None
 
-        for i in range(len(recent) - 3, 1, -1):
-            if (
-                recent[i]["low"] <= recent[i - 1]["low"]
-                and recent[i]["low"] <= recent[i + 1]["low"]
-            ):
+        for i in range(len(recent) - 2, 0, -1):
+
+            current_low = float(recent[i]["low"])
+            previous_low = float(recent[i - 1]["low"])
+            next_low = float(recent[i + 1]["low"])
+
+            if current_low <= previous_low and current_low <= next_low:
                 pivot_idx = i
                 break
 
         if pivot_idx is not None:
-            long_pivot_found = True
 
-            pivot_low = recent[pivot_idx]["low"]
+            pivot_low = float(recent[pivot_idx]["low"])
 
-            rebound_high = max(
-                x["high"] for x in recent[pivot_idx + 1:-1]
+            early_bounce = (
+                last_low > pivot_low
+                and float(last["close"]) > last_open
+                and float(last["close"]) > float(prev["close"])
+                and entry - pivot_low <= atr * 2.0
             )
 
-            higher_low_found = any(
-                recent[i]["low"] > pivot_low
-                and recent[i]["low"] < rebound_high
-                for i in range(pivot_idx + 2, len(recent) - 1)
+            if early_bounce:
+
+                setup = build_setup(
+                    direction="LONG",
+                    stop_level=pivot_low,
+                    strategy="ROUNDING BOTTOM EARLY",
+                    entry_type="EARLY"
+                )
+
+                if setup is not None:
+                    return setup
+
+        # ВАРІАНТ 2:
+        # Свіп нижньої межі та повернення закриттям у діапазон.
+
+        base = recent[-7:-1]
+
+        support = min(float(x["low"]) for x in base)
+
+        sweep_recovery = (
+            last_low < support
+            and entry > support
+            and entry > last_open
+        )
+
+        if sweep_recovery:
+
+            setup = build_setup(
+                direction="LONG",
+                stop_level=last_low,
+                strategy="ROUNDING BOTTOM EARLY",
+                entry_type="SWEEP"
             )
 
-            long_higher_low_found = higher_low_found
+            if setup is not None:
+                return setup
 
-            breakout = (
-                last["close"] > rebound_high
-                and last["close"] > last["open"]
-            )
+        log(
+            "waiting_confirmation",
+            "ROUNDING LONG: заокруглене дно на 1H є, але на 15M немає раннього відскоку або свіпу з поверненням"
+        )
 
-            long_breakout = breakout
+    # -------------------------------------------------
+    # 6. SHORT — ЗАОКРУГЛЕНА ВЕРШИНА
+    # -------------------------------------------------
 
-            not_extended = (
-                last["close"] - pivot_low <= atr_15m * 2.0
-            )
-
-            long_not_extended = not_extended
-
-            if higher_low_found and breakout and not_extended:
-                stop = pivot_low - atr_15m * 0.3
-                risk = last["close"] - stop
-
-                if risk <= 0:
-                    log("invalid_stop", "ROUNDING LONG: некоректний ризик або стоп")
-                    return None
-
-                return {
-                    "strategy": "ROUNDING BOTTOM EARLY",
-                    "direction": "LONG",
-                    "entry": last["close"],
-                    "stop": stop,
-                    "tp1": last["close"] + risk,
-                    "tp2": last["close"] + 2 * risk,
-                    "tp3": last["close"] + 3 * risk
-                }
-
-    # SHORT — ROUNDING TOP
     if short_shape:
+
+        # ВАРІАНТ 1:
+        # Ранній вхід від локального максимуму.
+        # Ціна перестала оновлювати максимум і почала зниження.
+
         pivot_idx = None
 
-        for i in range(len(recent) - 3, 1, -1):
-            if (
-                recent[i]["high"] >= recent[i - 1]["high"]
-                and recent[i]["high"] >= recent[i + 1]["high"]
-            ):
+        for i in range(len(recent) - 2, 0, -1):
+
+            current_high = float(recent[i]["high"])
+            previous_high = float(recent[i - 1]["high"])
+            next_high = float(recent[i + 1]["high"])
+
+            if current_high >= previous_high and current_high >= next_high:
                 pivot_idx = i
                 break
 
         if pivot_idx is not None:
-            short_pivot_found = True
 
-            pivot_high = recent[pivot_idx]["high"]
+            pivot_high = float(recent[pivot_idx]["high"])
 
-            rebound_low = min(
-                x["low"] for x in recent[pivot_idx + 1:-1]
+            early_reversal = (
+                last_high < pivot_high
+                and float(last["close"]) < last_open
+                and float(last["close"]) < float(prev["close"])
+                and pivot_high - entry <= atr * 2.0
             )
 
-            lower_high_found = any(
-                recent[i]["high"] < pivot_high
-                and recent[i]["high"] > rebound_low
-                for i in range(pivot_idx + 2, len(recent) - 1)
+            if early_reversal:
+
+                setup = build_setup(
+                    direction="SHORT",
+                    stop_level=pivot_high,
+                    strategy="ROUNDING TOP EARLY",
+                    entry_type="EARLY"
+                )
+
+                if setup is not None:
+                    return setup
+
+        # ВАРІАНТ 2:
+        # Свіп верхньої межі та повернення закриттям у діапазон.
+
+        base = recent[-7:-1]
+
+        resistance = max(float(x["high"]) for x in base)
+
+        sweep_recovery = (
+            last_high > resistance
+            and entry < resistance
+            and entry < last_open
+        )
+
+        if sweep_recovery:
+
+            setup = build_setup(
+                direction="SHORT",
+                stop_level=last_high,
+                strategy="ROUNDING TOP EARLY",
+                entry_type="SWEEP"
             )
 
-            short_lower_high_found = lower_high_found
+            if setup is not None:
+                return setup
 
-            breakout = (
-                last["close"] < rebound_low
-                and last["close"] < last["open"]
-            )
-
-            short_breakout = breakout
-
-            not_extended = (
-                pivot_high - last["close"] <= atr_15m * 2.0
-            )
-
-            short_not_extended = not_extended
-
-            if lower_high_found and breakout and not_extended:
-                stop = pivot_high + atr_15m * 0.3
-                risk = stop - last["close"]
-
-                if risk <= 0:
-                    log("invalid_stop", "ROUNDING SHORT: некоректний ризик або стоп")
-                    return None
-
-                return {
-                    "strategy": "ROUNDING TOP EARLY",
-                    "direction": "SHORT",
-                    "entry": last["close"],
-                    "stop": stop,
-                    "tp1": last["close"] - risk,
-                    "tp2": last["close"] - 2 * risk,
-                    "tp3": last["close"] - 3 * risk
-                }
-
-    # Діагностика LONG
-    if long_shape:
-        if not long_pivot_found:
-            log("waiting_confirmation", "ROUNDING LONG: заокруглене дно на 1H є, але локального дна на 15M немає")
-        elif not long_higher_low_found:
-            log("waiting_confirmation", "ROUNDING LONG: локальне дно є, але немає вищого мінімуму")
-        elif not long_breakout:
-            log("waiting_confirmation", "ROUNDING LONG: структура є, але немає пробою локального максимуму")
-        elif not long_not_extended:
-            log("waiting_confirmation", "ROUNDING LONG: ціна вже відійшла від дна більш ніж на 2 ATR")
-
-    # Діагностика SHORT
-    if short_shape:
-        if not short_pivot_found:
-            log("waiting_confirmation", "ROUNDING SHORT: заокруглена вершина на 1H є, але локального максимуму на 15M немає")
-        elif not short_lower_high_found:
-            log("waiting_confirmation", "ROUNDING SHORT: локальна вершина є, але немає нижчого максимуму")
-        elif not short_breakout:
-            log("waiting_confirmation", "ROUNDING SHORT: структура є, але немає пробою локального мінімуму")
-        elif not short_not_extended:
-            log("waiting_confirmation", "ROUNDING SHORT: ціна вже відійшла від вершини більш ніж на 2 ATR")
-
-    if not long_shape and not short_shape:
-        log("no_rounding", "немає заокругленого дна або вершини на 1H")
+        log(
+            "waiting_confirmation",
+            "ROUNDING SHORT: заокруглена вершина на 1H є, але на 15M немає раннього зниження або свіпу з поверненням"
+        )
 
     return None
-
-
+    
 def evaluate_double_breakout(
     candles,
     level,
