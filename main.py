@@ -2276,7 +2276,6 @@ def format_scan_report(report):
         ("🛑 НЕКОРЕКТНИЙ STOP LOSS", "invalid_stop"),
         ("🎯 НЕКОРЕКТНІ TAKE PROFIT", "invalid_tp"),
         ("⚠️ ІНШІ ВІДХИЛЕННЯ", "other_rejections"),
-        ("🔁 ПРОПУЩЕНО ЧЕРЕЗ COOLDOWN", "cooldown"),
         ("❌ ПОМИЛКИ", "errors")
     ]
 
