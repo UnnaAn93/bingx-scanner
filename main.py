@@ -2491,16 +2491,16 @@ def format_scan_report(report):
 
     sections = [
         ("🎯 ТОРГОВІ СИГНАЛИ", "signals"),
-        ("🔎 НЕМАЄ RANGE SWEEP", "no_sweep"),
-        ("🔎 НЕМАЄ ROUNDING", "no_rounding"),
-        ("🔎 НЕМАЄ IMPULSE RETEST", "no_impulse_retest"),
-        ("🔎 НЕМАЄ DOUBLE BOTTOM / TOP", "no_double_pattern"),
+        ("🔎 НЕМАЄ СВІПУ МЕЖ БОКОВИКА", "no_sweep"),
+        ("🔎 НЕМАЄ ЗАОКРУГЛЕННЯ", "no_rounding"),
+        ("🔎 НЕМАЄ ІМПУЛЬСУ — ВІДКАТУ — БОКОВИКА", "no_impulse_retest"),
+        ("🔎 НЕМАЄ ПОДВІЙНОГО ДНА / ВЕРШИНИ", "no_double_pattern"),
         ("⏳ Є СТРУКТУРА, АЛЕ НЕМАЄ ПІДТВЕРДЖЕННЯ", "waiting_confirmation"),
-        ("🛑 НЕКОРЕКТНИЙ STOP LOSS", "invalid_stop"),
-        ("🎯 НЕКОРЕКТНІ TAKE PROFIT", "invalid_tp"),
+        ("🛑 НЕКОРЕКТНИЙ СТОП-ЛОС", "invalid_stop"),
+        ("🎯 НЕКОРЕКТНІ ТЕЙК-ПРОФІТИ", "invalid_tp"),
         ("⚠️ ІНШІ ВІДХИЛЕННЯ", "other_rejections"),
         ("❌ ПОМИЛКИ", "errors")
-    ]
+        ]
 
     # Переклад типових причин українською
     translations = {
@@ -2584,6 +2584,34 @@ def format_scan_report(report):
                 if original in reason_lower:
                     reason = translated
                     break
+
+            # Додатковий переклад англомовних назв стратегій
+            display_replacements = (
+                ("ROUNDING BOTTOM EARLY", "Заокруглене дно"),
+                ("ROUNDING TOP EARLY", "Заокруглена вершина"),
+                ("DOUBLE BOTTOM — STRONG BREAKOUT", "Подвійне дно — сильний пробій"),
+                ("DOUBLE TOP — STRONG BREAKOUT", "Подвійна вершина — сильний пробій"),
+                ("DOUBLE BOTTOM — RETEST", "Подвійне дно — ретест"),
+                ("DOUBLE TOP — RETEST", "Подвійна вершина — ретест"),
+                ("detect_range_sweep", "пошук свіпу межі боковика"),
+                ("detect_impulse_retest", "пошук імпульсу, відкату та боковика"),
+                ("detect_rounding", "пошук заокруглення"),
+                ("detect_double_bottom_top", "пошук подвійного дна / вершини"),
+                ("UNKNOWN", "невідома стратегія"),
+                ("ROUNDING LONG:", "Заокруглення ЛОНГ:"),
+                ("ROUNDING SHORT:", "Заокруглення ШОРТ:"),
+                ("DOUBLE BOTTOM LONG:", "Подвійне дно (ЛОНГ):"),
+                ("DOUBLE TOP SHORT:", "Подвійна вершина (ШОРТ):"),
+                ("DOUBLE BOTTOM/TOP", "подвійного дна / вершини"),
+                ("RANGE SWEEP", "свіп межі боковика"),
+                ("IMPULSE RETEST", "імпульс — відкат — боковик"),
+                ("ROUNDING", "заокруглення"),
+                ("cooldown", "період очікування"),
+                ("ATR", "середній істинний діапазон (ATR)"),
+            )
+
+            for original, translated in display_replacements:
+                reason = reason.replace(original, translated)
 
             if reason not in grouped:
                 grouped[reason] = []
