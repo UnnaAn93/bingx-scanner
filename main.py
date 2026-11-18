@@ -767,7 +767,13 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     if atr_1h <= 0:
         log("other_rejections", "не вдалося розрахувати ATR 1H")
         return None
+        
+    atr_15m = calculate_atr(candles_15m, 14)
 
+    if atr_15m <= 0:
+        log("other_rejections", "не вдалося розрахувати ATR 15M")
+        return None
+        
     tolerance = atr_1h * 0.2
     selected_range = None
 
@@ -820,7 +826,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     # Дві останні закриті свічки 15M.
     sweep = candles_15m[-2]
     confirm = candles_15m[-1]
-
+    
     # LONG — свіп нижньої межі.
     if (
         sweep["low"] < range_low
@@ -830,13 +836,15 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         and confirm["close"] < range_high
     ):
         entry = confirm["close"]
-        stop = sweep["low"] - atr_1h * 0.10
+        stop = sweep["low"] - atr_15m * 0.30
 
         if stop >= entry:
             log("invalid_stop", "RANGE SWEEP LONG: стоп не нижче входу")
             return None
 
-        risk = entry - stop
+        tp1 = entry + atr_15m * 2.5
+        tp2 = tp1 + atr_15m * 2
+        tp3 = tp2 + atr_15m * 2
 
         log(
             "signals",
@@ -848,9 +856,9 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
             "direction": "LONG",
             "entry": entry,
             "stop": stop,
-            "tp1": entry + risk * 1.3,
-            "tp2": entry + risk * 1.3 + calculate_atr(candles_15m, 14) * 2,
-            "tp3": entry + risk * 1.3 + calculate_atr(candles_15m, 14) * 4
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3
         }
 
     # SHORT — свіп верхньої межі.
@@ -862,13 +870,15 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         and confirm["close"] > range_low
     ):
         entry = confirm["close"]
-        stop = sweep["high"] + atr_1h * 0.10
+        stop = sweep["high"] + atr_15m * 0.30
 
         if stop <= entry:
             log("invalid_stop", "RANGE SWEEP SHORT: стоп не вище входу")
             return None
 
-        risk = stop - entry
+        tp1 = entry - atr_15m * 2.5
+        tp2 = tp1 - atr_15m * 2
+        tp3 = tp2 - atr_15m * 2
 
         log(
             "signals",
@@ -880,9 +890,9 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
             "direction": "SHORT",
             "entry": entry,
             "stop": stop,
-            "tp1": entry - risk * 1.3,
-            "tp2": entry - risk * 1.3 - calculate_atr(candles_15m, 14) * 2,
-            "tp3": entry - risk * 1.3 - calculate_atr(candles_15m, 14) * 4
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3
         }
 
     log(
@@ -892,6 +902,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     )
 
     return None
+
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
@@ -1111,6 +1122,13 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                     box_high <= impulse["start"] - impulse["size"] * 0.60
                 )
 
+                # ATR(14) на таймфреймі 15M для SL і TP.
+                atr_15m = calculate_atr(candles_15m, 14)
+
+                if atr_15m <= 0:
+                    log("other_rejections", "IMPULSE RETEST: некоректний ATR 15M")
+                    return None
+
                 # SHORT: свіп верхньої межі та повернення в боковик.
                 if continuation:
                     if not (
@@ -1125,7 +1143,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                     scenario = 1
                     stop = (
                         float(sweep["high"])
-                        + impulse["atr"] * STOP_ATR_BUFFER
+                        + atr_15m * 0.30
                     )
 
                 # LONG: свіп нижньої межі біля мінімуму імпульсу.
@@ -1142,84 +1160,92 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
                     scenario = 2
                     stop = (
                         float(sweep["low"])
-                        - impulse["atr"] * STOP_ATR_BUFFER
+                        - atr_15m * 0.30
                     )
 
                 else:
                     continue
 
-            # Вхід — закриття свічки, яка зробила свіп і повернулася в боковик.
-            entry = float(sweep["close"])
+                # Вхід — закриття свічки, яка зробила свіп і повернулася в боковик.
+                entry = float(sweep["close"])
 
-            if direction_signal == "LONG":
-                risk = entry - stop
+                if direction_signal == "LONG":
+                    risk = entry - stop
 
-                if risk <= 0:
-                    continue
+                    if risk <= 0:
+                        continue
 
+                    tp1 = entry + atr_15m * 2.5
+                    tp2 = tp1 + atr_15m * 2
+                    tp3 = tp2 + atr_15m * 2
+
+                    log(
+                        "signals",
+                        f"IMPULSE RETEST LONG, сценарій {scenario}"
+                    )
+
+                    return {
+                        "strategy": "IMPULSE RETEST",
+                        "direction": "LONG",
+                        "entry": entry,
+                        "stop": stop,
+                        "tp1": tp1,
+                        "tp2": tp2,
+                        "tp3": tp3,
+                        "retests": MIN_CONSOLIDATION_CANDLES,
+                        "scenario": scenario
+                    }
+
+                else:
+                    risk = stop - entry
+
+                    if risk <= 0:
+                        continue
+
+                    tp1 = entry - atr_15m * 2.5
+                    tp2 = tp1 - atr_15m * 2
+                    tp3 = tp2 - atr_15m * 2
+
+                    log(
+                        "signals",
+                        f"IMPULSE RETEST SHORT, сценарій {scenario}"
+                    )
+
+                    return {
+                        "strategy": "IMPULSE RETEST",
+                        "direction": "SHORT",
+                        "entry": entry,
+                        "stop": stop,
+                        "tp1": tp1,
+                        "tp2": tp2,
+                        "tp3": tp3,
+                        "retests": MIN_CONSOLIDATION_CANDLES,
+                        "scenario": scenario
+                    }
+
+            if not saw_post_impulse:
                 log(
-                    "signals",
-                    f"IMPULSE RETEST LONG, сценарій {scenario}"
+                    "waiting_confirmation",
+                    "після імпульсу ще немає достатньої кількості свічок 15M"
                 )
-
-                return {
-                    "strategy": "IMPULSE RETEST",
-                    "direction": "LONG",
-                    "entry": entry,
-                    "stop": stop,
-                    "tp1": entry + risk,
-                    "tp2": entry + risk * 2,
-                    "tp3": entry + risk * 3,
-                    "retests": MIN_CONSOLIDATION_CANDLES,
-                    "scenario": scenario
-                }
-
+            elif not saw_consolidation:
+                log(
+                    "waiting_confirmation",
+                    "ще не сформовано 16 свічок боковика 15M"
+                )
+            elif waiting_for_confirmation:
+                log(
+                    "waiting_confirmation",
+                    "боковик є, очікується свіп потрібної межі та повернення"
+                )
             else:
-                risk = stop - entry
-
-                if risk <= 0:
-                    continue
-
                 log(
-                    "signals",
-                    f"IMPULSE RETEST SHORT, сценарій {scenario}"
+                    "waiting_confirmation",
+                    "боковик не відповідає умовам продовження або поглинання імпульсу"
                 )
 
-                return {
-                    "strategy": "IMPULSE RETEST",
-                    "direction": "SHORT",
-                    "entry": entry,
-                    "stop": stop,
-                    "tp1": entry - risk,
-                    "tp2": entry - risk * 2,
-                    "tp3": entry - risk * 3,
-                    "retests": MIN_CONSOLIDATION_CANDLES,
-                    "scenario": scenario
-                }
+            return None
 
-    if not saw_post_impulse:
-        log(
-            "waiting_confirmation",
-            "після імпульсу ще немає достатньої кількості свічок 15M"
-        )
-    elif not saw_consolidation:
-        log(
-            "waiting_confirmation",
-            "ще не сформовано 16 свічок боковика 15M"
-        )
-    elif waiting_for_confirmation:
-        log(
-            "waiting_confirmation",
-            "боковик є, очікується свіп потрібної межі та повернення"
-        )
-    else:
-        log(
-            "waiting_confirmation",
-            "боковик не відповідає умовам продовження або поглинання імпульсу"
-        )
-
-    return None
-    
 
 def detect_rounding(candles_1h, candles_15m, report=None, symbol=None):
     """
@@ -1631,14 +1657,18 @@ def evaluate_double_breakout(
             if risk <= 0:
                 return None, "invalid_stop"
 
+            tp1 = entry + atr * 2.5
+            tp2 = tp1 + atr * 2
+            tp3 = tp2 + atr * 2
+
             return {
                 "strategy": "DOUBLE BOTTOM — STRONG BREAKOUT",
                 "direction": "LONG",
                 "entry": entry,
                 "stop": stop,
-                "tp1": entry + risk,
-                "tp2": entry + risk * 2,
-                "tp3": entry + risk * 3
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp3": tp3
             }, "strong_breakout"
 
         else:
@@ -1651,14 +1681,18 @@ def evaluate_double_breakout(
             if risk <= 0:
                 return None, "invalid_stop"
 
+            tp1 = entry - atr * 2.5
+            tp2 = tp1 - atr * 2
+            tp3 = tp2 - atr * 2
+
             return {
                 "strategy": "DOUBLE TOP — STRONG BREAKOUT",
                 "direction": "SHORT",
                 "entry": entry,
                 "stop": stop,
-                "tp1": entry - risk,
-                "tp2": entry - risk * 2,
-                "tp3": entry - risk * 3
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp3": tp3
             }, "strong_breakout"
 
     # Сценарій 2: пробій був раніше, зараз перевіряємо ретест
@@ -1683,14 +1717,18 @@ def evaluate_double_breakout(
         if risk <= 0:
             return None, "invalid_stop"
 
+        tp1 = entry + atr * 2.5
+        tp2 = tp1 + atr * 2
+        tp3 = tp2 + atr * 2
+
         return {
             "strategy": "DOUBLE BOTTOM — RETEST",
             "direction": "LONG",
             "entry": entry,
             "stop": stop,
-            "tp1": entry + risk,
-            "tp2": entry + risk * 2,
-            "tp3": entry + risk * 3
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3
         }, "retest"
 
     else:
@@ -1714,16 +1752,19 @@ def evaluate_double_breakout(
         if risk <= 0:
             return None, "invalid_stop"
 
+        tp1 = entry - atr * 2.5
+        tp2 = tp1 - atr * 2
+        tp3 = tp2 - atr * 2
+
         return {
             "strategy": "DOUBLE TOP — RETEST",
             "direction": "SHORT",
             "entry": entry,
             "stop": stop,
-            "tp1": entry - risk,
-            "tp2": entry - risk * 2,
-            "tp3": entry - risk * 3
+            "tp1": tp1,
+            "tp2": tp2,
+            "tp3": tp3
         }, "retest"
-    
 
 def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
     """
