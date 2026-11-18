@@ -2385,6 +2385,20 @@ def format_scan_report(report):
 # Захист від одночасного запуску декількох сканувань
 SCAN_LOCK = asyncio.Lock()
 
+def get_strategy_name_uk(strategy):
+    strategy_names = {
+        "RANGE SWEEP": "Свіп межі боковика",
+        "IMPULSE RETEST": "Імпульс — відкат — боковик",
+        "ROUNDING BOTTOM EARLY": "Заокруглене дно",
+        "ROUNDING TOP EARLY": "Заокруглена вершина",
+        "DOUBLE BOTTOM — STRONG BREAKOUT": "Подвійне дно — сильний пробій",
+        "DOUBLE TOP — STRONG BREAKOUT": "Подвійна вершина — сильний пробій",
+        "DOUBLE BOTTOM — RETEST": "Подвійне дно — ретест",
+        "DOUBLE TOP — RETEST": "Подвійна вершина — ретест"
+    }
+
+    return strategy_names.get(strategy, strategy)
+    
 # =====================================================
 # ОСНОВНЕ СКАНУВАННЯ РИНКУ
 # Добовий об'єм уже відфільтрований у main_bot_loop()
@@ -2487,13 +2501,13 @@ async def scan_5min_loop(session, symbols):
                         "signals",
                         f"{setup['symbol']} — "
                         f"{setup['direction']} — "
-                        f"{setup['strategy']}"
+                        f"{get_strategy_name_uk(setup['strategy'])}"
                     )
 
                     msg = (
                         f"🎯 **НОВИЙ СИГНАЛ**\n"
                         f"🪙 Монета: `{setup['symbol']}`\n"
-                        f"📊 Стратегія: `{setup['strategy']}`\n"
+                        f"📊 Стратегія: `{get_strategy_name_uk(setup['strategy'])}`\n"
                         f"📈 Напрямок: `{setup['direction']}`\n\n"
                         f"🔍 Свіп 1D: `{setup.get('daily_sweep', 'не вдалося перевірити')}`\n\n"
                         f"🟢 Вхід: `{setup['entry']:.8f}`\n"
