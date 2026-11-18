@@ -2149,7 +2149,8 @@ async def get_daily_sweep_status(session, symbol):
             flush=True
         )
         return "не вдалося перевірити"
-        
+
+
 async def analyze_signal(session, symbol, report=None):
     try:
         now = time.time()
@@ -2173,7 +2174,7 @@ async def analyze_signal(session, symbol, report=None):
             return None
 
         # =====================================================
-        # ЕТАП 1. СПОЧАТКУ ЗАВАНТАЖУЄМО ТІЛЬКИ 15m СВІЧКИ
+        # ЕТАП 1. ЗАВАНТАЖУЄМО 15M СВІЧКИ
         # =====================================================
 
         raw_15m = await get_cached_klines(
@@ -2213,8 +2214,7 @@ async def analyze_signal(session, symbol, report=None):
             )
             return None
 
-        # Порівнюємо об'єми сусідніх свічок:
-        # 1-ша з 2-гою, 2-га з 3-ю, 3-тя з 4-ю, 4-та з 5-ю
+        # Порівнюємо об'єми сусідніх свічок
         volumes = [c["volume"] for c in recent]
 
         volume_spike = False
@@ -2240,7 +2240,7 @@ async def analyze_signal(session, symbol, report=None):
             return None
 
         # =====================================================
-        # ЕТАП 3. ТІЛЬКИ ТЕПЕР ЗАВАНТАЖУЄМО 1h СВІЧКИ
+        # ЕТАП 3. ЗАВАНТАЖУЄМО 1H СВІЧКИ
         # =====================================================
 
         raw_1h = await get_cached_klines(
@@ -2348,56 +2348,23 @@ async def analyze_signal(session, symbol, report=None):
             return None
 
         # =====================================================
-        # ЕТАП 6. ОТРИМУЄМО АКТУАЛЬНУ ЦІНУ
-        # =====================================================
-
-        ticker_url = (
-            f"{BINGX_BASE_URL}/openApi/swap/v2/quote/ticker"
-        )
-
-        async with session.get(
-            ticker_url,
-            params={"symbol": symbol},
-            timeout=5
-        ) as resp:
-
-            if resp.status != 200:
-                log(
-                    "other_rejections",
-                    "помилка отримання актуальної ціни"
-                )
-                return None
-
-            ticker_data = await resp.json()
-
-        if ticker_data.get("code") != 0:
-            log(
-                "other_rejections",
-                "BingX не повернув актуальну ціну"
-            )
-            return None
-
-        ticker = ticker_data.get("data")
-
-        if isinstance(ticker, list):
-            ticker = ticker[0] if ticker else None
-
-        if not ticker or not ticker.get("lastPrice"):
-            log(
-                "other_rejections",
-                "відсутня актуальна ціна"
-            )
-            return None
-
-        entry = float(ticker["lastPrice"])
-
-        # =====================================================
-        # ЕТАП 7. ПЕРЕВІРКА СТОПА ТА TAKE PROFIT
+        # ЕТАП 6. ПЕРЕВІРКА СТОПА ТА TAKE PROFIT
         # =====================================================
 
         for setup in setups:
 
             direction = setup.get("direction")
+
+            # Ціна входу береться безпосередньо із сигналу
+            try:
+                entry = float(setup["entry"])
+            except (KeyError, TypeError, ValueError):
+                log(
+                    "invalid_entry",
+                    f"{setup.get('strategy', 'UNKNOWN')}: "
+                    "відсутня ціна входу в сигналі"
+                )
+                continue
 
             if direction not in ("LONG", "SHORT"):
                 log(
@@ -2439,50 +2406,43 @@ async def analyze_signal(session, symbol, report=None):
                     )
                     continue
 
-                # Перераховуємо цілі від актуальної ціни входу
-                # ATR для розрахунку TP2 і TP3 — таймфрейм 15M
+                # ATR(14) на таймфреймі 15M
                 atr_15m = calculate_atr(candles_15m, 14)
 
                 if atr_15m <= 0:
                     log(
                         "invalid_tp",
-                        f"{setup['strategy']}: некоректний ATR для тейків"
+                        f"{setup['strategy']}: некоректний ATR 15M"
                     )
                     continue
 
-                # TP1 = 1.3R
+                # TP1 = 2.5 ATR
                 # TP2 = TP1 + 2 ATR
                 # TP3 = TP2 + 2 ATR
 
                 if direction == "LONG":
-                    tp1 = entry + risk * 1.3
+
+                    tp1 = entry + atr_15m * 2.5
                     tp2 = tp1 + atr_15m * 2
                     tp3 = tp2 + atr_15m * 2
 
                 else:
-                    tp1 = entry - risk * 1.3
+
+                    tp1 = entry - atr_15m * 2.5
                     tp2 = tp1 - atr_15m * 2
                     tp3 = tp2 - atr_15m * 2
 
-                # Перевіряємо правильність цілей
-                if direction == "LONG":
+                # Перевірка мінімального RR 1:1.3
+                rr = abs(tp1 - entry) / risk
 
-                    if not (entry < tp1 < tp2 < tp3):
-                        log(
-                            "invalid_tp",
-                            f"{setup['strategy']}: неправильний порядок TP"
-                        )
-                        continue
+                if rr < 1.3:
+                    log(
+                        "invalid_tp",
+                        f"{setup['strategy']}: RR нижче 1:1.3"
+                    )
+                    continue
 
-                else:
-
-                    if not (entry > tp1 > tp2 > tp3):
-                        log(
-                            "invalid_tp",
-                            f"{setup['strategy']}: неправильний порядок TP"
-                        )
-                        continue
-
+                # Розрахунок розміру позиції та торгових рівнів
                 levels = calculate_trade_levels(
                     direction,
                     entry,
@@ -2495,7 +2455,8 @@ async def analyze_signal(session, symbol, report=None):
                 if levels is None:
                     log(
                         "invalid_tp",
-                        f"{setup['strategy']}: не вдалося розрахувати торгові рівні"
+                        f"{setup['strategy']}: "
+                        "не вдалося розрахувати торгові рівні"
                     )
                     continue
 
