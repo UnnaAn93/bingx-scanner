@@ -741,14 +741,13 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     RANGE SWEEP
 
     1H:
-    - шукаємо боковик у межах останніх 72 закритих свічок;
-    - довжина боковика може бути від 10 до 72 свічок;
-    - потрібно щонайменше 2 дотики до верхньої межі,
-      2 дотики до нижньої та 3 загалом.
+    - пошук боковика від 10 до 72 закритих свічок;
+    - мінімум 2 дотики до кожної межі;
+    - діапазон не ширший за 6 ATR.
 
     15M:
-    - LONG: прокол нижньої межі та закриття назад усередині;
-    - SHORT: прокол верхньої межі та закриття назад усередині;
+    - LONG: прокол нижньої межі та повернення всередину;
+    - SHORT: прокол верхньої межі та повернення всередину;
     - наступна свічка підтверджує повернення.
     """
 
@@ -757,12 +756,10 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    # Потрібні закриті свічки.
     if len(candles_1h) < 11 or len(candles_15m) < 2:
         log("other_rejections", "недостатньо свічок для RANGE SWEEP")
         return None
 
-    # Останню 1H свічку не використовуємо для побудови боковика.
     hourly = candles_1h[:-1][-RANGE_LOOKBACK_1H:]
 
     atr_1h = calculate_atr(candles_1h[:-1], 14)
@@ -772,13 +769,12 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         return None
 
     tolerance = atr_1h * 0.2
-
-    # Шукаємо найсвіжіший придатний боковик.
     selected_range = None
 
-    max_length = len(hourly)
+    # Перевіряємо всі довжини від 10 до 72.
+    # Вибираємо найдовший придатний боковик.
+    for length in range(len(hourly), 9, -1):
 
-    for length in range(max_length, 9, -1):
         box = hourly[-length:]
 
         range_high = max(c["high"] for c in box)
@@ -788,28 +784,22 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         if range_size <= 0:
             continue
 
-        # Відсікаємо занадто широкий діапазон.
         if range_size > atr_1h * 6:
             continue
 
-        # Рахуємо окремі свічки, які торкалися верхньої межі.
         upper_touches = sum(
             1 for c in box
             if range_high - c["high"] <= tolerance
         )
 
-        # Рахуємо окремі свічки, які торкалися нижньої межі.
         lower_touches = sum(
             1 for c in box
             if c["low"] - range_low <= tolerance
         )
 
-        total_touches = upper_touches + lower_touches
-
         if (
             upper_touches >= MIN_RANGE_TOUCHES
             and lower_touches >= MIN_RANGE_TOUCHES
-            and total_touches >= MIN_RETESTS
         ):
             selected_range = {
                 "high": range_high,
@@ -820,32 +810,33 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
             break
 
     if selected_range is None:
-        log(
-            "no_sweep",
-            "не знайдено боковик із потрібною кількістю дотиків"
-        )
+        log("no_sweep", "не знайдено боковик із дотиками до обох меж")
         return None
 
     range_high = selected_range["high"]
     range_low = selected_range["low"]
     range_size = selected_range["size"]
 
-    # Перевіряємо тільки дві найсвіжіші закриті свічки 15M.
-    recent = candles_15m[-2:]
-    sweep = recent[0]
-    confirm = recent[1]
+    # Дві останні закриті свічки 15M.
+    sweep = candles_15m[-2]
+    confirm = candles_15m[-1]
 
-    # --------------------------------------------------
-    # LONG — свіп нижньої межі
-    # --------------------------------------------------
-
+    # LONG — свіп нижньої межі.
     if (
         sweep["low"] < range_low
         and sweep["close"] > range_low
+        and confirm["close"] > confirm["open"]
         and confirm["close"] > range_low
         and confirm["close"] < range_high
     ):
+        entry = confirm["close"]
         stop = sweep["low"] - atr_1h * 0.10
+
+        if stop >= entry:
+            log("invalid_stop", "RANGE SWEEP LONG: стоп не нижче входу")
+            return None
+
+        risk = entry - stop
 
         log(
             "signals",
@@ -855,24 +846,29 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         return {
             "strategy": "RANGE SWEEP",
             "direction": "LONG",
-            "entry": confirm["close"],
+            "entry": entry,
             "stop": stop,
-            "tp1": (range_low + range_high) / 2,
-            "tp2": range_high,
-            "tp3": range_high + range_size * 0.5
+            "tp1": entry + risk * 1.3,
+            "tp2": entry + risk * 1.3 + calculate_atr(candles_15m, 14) * 2,
+            "tp3": entry + risk * 1.3 + calculate_atr(candles_15m, 14) * 4
         }
 
-    # --------------------------------------------------
-    # SHORT — свіп верхньої межі
-    # --------------------------------------------------
-
+    # SHORT — свіп верхньої межі.
     if (
         sweep["high"] > range_high
         and sweep["close"] < range_high
+        and confirm["close"] < confirm["open"]
         and confirm["close"] < range_high
         and confirm["close"] > range_low
     ):
+        entry = confirm["close"]
         stop = sweep["high"] + atr_1h * 0.10
+
+        if stop <= entry:
+            log("invalid_stop", "RANGE SWEEP SHORT: стоп не вище входу")
+            return None
+
+        risk = stop - entry
 
         log(
             "signals",
@@ -882,17 +878,17 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         return {
             "strategy": "RANGE SWEEP",
             "direction": "SHORT",
-            "entry": confirm["close"],
+            "entry": entry,
             "stop": stop,
-            "tp1": (range_low + range_high) / 2,
-            "tp2": range_low,
-            "tp3": range_low - range_size * 0.5
+            "tp1": entry - risk * 1.3,
+            "tp2": entry - risk * 1.3 - calculate_atr(candles_15m, 14) * 2,
+            "tp3": entry - risk * 1.3 - calculate_atr(candles_15m, 14) * 4
         }
 
     log(
         "no_sweep",
         f"боковик {selected_range['length']} свічок 1H знайдено, "
-        "але свіпу з підтвердженням на двох останніх 15M свічках немає"
+        "але підтвердженого свіпу на 15M немає"
     )
 
     return None
