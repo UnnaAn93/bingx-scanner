@@ -829,11 +829,11 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     1H: імпульс не менше 8 ATR(14), може складатися з кількох свічок.
 
     Сценарій 1:
-    Відкат понад 60% імпульсу -> боковик 8 свічок 15M ->
+    Відкат понад 60% імпульсу -> боковик 16 свічок 15M ->
     пробій у напрямку імпульсу або свіп протилежної межі з поверненням.
 
     Сценарій 2:
-    Відкат не більше 40% -> боковик 8 свічок 15M біля екстремуму ->
+    Відкат не більше 40% -> боковик 16 свічок 15M біля екстремуму ->
     пробій проти імпульсу або свіп межі з боку екстремуму з поверненням.
     """
 
@@ -844,7 +844,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
 
     MIN_IMPULSE_ATR = 8.0
     ATR_PERIOD = 14
-    MIN_CONSOLIDATION_CANDLES = 8
+    MIN_CONSOLIDATION_CANDLES = 16
     MAX_IMPULSE_CANDLES = 8
     MAX_HOURLY_LOOKBACK = 36
 
@@ -966,7 +966,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
         saw_post_impulse = True
 
         # Остання свічка — свічка підтвердження.
-        # Попередні 8 свічок формують межі боковика.
+        # Попередні 16 свічок формують межі боковика.
         for confirm_idx in range(
             len(post) - 1,
             MIN_CONSOLIDATION_CANDLES - 1,
@@ -1125,13 +1125,13 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     elif not saw_post_impulse:
         log(
             "waiting_confirmation",
-            "імпульс 1H є, але ще немає 9 закритих свічок 15M після нього"
+            "імпульс 1H є, але ще немає 17 закритих свічок 15M після нього"
         )
 
     elif not saw_consolidation:
         log(
             "waiting_confirmation",
-            "після імпульсу ще не сформовано 8 свічок боковика 15M"
+            "після імпульсу ще не сформовано 18 свічок боковика 15M"
         )
 
     elif waiting_for_confirmation:
