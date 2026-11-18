@@ -2030,20 +2030,41 @@ async def analyze_signal(session, symbol, report=None):
         # ЕТАП 2. ПЕРЕВІРКА СПЛЕСКУ ОБ'ЄМУ
         # =====================================================
 
-        # Останні 3 свічки проти попередніх 20
-        historical = candles_15m[-23:-3]
-        recent = candles_15m[-3:]
+        # Останні 5 закритих свічок 15M
+        recent = candles_15m[-5:]
 
-        if not historical or not recent:
+        if len(recent) < 5:
             log(
                 "other_rejections",
-                "немає даних для перевірки об'єму"
+                "недостатньо свічок для перевірки об'єму"
             )
             return None
 
-        avg_volume = (
-            sum(x["volume"] for x in historical) / len(historical)
-        )
+        # Порівнюємо об'єми сусідніх свічок:
+        # 1-ша з 2-гою, 2-га з 3-ю, 3-тя з 4-ю, 4-та з 5-ю
+        volumes = [c["volume"] for c in recent]
+
+        volume_spike = False
+
+        for i in range(4):
+            current_volume = volumes[i]
+            next_volume = volumes[i + 1]
+
+            higher = max(current_volume, next_volume)
+            lower = min(current_volume, next_volume)
+
+            if higher > 0 and (
+                lower == 0 or higher >= lower * 1.5
+            ):
+                volume_spike = True
+                break
+
+        if not volume_spike:
+            log(
+                "low_volume",
+                "не виявлено сплеску об'єму серед 5 свічок 15M"
+            )
+            return None
 
         recent_volume = sum(
             x["volume"] for x in recent
