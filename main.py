@@ -736,14 +736,16 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
         "tp3": tp3
     }
 
+
 def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     """
     RANGE SWEEP
 
     1H:
-    - пошук боковика від 10 до 72 закритих свічок;
-    - мінімум 2 дотики до кожної межі;
-    - діапазон не ширший за 6 ATR.
+    - визначення попереднього тренду через EMA50;
+    - пошук фрактальних меж після попереднього тренду;
+    - перевірка тривалості та ширини боковика;
+    - перевірка, що ціна залишається всередині діапазону.
 
     15M:
     - LONG: прокол нижньої межі та повернення всередину;
@@ -756,87 +758,232 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    if len(candles_1h) < 11 or len(candles_15m) < 2:
+    # --------------------------------------------------
+    # 1. ПЕРЕВІРКА ДАНИХ
+    # --------------------------------------------------
+
+    if len(candles_1h) < 60 or len(candles_15m) < 15:
         log("other_rejections", "недостатньо свічок для RANGE SWEEP")
         return None
 
     hourly = candles_1h[:-1][-RANGE_LOOKBACK_1H:]
+    closed_1h = candles_1h[:-1]
+    closed_15m = candles_15m[:-1]
 
-    atr_1h = calculate_atr(candles_1h[:-1], 14)
+    atr_1h = calculate_atr(closed_1h, 14)
+    atr_15m = calculate_atr(closed_15m, 14)
 
-    if atr_1h <= 0:
-        log("other_rejections", "не вдалося розрахувати ATR 1H")
+    if atr_1h <= 0 or atr_15m <= 0:
+        log("other_rejections", "не вдалося розрахувати ATR")
         return None
-        
-    atr_15m = calculate_atr(candles_15m, 14)
 
-    if atr_15m <= 0:
-        log("other_rejections", "не вдалося розрахувати ATR 15M")
+    if len(hourly) < 15:
+        log("other_rejections", "недостатньо закритих свічок 1H")
         return None
-        
-    tolerance = atr_1h * 0.2
-    selected_range = None
 
-    # Перевіряємо всі довжини від 10 до 72.
-    # Вибираємо найдовший придатний боковик.
-    for length in range(len(hourly), 9, -1):
+    # --------------------------------------------------
+    # 2. ВИЗНАЧЕННЯ ПОПЕРЕДНЬОГО ТРЕНДУ ЧЕРЕЗ EMA50
+    # --------------------------------------------------
 
-        box = hourly[-length:]
+    closes = [float(c["close"]) for c in closed_1h]
 
-        range_high = max(c["high"] for c in box)
-        range_low = min(c["low"] for c in box)
-        range_size = range_high - range_low
+    if len(closes) < 56:
+        log("other_rejections", "недостатньо даних для EMA50")
+        return None
 
-        if range_size <= 0:
-            continue
+    alpha = 2 / 51
+    ema = sum(closes[:50]) / 50
 
-        if range_size > atr_1h * 6:
-            continue
+    ema_values = [None] * 49 + [ema]
 
-        upper_touches = sum(
-            1 for c in box
-            if range_high - c["high"] <= tolerance
+    for price in closes[50:]:
+        ema = price * alpha + ema * (1 - alpha)
+        ema_values.append(ema)
+
+    ema_now = ema_values[-1]
+    ema_prev = ema_values[-7]
+    ema_slope = ema_now - ema_prev
+
+    if ema_slope > atr_1h * 0.10 and closes[-1] > ema_now:
+        trend_direction = "UP"
+
+    elif ema_slope < -atr_1h * 0.10 and closes[-1] < ema_now:
+        trend_direction = "DOWN"
+
+    else:
+        log("no_sweep", "не визначено чіткого попереднього тренду за EMA50")
+        return None
+
+    # --------------------------------------------------
+    # 3. ПОШУК ПІДТВЕРДЖЕНИХ ФРАКТАЛІВ НА 1H
+    # --------------------------------------------------
+
+    high_fractals = []
+    low_fractals = []
+
+    for i in range(2, len(hourly) - 2):
+
+        highs = [
+            float(hourly[j]["high"])
+            for j in range(i - 2, i + 3)
+        ]
+
+        lows = [
+            float(hourly[j]["low"])
+            for j in range(i - 2, i + 3)
+        ]
+
+        current_high = float(hourly[i]["high"])
+        current_low = float(hourly[i]["low"])
+
+        if current_high == max(highs) and highs.count(current_high) == 1:
+            high_fractals.append((i, current_high))
+
+        if current_low == min(lows) and lows.count(current_low) == 1:
+            low_fractals.append((i, current_low))
+
+    # --------------------------------------------------
+    # 4. ВИЗНАЧЕННЯ МЕЖ БОКОВИКА
+    # --------------------------------------------------
+
+    if trend_direction == "UP":
+
+        # Після висхідного руху шукаємо максимум,
+        # а потім мінімум після нього.
+
+        if not high_fractals:
+            log("no_sweep", "не знайдено верхнього фракталу")
+            return None
+
+        upper_index, range_high = max(
+            high_fractals,
+            key=lambda x: x[1]
         )
 
-        lower_touches = sum(
-            1 for c in box
-            if c["low"] - range_low <= tolerance
+        lower_candidates = [
+            item for item in low_fractals
+            if item[0] > upper_index
+        ]
+
+        if not lower_candidates:
+            log("no_sweep", "після верхнього фракталу немає нижнього")
+            return None
+
+        lower_index, range_low = min(
+            lower_candidates,
+            key=lambda x: x[1]
         )
 
-        if (
-            upper_touches >= MIN_RANGE_TOUCHES
-            and lower_touches >= MIN_RANGE_TOUCHES
-        ):
-            selected_range = {
-                "high": range_high,
-                "low": range_low,
-                "size": range_size,
-                "length": length
-            }
-            break
+    else:
 
-    if selected_range is None:
-        log("no_sweep", "не знайдено боковик із дотиками до обох меж")
+        # Після низхідного руху шукаємо мінімум,
+        # а потім максимум після нього.
+
+        if not low_fractals:
+            log("no_sweep", "не знайдено нижнього фракталу")
+            return None
+
+        lower_index, range_low = min(
+            low_fractals,
+            key=lambda x: x[1]
+        )
+
+        upper_candidates = [
+            item for item in high_fractals
+            if item[0] > lower_index
+        ]
+
+        if not upper_candidates:
+            log("no_sweep", "після нижнього фракталу немає верхнього")
+            return None
+
+        upper_index, range_high = max(
+            upper_candidates,
+            key=lambda x: x[1]
+        )
+
+    range_size = range_high - range_low
+
+    if range_size <= 0:
+        log("no_sweep", "некоректні межі боковика")
         return None
 
-    range_high = selected_range["high"]
-    range_low = selected_range["low"]
-    range_size = selected_range["size"]
+    if range_size > atr_1h * 6:
+        log("no_sweep", "діапазон ширший за 6 ATR 1H")
+        return None
 
-    # Дві останні закриті свічки 15M.
+    # --------------------------------------------------
+    # 5. ПЕРЕВІРКА, ЩО ПІСЛЯ ФРАКТАЛІВ СФОРМУВАВСЯ БОКОВИК
+    # --------------------------------------------------
+
+    range_start = min(upper_index, lower_index)
+    box = hourly[range_start:]
+
+    range_length = len(box)
+
+    if range_length < 10:
+        log("no_sweep", "після формування меж недостатньо свічок")
+        return None
+
+    # Більшість закриттів повинна залишатися всередині меж.
+    inside_closes = sum(
+        1 for c in box
+        if range_low < float(c["close"]) < range_high
+    )
+
+    inside_ratio = inside_closes / range_length
+
+    if inside_ratio < 0.80:
+        log("no_sweep", "ціна не утримується всередині фрактального діапазону")
+        return None
+
+    # Перевіряємо, що ціна не продовжує сильний рух
+    # в одному напрямку всередині кандидатного боковика.
+    box_closes = [float(c["close"]) for c in box]
+
+    box_drift = abs(box_closes[-1] - box_closes[0])
+
+    if box_drift > range_size * 0.70:
+        log("no_sweep", "після фракталів ціна продовжує спрямований рух")
+        return None
+
+    range_high = float(range_high)
+    range_low = float(range_low)
+    range_size = range_high - range_low
+
+    current_close = float(hourly[-1]["close"])
+
+    if not (range_low < current_close < range_high):
+        log("no_sweep", "поточна ціна перебуває за межами боковика")
+        return None
+
+    selected_range = {
+        "high": range_high,
+        "low": range_low,
+        "size": range_size,
+        "length": range_length
+    }
+
+    # --------------------------------------------------
+    # 6. ПОШУК СВІПУ НА 15M
+    # --------------------------------------------------
+
     sweep = candles_15m[-2]
     confirm = candles_15m[-1]
-    
-    # LONG — свіп нижньої межі.
+
+    # --------------------------------------------------
+    # 7. LONG — СВІП НИЖНЬОЇ МЕЖІ
+    # --------------------------------------------------
+
     if (
-        sweep["low"] < range_low
-        and sweep["close"] > range_low
-        and confirm["close"] > confirm["open"]
-        and confirm["close"] > range_low
-        and confirm["close"] < range_high
+        float(sweep["low"]) < range_low
+        and float(sweep["close"]) > range_low
+        and float(confirm["close"]) > float(confirm["open"])
+        and float(confirm["close"]) > range_low
+        and float(confirm["close"]) < range_high
     ):
-        entry = confirm["close"]
-        stop = sweep["low"] - atr_15m * 0.30
+        entry = float(confirm["close"])
+        stop = float(sweep["low"]) - atr_15m * 0.30
 
         if stop >= entry:
             log("invalid_stop", "RANGE SWEEP LONG: стоп не нижче входу")
@@ -861,16 +1008,19 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
             "tp3": tp3
         }
 
-    # SHORT — свіп верхньої межі.
+    # --------------------------------------------------
+    # 8. SHORT — СВІП ВЕРХНЬОЇ МЕЖІ
+    # --------------------------------------------------
+
     if (
-        sweep["high"] > range_high
-        and sweep["close"] < range_high
-        and confirm["close"] < confirm["open"]
-        and confirm["close"] < range_high
-        and confirm["close"] > range_low
+        float(sweep["high"]) > range_high
+        and float(sweep["close"]) < range_high
+        and float(confirm["close"]) < float(confirm["open"])
+        and float(confirm["close"]) < range_high
+        and float(confirm["close"]) > range_low
     ):
-        entry = confirm["close"]
-        stop = sweep["high"] + atr_15m * 0.30
+        entry = float(confirm["close"])
+        stop = float(sweep["high"]) + atr_15m * 0.30
 
         if stop <= entry:
             log("invalid_stop", "RANGE SWEEP SHORT: стоп не вище входу")
@@ -902,7 +1052,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     )
 
     return None
-
+    
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
