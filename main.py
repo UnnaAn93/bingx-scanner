@@ -875,10 +875,23 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
     # LONG: свіп нижньої межі, повернення та бичаче підтвердження.
     long_sweep = sweep_low < range_low and sweep_close > range_low
+
+    if long_sweep:
+        print(
+            f"[RANGE SWEEP DEBUG] LONG | "
+            f"sweep_time={sweep.get('time')} | "
+            f"confirm_time={confirm.get('time')} | "
+            f"range_low={range_low} | range_high={range_high} | "
+            f"sweep_low={sweep_low} | sweep_close={sweep_close} | "
+            f"confirm_open={confirm_open} | confirm_close={confirm_close}",
+            flush=True
+        )
+
     long_confirm = (
         confirm_close > confirm_open
         and range_low < confirm_close < range_high
     )
+
     if long_sweep and long_confirm:
         entry = confirm_close
         stop = sweep_low - atr_15m * STOP_ATR_BUFFER
@@ -897,10 +910,23 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
     # SHORT: свіп верхньої межі, повернення та ведмеже підтвердження.
     short_sweep = sweep_high > range_high and sweep_close < range_high
+
+    if short_sweep:
+        print(
+            f"[RANGE SWEEP DEBUG] SHORT | "
+            f"sweep_time={sweep.get('time')} | "
+            f"confirm_time={confirm.get('time')} | "
+            f"range_low={range_low} | range_high={range_high} | "
+            f"sweep_high={sweep_high} | sweep_close={sweep_close} | "
+            f"confirm_open={confirm_open} | confirm_close={confirm_close}",
+            flush=True
+        )
+
     short_confirm = (
         confirm_close < confirm_open
         and range_low < confirm_close < range_high
     )
+
     if short_sweep and short_confirm:
         entry = confirm_close
         stop = sweep_high + atr_15m * STOP_ATR_BUFFER
@@ -919,6 +945,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
     log("no_sweep", "RANGE SWEEP: боковик знайдено, але немає підтвердженого свіпу потрібної межі на 15M")
     return None
+
 
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """1H імпульс -> відкат/зупинка -> 16 свічок боковика 15M -> свіп і повернення."""
