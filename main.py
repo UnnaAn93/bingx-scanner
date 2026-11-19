@@ -20,7 +20,8 @@ RISK_USD = 0.60
 # Налаштування нової стратегії
 RANGE_LOOKBACK_1H = 72
 ENTRY_LOOKBACK_15M = 48
-
+VOLUME_SPIKE_MULTIPLIER = 4.0
+VOLUME_ALERT_LAST_PAIR = {}
 
 
 MIN_24H_VOLUME_USD = 400_000
@@ -643,6 +644,59 @@ def prepare_candles(raw_candles, interval_ms):
             continue
 
     return result
+
+async def check_volume_spike_alert(session, symbol):
+    try:
+        raw = await get_cached_klines(
+            session,
+            symbol,
+            "15m",
+            100
+        )
+
+        if not raw:
+            return
+
+        candles = prepare_candles(
+            raw,
+            15 * 60 * 1000
+        )
+
+        if len(candles) < 2:
+            return
+
+        previous = candles[-2]
+        latest = candles[-1]
+
+        pair = (
+            previous["time"],
+            latest["time"]
+        )
+
+        # Не надсилати повторно для тієї самої пари свічок
+        if VOLUME_ALERT_LAST_PAIR.get(symbol) == pair:
+            return
+
+        VOLUME_ALERT_LAST_PAIR[symbol] = pair
+
+        previous_volume = previous["volume"]
+        latest_volume = latest["volume"]
+
+        if previous_volume <= 0:
+            return
+
+        spike = latest_volume / previous_volume
+
+        if spike >= VOLUME_SPIKE_MULTIPLIER:
+            await send_telegram(
+                f"{symbol} — Сплеск: ×{spike:.2f}"
+            )
+
+    except Exception as e:
+        print(
+            f"[VOLUME ALERT ERROR] {symbol}: {e}",
+            flush=True
+        )
 
 def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     """Розрахунок позиції: депозит $20, базове плече 10x,
@@ -2625,6 +2679,14 @@ async def scan_5min_loop(session, symbols):
         for i in range(0, total_symbols, batch_size):
 
             batch = filtered_symbols[i:i + batch_size]
+            # Окрема перевірка сплеску об'єму 15M
+            await asyncio.gather(
+                *[
+                    check_volume_spike_alert(session, sym)
+                    for sym in batch
+                ],
+                return_exceptions=True
+            )
 
             print(
                 f"[INFO] Пакет {i // batch_size + 1}: "
