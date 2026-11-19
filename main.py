@@ -737,20 +737,27 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     }
 
 
+
 def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     """
     RANGE SWEEP
 
     1H:
-    - визначення попереднього тренду через EMA50;
-    - пошук фрактальних меж після попереднього тренду;
-    - перевірка тривалості та ширини боковика;
-    - перевірка, що ціна залишається всередині діапазону.
+    - тільки закриті свічки;
+    - EMA 50 визначає напрямок;
+    - нахил EMA за 5 свічок не менше 0.10 ATR;
+    - фрактал складається з 5 свічок;
+    - фрактали мають бути унікальними;
+    - UP: найвищий фрактал, потім найнижчий наступний;
+    - DOWN: найнижчий фрактал, потім найвищий наступний;
+    - після формування обох меж не менше 10 свічок;
+    - поточне закриття залишається всередині діапазону;
+    - ширина діапазону не більше 6 ATR.
 
     15M:
-    - LONG: прокол нижньої межі та повернення всередину;
-    - SHORT: прокол верхньої межі та повернення всередину;
-    - наступна свічка підтверджує повернення.
+    - LONG: свіп нижньої межі та повернення;
+    - SHORT: свіп верхньої межі та повернення;
+    - наступна свічка підтверджує напрямок.
     """
 
     name = symbol or "Невідома монета"
@@ -758,302 +765,351 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     def log(category, reason):
         add_report_item(report, category, f"{name} — {reason}")
 
-    # --------------------------------------------------
-    # 1. ПЕРЕВІРКА ДАНИХ
-    # --------------------------------------------------
+    # Параметри
+    ATR_PERIOD = 14
+    EMA_PERIOD = 50
+    EMA_SLOPE_CANDLES = 5
+    FRACTAL_RADIUS = 2
+    MIN_CANDLES_AFTER_RANGE = 10
+    MAX_RANGE_ATR = 6.0
+    MIN_EMA_SLOPE_ATR = 0.10
+    STOP_ATR_BUFFER = 0.30
 
-    if len(candles_1h) < 60 or len(candles_15m) < 15:
-        log("other_rejections", "недостатньо свічок для RANGE SWEEP")
+    # -------------------------------------------------
+    # 1. ПІДГОТОВКА ДАНИХ
+    # -------------------------------------------------
+
+    hourly = sorted(
+        candles_1h,
+        key=lambda c: c.get("time", 0)
+    )[:-1]
+
+    fifteen = sorted(
+        candles_15m,
+        key=lambda c: c.get("time", 0)
+    )
+
+    if len(hourly) < EMA_PERIOD + 10:
+        log("other_rejections", "RANGE SWEEP: недостатньо свічок 1H")
         return None
 
-    hourly = candles_1h[:-1][-RANGE_LOOKBACK_1H:]
-    closed_1h = candles_1h[:-1]
-    closed_15m = candles_15m[:-1]
+    if len(fifteen) < 3:
+        log("other_rejections", "RANGE SWEEP: недостатньо свічок 15M")
+        return None
 
-    atr_1h = calculate_atr(closed_1h, 14)
-    atr_15m = calculate_atr(closed_15m, 14)
+    atr_1h = calculate_atr(hourly, ATR_PERIOD)
+    atr_15m = calculate_atr(fifteen, ATR_PERIOD)
 
     if atr_1h <= 0 or atr_15m <= 0:
-        log("other_rejections", "не вдалося розрахувати ATR")
+        log("other_rejections", "RANGE SWEEP: некоректний ATR")
         return None
 
-    if len(hourly) < 15:
-        log("other_rejections", "недостатньо закритих свічок 1H")
-        return None
+    closes = [float(c["close"]) for c in hourly]
+    highs = [float(c["high"]) for c in hourly]
+    lows = [float(c["low"]) for c in hourly]
 
-    # --------------------------------------------------
-    # 2. ВИЗНАЧЕННЯ ПОПЕРЕДНЬОГО ТРЕНДУ ЧЕРЕЗ EMA50
-    # --------------------------------------------------
+    # -------------------------------------------------
+    # 2. EMA 50 ТА НАПРЯМОК
+    # -------------------------------------------------
 
-    closes = [float(c["close"]) for c in closed_1h]
+    alpha = 2.0 / (EMA_PERIOD + 1)
 
-    if len(closes) < 56:
-        log("other_rejections", "недостатньо даних для EMA50")
-        return None
+    ema_values = []
+    ema = closes[0]
 
-    alpha = 2 / 51
-    ema = sum(closes[:50]) / 50
-
-    ema_values = [None] * 49 + [ema]
-
-    for price in closes[50:]:
+    for price in closes:
         ema = price * alpha + ema * (1 - alpha)
         ema_values.append(ema)
 
     ema_now = ema_values[-1]
-    ema_prev = ema_values[-7]
-    ema_slope = ema_now - ema_prev
+    ema_previous = ema_values[-1 - EMA_SLOPE_CANDLES]
 
-    if ema_slope > atr_1h * 0.10 and closes[-1] > ema_now:
-        trend_direction = "UP"
+    ema_slope = ema_now - ema_previous
+    slope_atr = ema_slope / atr_1h
 
-    elif ema_slope < -atr_1h * 0.10 and closes[-1] < ema_now:
-        trend_direction = "DOWN"
+    current_close = closes[-1]
+
+    if (
+        slope_atr >= MIN_EMA_SLOPE_ATR
+        and current_close > ema_now
+    ):
+        trend = "UP"
+
+    elif (
+        slope_atr <= -MIN_EMA_SLOPE_ATR
+        and current_close < ema_now
+    ):
+        trend = "DOWN"
 
     else:
-        log("no_sweep", "не визначено чіткого попереднього тренду за EMA50")
+        log(
+            "no_sweep",
+            "RANGE SWEEP: EMA 50 не підтверджує чіткого напрямку"
+        )
         return None
 
-    # --------------------------------------------------
-    # 3. ПОШУК ПІДТВЕРДЖЕНИХ ФРАКТАЛІВ НА 1H
-    # --------------------------------------------------
+    # -------------------------------------------------
+    # 3. ПОШУК УНІКАЛЬНИХ ФРАКТАЛІВ
+    # -------------------------------------------------
 
-    high_fractals = []
-    low_fractals = []
+    fractal_highs = []
+    fractal_lows = []
 
-    for i in range(2, len(hourly) - 2):
+    for i in range(
+        FRACTAL_RADIUS,
+        len(hourly) - FRACTAL_RADIUS
+    ):
 
-        highs = [
-            float(hourly[j]["high"])
-            for j in range(i - 2, i + 3)
-        ]
+        left_highs = highs[i - FRACTAL_RADIUS:i]
+        right_highs = highs[i + 1:i + FRACTAL_RADIUS + 1]
 
-        lows = [
-            float(hourly[j]["low"])
-            for j in range(i - 2, i + 3)
-        ]
+        left_lows = lows[i - FRACTAL_RADIUS:i]
+        right_lows = lows[i + 1:i + FRACTAL_RADIUS + 1]
 
-        current_high = float(hourly[i]["high"])
-        current_low = float(hourly[i]["low"])
+        # Унікальний фрактальний максимум
+        if (
+            highs[i] > max(left_highs)
+            and highs[i] > max(right_highs)
+        ):
+            fractal_highs.append({
+                "index": i,
+                "price": highs[i]
+            })
 
-        if current_high == max(highs) and highs.count(current_high) == 1:
-            high_fractals.append((i, current_high))
+        # Унікальний фрактальний мінімум
+        if (
+            lows[i] < min(left_lows)
+            and lows[i] < min(right_lows)
+        ):
+            fractal_lows.append({
+                "index": i,
+                "price": lows[i]
+            })
 
-        if current_low == min(lows) and lows.count(current_low) == 1:
-            low_fractals.append((i, current_low))
+    # -------------------------------------------------
+    # 4. ПОБУДОВА ДІАПАЗОНУ ЗА НАПРЯМКОМ
+    # -------------------------------------------------
 
-    # --------------------------------------------------
-    # 4. ВИЗНАЧЕННЯ МЕЖ БОКОВИКА
-    # --------------------------------------------------
+    selected_range = None
 
-    if trend_direction == "UP":
+    if trend == "UP":
 
-        # Після висхідного руху шукаємо максимум,
-        # а потім мінімум після нього.
+        # Найвищий фрактал, після нього найнижчий.
+        for high_pivot in reversed(fractal_highs):
 
-        if not high_fractals:
-            log("no_sweep", "не знайдено верхнього фракталу")
-            return None
+            following_lows = [
+                p for p in fractal_lows
+                if p["index"] > high_pivot["index"]
+            ]
 
-        upper_index, range_high = max(
-            high_fractals,
-            key=lambda x: x[1]
-        )
+            if not following_lows:
+                continue
 
-        lower_candidates = [
-            item for item in low_fractals
-            if item[0] > upper_index
-        ]
+            low_pivot = min(
+                following_lows,
+                key=lambda p: p["price"]
+            )
 
-        if not lower_candidates:
-            log("no_sweep", "після верхнього фракталу немає нижнього")
-            return None
+            range_high = high_pivot["price"]
+            range_low = low_pivot["price"]
 
-        lower_index, range_low = min(
-            lower_candidates,
-            key=lambda x: x[1]
-        )
+            range_end_index = low_pivot["index"]
+
+            selected_range = {
+                "high": range_high,
+                "low": range_low,
+                "end_index": range_end_index
+            }
+            break
 
     else:
 
-        # Після низхідного руху шукаємо мінімум,
-        # а потім максимум після нього.
+        # Найнижчий фрактал, після нього найвищий.
+        for low_pivot in reversed(fractal_lows):
 
-        if not low_fractals:
-            log("no_sweep", "не знайдено нижнього фракталу")
-            return None
+            following_highs = [
+                p for p in fractal_highs
+                if p["index"] > low_pivot["index"]
+            ]
 
-        lower_index, range_low = min(
-            low_fractals,
-            key=lambda x: x[1]
+            if not following_highs:
+                continue
+
+            high_pivot = max(
+                following_highs,
+                key=lambda p: p["price"]
+            )
+
+            range_low = low_pivot["price"]
+            range_high = high_pivot["price"]
+
+            range_end_index = high_pivot["index"]
+
+            selected_range = {
+                "high": range_high,
+                "low": range_low,
+                "end_index": range_end_index
+            }
+            break
+
+    if selected_range is None:
+        log(
+            "no_sweep",
+            f"RANGE SWEEP {trend}: не знайдено потрібної послідовності фракталів"
         )
+        return None
 
-        upper_candidates = [
-            item for item in high_fractals
-            if item[0] > lower_index
-        ]
+    # -------------------------------------------------
+    # 5. ПЕРЕВІРКА СФОРМОВАНОГО ДІАПАЗОНУ
+    # -------------------------------------------------
 
-        if not upper_candidates:
-            log("no_sweep", "після нижнього фракталу немає верхнього")
-            return None
-
-        upper_index, range_high = max(
-            upper_candidates,
-            key=lambda x: x[1]
-        )
-
+    range_high = selected_range["high"]
+    range_low = selected_range["low"]
     range_size = range_high - range_low
 
     if range_size <= 0:
-        log("no_sweep", "некоректні межі боковика")
+        log("no_sweep", "RANGE SWEEP: некоректні межі діапазону")
         return None
 
-    if range_size > atr_1h * 6:
-        log("no_sweep", "діапазон ширший за 6 ATR 1H")
+    if range_size > atr_1h * MAX_RANGE_ATR:
+        log("no_sweep", "RANGE SWEEP: діапазон ширший за 6 ATR")
         return None
 
-    # --------------------------------------------------
-    # 5. ПЕРЕВІРКА, ЩО ПІСЛЯ ФРАКТАЛІВ СФОРМУВАВСЯ БОКОВИК
-    # --------------------------------------------------
-
-    range_start = min(upper_index, lower_index)
-    box = hourly[range_start:]
-
-    range_length = len(box)
-
-    if range_length < 10:
-        log("no_sweep", "після формування меж недостатньо свічок")
-        return None
-
-    # Більшість закриттів повинна залишатися всередині меж.
-    inside_closes = sum(
-        1 for c in box
-        if range_low < float(c["close"]) < range_high
+    candles_after_range = (
+        len(hourly) - 1 - selected_range["end_index"]
     )
 
-    inside_ratio = inside_closes / range_length
-
-    if inside_ratio < 0.80:
-        log("no_sweep", "ціна не утримується всередині фрактального діапазону")
+    if candles_after_range < MIN_CANDLES_AFTER_RANGE:
+        log(
+            "no_sweep",
+            "RANGE SWEEP: після формування меж ще немає 10 свічок"
+        )
         return None
-
-    # Перевіряємо, що ціна не продовжує сильний рух
-    # в одному напрямку всередині кандидатного боковика.
-    box_closes = [float(c["close"]) for c in box]
-
-    box_drift = abs(box_closes[-1] - box_closes[0])
-
-    if box_drift > range_size * 0.70:
-        log("no_sweep", "після фракталів ціна продовжує спрямований рух")
-        return None
-
-    range_high = float(range_high)
-    range_low = float(range_low)
-    range_size = range_high - range_low
-
-    current_close = float(hourly[-1]["close"])
 
     if not (range_low < current_close < range_high):
-        log("no_sweep", "поточна ціна перебуває за межами боковика")
+        log(
+            "no_sweep",
+            "RANGE SWEEP: поточне закриття 1H поза межами діапазону"
+        )
         return None
 
-    selected_range = {
-        "high": range_high,
-        "low": range_low,
-        "size": range_size,
-        "length": range_length
-    }
+    # -------------------------------------------------
+    # 6. ПЕРЕВІРКА СВІПУ НА 15M
+    # -------------------------------------------------
 
-    # --------------------------------------------------
-    # 6. ПОШУК СВІПУ НА 15M
-    # --------------------------------------------------
+    sweep = fifteen[-2]
+    confirm = fifteen[-1]
 
-    sweep = candles_15m[-2]
-    confirm = candles_15m[-1]
+    sweep_high = float(sweep["high"])
+    sweep_low = float(sweep["low"])
+    sweep_close = float(sweep["close"])
 
-    # --------------------------------------------------
+    confirm_open = float(confirm["open"])
+    confirm_close = float(confirm["close"])
+
+    # -------------------------------------------------
     # 7. LONG — СВІП НИЖНЬОЇ МЕЖІ
-    # --------------------------------------------------
+    # -------------------------------------------------
 
-    if (
-        float(sweep["low"]) < range_low
-        and float(sweep["close"]) > range_low
-        and float(confirm["close"]) > float(confirm["open"])
-        and float(confirm["close"]) > range_low
-        and float(confirm["close"]) < range_high
-    ):
-        entry = float(confirm["close"])
-        stop = float(sweep["low"]) - atr_15m * 0.30
+    if trend == "UP":
 
-        if stop >= entry:
-            log("invalid_stop", "RANGE SWEEP LONG: стоп не нижче входу")
-            return None
-
-        tp1 = entry + atr_15m * 2.5
-        tp2 = tp1 + atr_15m * 2
-        tp3 = tp2 + atr_15m * 2
-
-        log(
-            "signals",
-            f"RANGE SWEEP LONG: боковик {selected_range['length']} свічок 1H"
+        long_sweep = (
+            sweep_low < range_low
+            and sweep_close > range_low
         )
 
-        return {
-            "strategy": "RANGE SWEEP",
-            "direction": "LONG",
-            "entry": entry,
-            "stop": stop,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3
-        }
+        long_confirm = (
+            confirm_close > confirm_open
+            and confirm_close > range_low
+            and confirm_close < range_high
+        )
 
-    # --------------------------------------------------
+        if long_sweep and long_confirm:
+
+            entry = confirm_close
+            stop = sweep_low - atr_15m * STOP_ATR_BUFFER
+
+            if stop >= entry:
+                log("invalid_stop", "RANGE SWEEP LONG: некоректний стоп")
+                return None
+
+            tp1 = entry + atr_15m * 2.5
+            tp2 = tp1 + atr_15m * 2.0
+            tp3 = tp2 + atr_15m * 2.0
+
+            log(
+                "signals",
+                f"RANGE SWEEP LONG: EMA UP, діапазон {range_size / atr_1h:.2f} ATR"
+            )
+
+            return {
+                "strategy": "RANGE SWEEP",
+                "direction": "LONG",
+                "entry": entry,
+                "stop": stop,
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp3": tp3,
+                "range_high": range_high,
+                "range_low": range_low,
+                "range_warnings": []
+            }
+
+    # -------------------------------------------------
     # 8. SHORT — СВІП ВЕРХНЬОЇ МЕЖІ
-    # --------------------------------------------------
+    # -------------------------------------------------
 
-    if (
-        float(sweep["high"]) > range_high
-        and float(sweep["close"]) < range_high
-        and float(confirm["close"]) < float(confirm["open"])
-        and float(confirm["close"]) < range_high
-        and float(confirm["close"]) > range_low
-    ):
-        entry = float(confirm["close"])
-        stop = float(sweep["high"]) + atr_15m * 0.30
+    if trend == "DOWN":
 
-        if stop <= entry:
-            log("invalid_stop", "RANGE SWEEP SHORT: стоп не вище входу")
-            return None
-
-        tp1 = entry - atr_15m * 2.5
-        tp2 = tp1 - atr_15m * 2
-        tp3 = tp2 - atr_15m * 2
-
-        log(
-            "signals",
-            f"RANGE SWEEP SHORT: боковик {selected_range['length']} свічок 1H"
+        short_sweep = (
+            sweep_high > range_high
+            and sweep_close < range_high
         )
 
-        return {
-            "strategy": "RANGE SWEEP",
-            "direction": "SHORT",
-            "entry": entry,
-            "stop": stop,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3
-        }
+        short_confirm = (
+            confirm_close < confirm_open
+            and confirm_close < range_high
+            and confirm_close > range_low
+        )
+
+        if short_sweep and short_confirm:
+
+            entry = confirm_close
+            stop = sweep_high + atr_15m * STOP_ATR_BUFFER
+
+            if stop <= entry:
+                log("invalid_stop", "RANGE SWEEP SHORT: некоректний стоп")
+                return None
+
+            tp1 = entry - atr_15m * 2.5
+            tp2 = tp1 - atr_15m * 2.0
+            tp3 = tp2 - atr_15m * 2.0
+
+            log(
+                "signals",
+                f"RANGE SWEEP SHORT: EMA DOWN, діапазон {range_size / atr_1h:.2f} ATR"
+            )
+
+            return {
+                "strategy": "RANGE SWEEP",
+                "direction": "SHORT",
+                "entry": entry,
+                "stop": stop,
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp3": tp3,
+                "range_high": range_high,
+                "range_low": range_low,
+                "range_warnings": []
+            }
 
     log(
         "no_sweep",
-        f"боковик {selected_range['length']} свічок 1H знайдено, "
-        "але підтвердженого свіпу на 15M немає"
+        f"RANGE SWEEP {trend}: діапазон знайдено, але підтвердженого свіпу на 15M немає"
     )
 
     return None
     
-
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """
     IMPULSE RETEST
@@ -2910,7 +2966,7 @@ def get_strategy_name_uk(strategy):
 
 async def scan_5min_loop(session, symbols):
 
-    # Не запускаємо нове сканування, якщо попереднє ще працює
+    # Не запускаємо нове сканування, якщо попереднє ще працює.
     if SCAN_LOCK.locked():
         print(
             "[INFO] Попереднє сканування ще триває. Новий запуск пропущено.",
@@ -2927,7 +2983,7 @@ async def scan_5min_loop(session, symbols):
 
         report = create_scan_report()
 
-        # symbols уже містить тільки монети з 24h оборотом >= $400 000
+        # Монети вже відфільтровані за добовим оборотом.
         filtered_symbols = list(symbols)
 
         print(
@@ -2951,7 +3007,10 @@ async def scan_5min_loop(session, symbols):
             )
             return
 
-        # Аналізуємо монети пакетами
+        # -------------------------------------------------
+        # 1. СКАНУВАННЯ ПАКЕТАМИ
+        # -------------------------------------------------
+
         batch_size = 10
         total_symbols = len(filtered_symbols)
 
@@ -2976,6 +3035,7 @@ async def scan_5min_loop(session, symbols):
             ]
 
             try:
+
                 results = await asyncio.gather(
                     *tasks,
                     return_exceptions=True
@@ -2983,6 +3043,7 @@ async def scan_5min_loop(session, symbols):
 
                 for sym, setup in zip(batch, results):
 
+                    # Помилка аналізу конкретної монети.
                     if isinstance(setup, Exception):
 
                         add_report_item(
@@ -2997,8 +3058,13 @@ async def scan_5min_loop(session, symbols):
                         )
                         continue
 
+                    # Немає сигналу.
                     if not isinstance(setup, dict):
                         continue
+
+                    # -------------------------------------------------
+                    # 2. РЕЄСТРАЦІЯ СИГНАЛУ
+                    # -------------------------------------------------
 
                     add_report_item(
                         report,
@@ -3007,34 +3073,78 @@ async def scan_5min_loop(session, symbols):
                         f"{setup['direction']} — "
                         f"{get_strategy_name_uk(setup['strategy'])}"
                     )
-                    
+
+                    # -------------------------------------------------
+                    # 3. ПОПЕРЕДЖЕННЯ ПРО ЯКІСТЬ БОКОВИКА
+                    # -------------------------------------------------
+
+                    range_warning_text = ""
+
+                    if setup.get("strategy") == "RANGE SWEEP":
+
+                        warnings = setup.get("range_warnings", [])
+
+                        if warnings:
+
+                            range_warning_text = (
+                                "⚠️ ОСОБЛИВОСТІ БОКОВИКА:\n"
+                                + "\n".join(
+                                    f"• {warning}"
+                                    for warning in warnings
+                                )
+                                + "\n\n"
+                            )
+
+                    # -------------------------------------------------
+                    # 4. РЕКОМЕНДОВАНЕ ПЛЕЧЕ
+                    # -------------------------------------------------
+
                     leverage_note = ""
+
                     if setup.get("recommended_leverage"):
+
                         leverage_note = (
                             f"⚙️ Рекомендоване плече: "
                             f"`{setup['recommended_leverage']}x`\n"
                         )
+
+                    # -------------------------------------------------
+                    # 5. ФОРМУВАННЯ ПОВІДОМЛЕННЯ
+                    # -------------------------------------------------
+
                     msg = (
                         f"🎯 **НОВИЙ СИГНАЛ**\n"
                         f"🪙 Монета: `{setup['symbol']}`\n"
-                        f"📊 Стратегія: `{get_strategy_name_uk(setup['strategy'])}`\n"
+                        f"📊 Стратегія: "
+                        f"`{get_strategy_name_uk(setup['strategy'])}`\n"
                         f"📈 Напрямок: `{setup['direction']}`\n\n"
-                        f"🔍 Свіп 1D: `{setup.get('daily_sweep', 'не вдалося перевірити')}`\n\n"
+
+                        f"{range_warning_text}"
+
+                        f"🔍 Свіп 1D: "
+                        f"`{setup.get('daily_sweep', 'не вдалося перевірити')}`\n\n"
+
                         f"🟢 Вхід: `{setup['entry']:.8f}`\n"
                         f"🔴 Стоп: `{setup['stop_loss']:.8f}`\n\n"
+
                         f"🎯 TP1: `{setup['tp1']:.8f}` — закрити 50%\n"
                         f"🎯 TP2: `{setup['tp2']:.8f}` — закрити 25%\n"
                         f"🎯 TP3: `{setup['tp3']:.8f}` — закрити 25%\n\n"
+
                         f"📦 Кількість: `{setup['pos_qty']:.6f}`\n"
                         f"💵 Обсяг позиції: "
                         f"`{setup['notional_usd']:.2f} USD`\n"
                         f"🏦 Маржа: `{setup['margin_usd']:.2f} USD`\n"
+
                         f"{leverage_note}"
+
                         f"🛡️ Ризик на стоп: "
                         f"`${setup['actual_risk']:.2f}`\n\n"
+
                         f"⏳ Очікування ручного відкриття."
                     )
 
+                    # Відправляємо повідомлення про сигнал.
                     await send_telegram(msg)
 
             except Exception as e:
@@ -3050,10 +3160,13 @@ async def scan_5min_loop(session, symbols):
                     f"Помилка пакета {i // batch_size + 1}: {e}"
                 )
 
-            # Пауза між пакетами
+            # Пауза між пакетами.
             await asyncio.sleep(1)
 
-        # Формуємо загальний звіт
+        # -------------------------------------------------
+        # 6. ЗАГАЛЬНИЙ ЗВІТ СКАНУВАННЯ
+        # -------------------------------------------------
+
         report_msg = format_scan_report(report)
 
         await send_telegram(report_msg)
@@ -3066,9 +3179,8 @@ async def scan_5min_loop(session, symbols):
         print(
             f"[INFO] Знайдено сигналів: {len(report['signals'])}",
             flush=True
-        )
-
-
+                                     )
+        
 async def main_bot_loop():
 
     await send_telegram(
