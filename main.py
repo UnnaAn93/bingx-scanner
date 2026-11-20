@@ -1930,7 +1930,6 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
 
     if bottom_pair is not None:
         _, second_idx, first_low, second_low, _ = bottom_pair
-
         second_time = hourly[second_idx]["time"]
 
         after_pattern = [
@@ -1938,88 +1937,68 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
             if x["time"] > second_time
         ]
 
-        if len(after_pattern) < 6:
+        # Потрібні три свічки фракталу та четверта для сигналу
+        if len(after_pattern) < 4:
             log(
                 "waiting_confirmation",
-                "DOUBLE BOTTOM LONG: недостатньо свічок 15M після другого дна"
+                "DOUBLE BOTTOM LONG: очікуємо формування фракталу на 15M"
             )
         else:
-            pivot_idx = None
+            fractal_lows = []
 
-            # Шукаємо останнє локальне дно на 15M
-            for i in range(len(after_pattern) - 2, 0, -1):
+            # Шукаємо підтверджені фрактали-днища
+            # Середня свічка має найнижчий мінімум
+            for i in range(1, len(after_pattern) - 1):
                 if (
-                    after_pattern[i]["low"] <= after_pattern[i - 1]["low"]
-                    and after_pattern[i]["low"] <= after_pattern[i + 1]["low"]
+                    after_pattern[i]["low"] < after_pattern[i - 1]["low"]
+                    and after_pattern[i]["low"] < after_pattern[i + 1]["low"]
                 ):
-                    pivot_idx = i
-                    break
+                    fractal_lows.append((i, after_pattern[i]["low"]))
 
-            if pivot_idx is None or pivot_idx + 3 >= len(after_pattern):
+            # Останній фрактал має бути підтверджений
+            # третьою свічкою, а сигнал — на четвертій
+            if (
+                len(fractal_lows) < 2
+                or fractal_lows[-1][0] != len(after_pattern) - 2
+            ):
                 log(
                     "waiting_confirmation",
-                    "DOUBLE BOTTOM LONG: немає локального дна на 15M"
+                    "DOUBLE BOTTOM LONG: очікуємо вищий фрактальний мінімум на 15M"
                 )
             else:
-                pivot_low = after_pattern[pivot_idx]["low"]
+                previous_low = fractal_lows[-2][1]
+                pivot_low = fractal_lows[-1][1]
 
-                # Знаходимо максимум відскоку після локального дна
-                rebound_idx = max(
-                    range(pivot_idx + 1, len(after_pattern) - 1),
-                    key=lambda i: after_pattern[i]["high"]
-                )
-
-                rebound_high = after_pattern[rebound_idx]["high"]
-
-                # Перевіряємо формування вищого мінімуму
-                higher_low_found = any(
-                    after_pattern[i]["low"] > pivot_low
-                    and after_pattern[i]["low"] < rebound_high
-                    for i in range(rebound_idx + 1, len(after_pattern) - 1)
-                )
-
-                if not higher_low_found:
+                # Другий фрактал повинен мати вищий мінімум
+                if pivot_low <= previous_low:
                     log(
                         "waiting_confirmation",
-                        "DOUBLE BOTTOM LONG: немає вищого мінімуму на 15M"
+                        "DOUBLE BOTTOM LONG: останній фрактал не утворив вищий мінімум"
                     )
                 else:
-                    setup, status = evaluate_double_breakout(
-                        candles=after_pattern,
-                        level=rebound_high,
-                        pivot=pivot_low,
-                        second_extreme=second_low,
-                        atr=atr_15m,
-                        avg_volume=avg_volume,
-                        direction="LONG"
-                    )
+                    entry = after_pattern[-1]["close"]
+                    stop = min(pivot_low, second_low) - atr_15m * 0.30
+                    risk = entry - stop
 
-                    if setup is not None:
-                        return setup
-
-                    if status == "false_breakout":
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE BOTTOM LONG: хибний пробій, ціна повернулася під рівень"
-                        )
-
-                    elif status == "waiting":
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE BOTTOM LONG: слабкий пробій або очікування ретесту"
-                        )
-
-                    elif status == "invalid_stop":
+                    if risk <= 0:
                         log(
                             "invalid_stop",
                             "DOUBLE BOTTOM LONG: некоректний стоп"
                         )
-
                     else:
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE BOTTOM LONG: очікуємо пробій локального максимуму"
-                        )
+                        tp1 = entry + atr_15m * 2.5
+                        tp2 = tp1 + atr_15m * 2
+                        tp3 = tp2 + atr_15m * 2
+
+                        return {
+                            "strategy": "DOUBLE BOTTOM — FRACTAL",
+                            "direction": "LONG",
+                            "entry": entry,
+                            "stop": stop,
+                            "tp1": tp1,
+                            "tp2": tp2,
+                            "tp3": tp3
+                        }
 
     # --------------------------------------------------
     # SHORT — DOUBLE TOP
@@ -2027,7 +2006,6 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
 
     if top_pair is not None:
         _, second_idx, first_high, second_high, _ = top_pair
-
         second_time = hourly[second_idx]["time"]
 
         after_pattern = [
@@ -2035,91 +2013,67 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
             if x["time"] > second_time
         ]
 
-        if len(after_pattern) < 6:
+        if len(after_pattern) < 4:
             log(
                 "waiting_confirmation",
-                "DOUBLE TOP SHORT: недостатньо свічок 15M після другої вершини"
+                "DOUBLE TOP SHORT: очікуємо формування фракталу на 15M"
             )
         else:
-            pivot_idx = None
+            fractal_highs = []
 
-            # Шукаємо останню локальну вершину на 15M
-            for i in range(len(after_pattern) - 2, 0, -1):
+            # Шукаємо підтверджені фрактали-вершини
+            # Середня свічка має найвищий максимум
+            for i in range(1, len(after_pattern) - 1):
                 if (
-                    after_pattern[i]["high"] >= after_pattern[i - 1]["high"]
-                    and after_pattern[i]["high"] >= after_pattern[i + 1]["high"]
+                    after_pattern[i]["high"] > after_pattern[i - 1]["high"]
+                    and after_pattern[i]["high"] > after_pattern[i + 1]["high"]
                 ):
-                    pivot_idx = i
-                    break
+                    fractal_highs.append((i, after_pattern[i]["high"]))
 
-            if pivot_idx is None or pivot_idx + 3 >= len(after_pattern):
+            if (
+                len(fractal_highs) < 2
+                or fractal_highs[-1][0] != len(after_pattern) - 2
+            ):
                 log(
                     "waiting_confirmation",
-                    "DOUBLE TOP SHORT: немає локальної вершини на 15M"
+                    "DOUBLE TOP SHORT: очікуємо нижчу фрактальну вершину на 15M"
                 )
             else:
-                pivot_high = after_pattern[pivot_idx]["high"]
+                previous_high = fractal_highs[-2][1]
+                pivot_high = fractal_highs[-1][1]
 
-                # Знаходимо мінімум відкату після локальної вершини
-                rebound_idx = min(
-                    range(pivot_idx + 1, len(after_pattern) - 1),
-                    key=lambda i: after_pattern[i]["low"]
-                )
-
-                rebound_low = after_pattern[rebound_idx]["low"]
-
-                # Перевіряємо формування нижчого максимуму
-                lower_high_found = any(
-                    after_pattern[i]["high"] < pivot_high
-                    and after_pattern[i]["high"] > rebound_low
-                    for i in range(rebound_idx + 1, len(after_pattern) - 1)
-                )
-
-                if not lower_high_found:
+                # Другий фрактал повинен мати нижчий максимум
+                if pivot_high >= previous_high:
                     log(
                         "waiting_confirmation",
-                        "DOUBLE TOP SHORT: немає нижчого максимуму на 15M"
+                        "DOUBLE TOP SHORT: останній фрактал не утворив нижчу вершину"
                     )
                 else:
-                    setup, status = evaluate_double_breakout(
-                        candles=after_pattern,
-                        level=rebound_low,
-                        pivot=pivot_high,
-                        second_extreme=second_high,
-                        atr=atr_15m,
-                        avg_volume=avg_volume,
-                        direction="SHORT"
-                    )
+                    entry = after_pattern[-1]["close"]
+                    stop = max(pivot_high, second_high) + atr_15m * 0.30
+                    risk = stop - entry
 
-                    if setup is not None:
-                        return setup
-
-                    if status == "false_breakout":
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE TOP SHORT: хибний пробій, ціна повернулася над рівень"
-                        )
-
-                    elif status == "waiting":
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE TOP SHORT: слабкий пробій або очікування ретесту"
-                        )
-
-                    elif status == "invalid_stop":
+                    if risk <= 0:
                         log(
                             "invalid_stop",
                             "DOUBLE TOP SHORT: некоректний стоп"
                         )
-
                     else:
-                        log(
-                            "waiting_confirmation",
-                            "DOUBLE TOP SHORT: очікуємо пробій локального мінімуму"
-                        )
+                        tp1 = entry - atr_15m * 2.5
+                        tp2 = tp1 - atr_15m * 2
+                        tp3 = tp2 - atr_15m * 2
+
+                        return {
+                            "strategy": "DOUBLE TOP — FRACTAL",
+                            "direction": "SHORT",
+                            "entry": entry,
+                            "stop": stop,
+                            "tp1": tp1,
+                            "tp2": tp2,
+                            "tp3": tp3
+                        }
 
     return None
-
 
 async def get_daily_sweep_status(session, symbol):
     """
