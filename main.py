@@ -1122,7 +1122,7 @@ def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
         saw_post_impulse = True
 
         # 16 свічок формують межі боковика; наступна свічка перевіряється на свіп.
-        for sweep_idx in range(len(post) - 1, MIN_CONSOLIDATION_CANDLES - 1, -1):
+        for sweep_idx in range(len(post) - 1, len(post) - 2, -1):
             box = post[sweep_idx - MIN_CONSOLIDATION_CANDLES:sweep_idx]
             sweep = post[sweep_idx]
             if len(box) != MIN_CONSOLIDATION_CANDLES:
