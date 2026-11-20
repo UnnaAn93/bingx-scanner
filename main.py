@@ -5,7 +5,7 @@ import re
 import aiohttp
 import math
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -21,7 +21,7 @@ RISK_USD = 0.60
 RANGE_LOOKBACK_1H = 72
 ENTRY_LOOKBACK_15M = 48
 VOLUME_SPIKE_MULTIPLIER = 4.0
-VOLUME_ALERT_LAST_PAIR = {}
+VOLUME_ALERT_SYMBOLS = []
 
 
 MIN_24H_VOLUME_USD = 400_000
@@ -668,17 +668,6 @@ async def check_volume_spike_alert(session, symbol):
         previous = candles[-2]
         latest = candles[-1]
 
-        pair = (
-            previous["time"],
-            latest["time"]
-        )
-
-        # Не надсилати повторно для тієї самої пари свічок
-        if VOLUME_ALERT_LAST_PAIR.get(symbol) == pair:
-            return
-
-        VOLUME_ALERT_LAST_PAIR[symbol] = pair
-
         previous_volume = previous["volume"]
         latest_volume = latest["volume"]
 
@@ -747,7 +736,51 @@ async def check_volume_spike_alert(session, symbol):
             f"[VOLUME ALERT ERROR] {symbol}: {e}",
             flush=True
     )
+async def volume_spike_alert_loop():
+    while True:
+        now = datetime.now(timezone.utc)
 
+        # Наступні хвилини перевірки після закриття 15M свічки
+        target_minutes = (1, 16, 31, 46)
+
+        next_minute = next(
+            (m for m in target_minutes if m > now.minute),
+            None
+        )
+
+        if next_minute is None:
+            next_run = now.replace(
+                minute=1, second=0, microsecond=0
+            ) + timedelta(hours=1)
+        else:
+            next_run = now.replace(
+                minute=next_minute, second=0, microsecond=0
+            )
+
+        wait_seconds = (next_run - now).total_seconds()
+        await asyncio.sleep(max(0, wait_seconds))
+
+        symbols = list(VOLUME_ALERT_SYMBOLS)
+
+        if not symbols:
+            continue
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                await asyncio.gather(
+                    *[
+                        check_volume_spike_alert(session, symbol)
+                        for symbol in symbols
+                    ],
+                    return_exceptions=True
+                )
+
+        except Exception as e:
+            print(
+                f"[VOLUME SCHEDULE ERROR] {e}",
+                flush=True
+            )
+            
 def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     """Розрахунок позиції: депозит $20, базове плече 10x,
     бажане використання не більше $3 власних коштів на одну позицію
@@ -2754,14 +2787,6 @@ async def scan_5min_loop(session, symbols):
         for i in range(0, total_symbols, batch_size):
 
             batch = filtered_symbols[i:i + batch_size]
-            # Окрема перевірка сплеску об'єму 15M
-            await asyncio.gather(
-                *[
-                    check_volume_spike_alert(session, sym)
-                    for sym in batch
-                ],
-                return_exceptions=True
-            )
 
             print(
                 f"[INFO] Пакет {i // batch_size + 1}: "
@@ -3110,6 +3135,9 @@ async def main_bot_loop():
                         )
                     ]
 
+                    # Оновлюємо список монет для перевірки сплеску об'єму
+                    VOLUME_ALERT_SYMBOLS[:] = symbols
+
                     print(
                         f"[INFO] Відфільтровано монет "
                         f"з об'ємом >= $400K: {len(symbols)}",
@@ -3166,6 +3194,7 @@ async def self_ping_loop():
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     asyncio.create_task(self_ping_loop())
+    asyncio.create_task(volume_spike_alert_loop())
     await main_bot_loop()
 
 if __name__ == "__main__":
