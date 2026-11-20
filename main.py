@@ -1991,7 +1991,7 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
                         tp3 = tp2 + atr_15m * 2
 
                         return {
-                            "strategy": "DOUBLE BOTTOM — FRACTAL",
+                            "strategy": "Подвійне дно — фрактал",
                             "direction": "LONG",
                             "entry": entry,
                             "stop": stop,
@@ -2064,7 +2064,7 @@ def detect_double_bottom_top(candles_1h, candles_15m, report=None, symbol=None):
                         tp3 = tp2 - atr_15m * 2
 
                         return {
-                            "strategy": "DOUBLE TOP — FRACTAL",
+                            "strategy": "Подвійна вершина — фрактал",
                             "direction": "SHORT",
                             "entry": entry,
                             "stop": stop,
