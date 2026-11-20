@@ -688,15 +688,65 @@ async def check_volume_spike_alert(session, symbol):
         spike = latest_volume / previous_volume
 
         if spike >= VOLUME_SPIKE_MULTIPLIER:
+
+            correlation_text = "н/д"
+
+            try:
+                raw_1h = await get_cached_klines(
+                    session,
+                    symbol,
+                    "1h",
+                    100
+                )
+
+                if raw_1h:
+                    coin_1h = prepare_candles(
+                        raw_1h,
+                        60 * 60 * 1000
+                    )
+
+                    btc_1h = await get_btc_1h_candles(session)
+
+                    if coin_1h and btc_1h:
+                        btc_map = {
+                            x["time"]: float(x["close"])
+                            for x in btc_1h
+                        }
+
+                        coin_map = {
+                            x["time"]: float(x["close"])
+                            for x in coin_1h
+                        }
+
+                        # Останні 24 спільні закриті свічки
+                        common = sorted(
+                            set(btc_map) & set(coin_map)
+                        )[-24:]
+
+                        if len(common) >= 15:
+                            corr = calculate_correlation(
+                                [btc_map[t] for t in common],
+                                [coin_map[t] for t in common]
+                            )
+
+                            correlation_text = f"{corr:.2f}"
+
+            except Exception as e:
+                print(
+                    f"[VOLUME CORRELATION ERROR] {symbol}: {e}",
+                    flush=True
+                )
+
             await send_telegram(
-                f"{symbol} — Сплеск: ×{spike:.2f}"
+                f"{symbol} — Сплеск: ×{spike:.2f} "
+                f"({correlation_text})"
             )
 
     except Exception as e:
         print(
             f"[VOLUME ALERT ERROR] {symbol}: {e}",
             flush=True
-        )
+    )
 
 def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     """Розрахунок позиції: депозит $20, базове плече 10x,
@@ -766,7 +816,6 @@ def calculate_trade_levels(direction, entry, stop, tp1, tp2, tp3):
     except (TypeError, ValueError, OverflowError, ZeroDivisionError):
         return None
 
-
 def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
     """RANGE SWEEP: 1H боковик за фрактальними межами, 15M свіп і повернення."""
     name = symbol or "Невідома монета"
@@ -775,9 +824,11 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         add_report_item(report, category, f"{name} — {reason}")
 
     ATR_PERIOD = 14
+    EMA_PERIOD = 50
+    EMA_SLOPE_CANDLES = 5
+    MIN_EMA_SLOPE_ATR = 0.10
     FRACTAL_RADIUS = 2
     MIN_CANDLES_AFTER_RANGE = 10
-    MAX_RANGE_ATR = 6.0
     STOP_ATR_BUFFER = 0.30
 
     # prepare_candles повертає закриті свічки; останній елемент 1H
@@ -815,28 +866,72 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         if lows[i] < min(left_lows) and lows[i] < min(right_lows):
             fractal_lows.append({"index": i, "price": lows[i]})
 
-    # Формуємо обидва варіанти послідовності меж. Напрям EMA не визначає,
-    # чи існує боковик, і не може відхилити горизонтальний ринок.
+    # Визначаємо напрямок ПОПЕРЕДНЬОГО тренду за EMA50 на 1H.
+    # Для кожної можливої першої межі оцінюємо нахил EMA за 5 закритих свічок
+    # до цієї межі, нормалізований на ATR. Це не дає боковику самому
+    # визначати напрямок тренду.
+    closes = [float(c["close"]) for c in hourly]
+    ema_values = []
+    multiplier = 2.0 / (EMA_PERIOD + 1)
+    ema = closes[0]
+    for close in closes:
+        ema = close * multiplier + ema * (1.0 - multiplier)
+        ema_values.append(ema)
+
+    def trend_before_pivot(index):
+        if index < EMA_PERIOD + EMA_SLOPE_CANDLES:
+            return None
+
+        atr_at_pivot = calculate_atr(hourly[:index + 1], ATR_PERIOD)
+        if atr_at_pivot <= 0:
+            return None
+
+        ema_slope_atr = (
+            ema_values[index] - ema_values[index - EMA_SLOPE_CANDLES]
+        ) / atr_at_pivot
+
+        if ema_slope_atr >= MIN_EMA_SLOPE_ATR:
+            return "UP"
+        if ema_slope_atr <= -MIN_EMA_SLOPE_ATR:
+            return "DOWN"
+        return None
+
     candidates = []
 
+    # Після висхідного тренду: спочатку максимум, потім мінімум.
     for high_pivot in reversed(fractal_highs):
-        following_lows = [p for p in fractal_lows if p["index"] > high_pivot["index"]]
+        if trend_before_pivot(high_pivot["index"]) != "UP":
+            continue
+
+        following_lows = [
+            p for p in fractal_lows
+            if p["index"] > high_pivot["index"]
+        ]
         if following_lows:
             low_pivot = min(following_lows, key=lambda p: p["price"])
             candidates.append({
                 "high": high_pivot["price"],
                 "low": low_pivot["price"],
-                "end_index": low_pivot["index"]
+                "end_index": low_pivot["index"],
+                "trend": "UP"
             })
 
+    # Після низхідного тренду: спочатку мінімум, потім максимум.
     for low_pivot in reversed(fractal_lows):
-        following_highs = [p for p in fractal_highs if p["index"] > low_pivot["index"]]
+        if trend_before_pivot(low_pivot["index"]) != "DOWN":
+            continue
+
+        following_highs = [
+            p for p in fractal_highs
+            if p["index"] > low_pivot["index"]
+        ]
         if following_highs:
             high_pivot = max(following_highs, key=lambda p: p["price"])
             candidates.append({
                 "high": high_pivot["price"],
                 "low": low_pivot["price"],
-                "end_index": high_pivot["index"]
+                "end_index": high_pivot["index"],
+                "trend": "DOWN"
             })
 
     selected_range = None
@@ -846,7 +941,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
         range_size = range_high - range_low
         candles_after_range = len(hourly) - 1 - candidate["end_index"]
 
-        if range_size <= 0 or range_size > atr_1h * MAX_RANGE_ATR:
+        if range_size <= 0:
             continue
         if candles_after_range < MIN_CANDLES_AFTER_RANGE:
             continue
@@ -945,8 +1040,7 @@ def detect_range_sweep(candles_1h, candles_15m, report=None, symbol=None):
 
     log("no_sweep", "RANGE SWEEP: боковик знайдено, але немає підтвердженого свіпу потрібної межі на 15M")
     return None
-
-
+    
 def detect_impulse_retest(candles_1h, candles_15m, report=None, symbol=None):
     """1H імпульс -> відкат/зупинка -> 16 свічок боковика 15M -> свіп і повернення."""
     name = symbol or "Невідома монета"
