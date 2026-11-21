@@ -17,6 +17,7 @@ BINGX_BASE_URL = "https://open-api.bingx.com"
 TIMEFRAME = "1h"
 INTERVAL_MS = 60 * 60 * 1000
 VOLUME_SPIKE_MIN = 1.5
+MIN_24H_QUOTE_VOLUME_USDT = 300000
 SWING_MIN_BARS_AGO = 8
 SWING_MAX_BARS_AGO = 24
 CORRELATION_PERIOD = 24
@@ -126,6 +127,38 @@ async def get_usdt_symbols(session):
                 symbols.add(symbol)
     return sorted(symbols)
 
+async def get_24h_quote_volumes(session):
+    data = await bingx_get(
+        session, "/openApi/swap/v2/quote/ticker"
+    )
+
+    if isinstance(data, dict):
+        data = [data]
+
+    if not isinstance(data, list):
+        raise ValueError("Не вдалося отримати 24h ticker BingX")
+
+    volumes = {}
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        symbol = str(item.get("symbol", "")).strip().upper()
+        raw_volume = item.get("quoteVolume")
+
+        if not symbol.endswith("-USDT") or raw_volume is None:
+            continue
+
+        try:
+            volume = float(raw_volume)
+        except (TypeError, ValueError):
+            continue
+
+        volumes[symbol] = volume
+
+    return volumes
+    
 def parse_candle(raw):
     """Підтримка об'єктного та масивного формату klines."""
     try:
@@ -279,9 +312,30 @@ async def scan_market(session):
         await notify_error(session, "Не вдалося отримати список BingX-пар", exc)
         return
 
-    logger.info("[SYMBOLS] USDT-пар: %s", len(symbols))
+    logger.info("[SYMBOLS] Усього USDT-пар: %s", len(symbols))
+
     try:
-        btc_candles = await get_closed_1h_candles(session, "BTC-USDT", 40)
+        quote_volumes = await get_24h_quote_volumes(session)
+    except Exception as exc:
+        logger.exception("[24H VOLUME ERROR]")
+        await notify_error(session, "Не вдалося отримати 24h обсяги BingX", exc)
+        return
+
+    before_filter = len(symbols)
+
+    symbols = [
+        symbol for symbol in symbols
+        if quote_volumes.get(symbol, 0) >= MIN_24H_QUOTE_VOLUME_USDT
+    ]
+
+    logger.info(
+        "[24H VOLUME FILTER] Мінімум: 300000 USDT | До фільтра: %s | Після фільтра: %s",
+        before_filter, len(symbols)
+    )
+
+try:
+    btc_candles = await get_closed_1h_candles(session, "BTC-USDT", 40)
+    
     except Exception as exc:
         logger.exception("[BTC ERROR]")
         await notify_error(session, "Не вдалося отримати свічки BTC", exc)
