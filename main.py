@@ -271,7 +271,7 @@ async def analyze_symbol(session, symbol, btc_candles):
         return {"__error__": f"{symbol}: {exc}"}
 
 async def scan_market(session):
-    print(f"\n[SCAN START] {datetime.now(timezone.utc).isoformat()}")
+    logger.info("[SCAN START] %s", datetime.now(KYIV_TZ).isoformat())
     try:
         symbols = await get_usdt_symbols(session)
     except Exception as exc:
