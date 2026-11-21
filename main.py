@@ -303,6 +303,7 @@ async def analyze_symbol(session, symbol, btc_candles):
         logger.exception("[ANALYZE ERROR] %s", symbol)
         return {"__error__": f"{symbol}: {exc}"}
 
+
 async def scan_market(session):
     logger.info("[SCAN START] %s", datetime.now(KYIV_TZ).isoformat())
     try:
@@ -333,9 +334,8 @@ async def scan_market(session):
         before_filter, len(symbols)
     )
 
-try:
-    btc_candles = await get_closed_1h_candles(session, "BTC-USDT", 40)
-    
+    try:
+        btc_candles = await get_closed_1h_candles(session, "BTC-USDT", 40)
     except Exception as exc:
         logger.exception("[BTC ERROR]")
         await notify_error(session, "Не вдалося отримати свічки BTC", exc)
@@ -362,7 +362,7 @@ try:
     logger.info("[SCAN FINISH] Перевірено: %s | Повідомлень: %s | Помилок: %s", len(symbols_to_scan), sent, errors)
     if errors:
         await notify_error(session, "Помилки під час сканування", f"Кількість помилок: {errors}. Деталі дивись у логах Render.")
-
+        
 def seconds_until_next_scan():
     now = datetime.now(KYIV_TZ)
     next_hour = now.replace(minute=1, second=0, microsecond=0)
