@@ -113,19 +113,33 @@ async def bingx_get(session, endpoint, params=None):
         )
     return result.get("data")
 
+def _disp_name(item, symbol):
+    keys = ("displayName", "name", "alias")
+    for k in keys:
+        v = item.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return symbol
+
 async def get_usdt_symbols(session):
-    data = await bingx_get(session, "/openApi/swap/v2/quote/contracts")
+    data = await bingx_get(
+        session, "/openApi/swap/v2/quote/contracts"
+    )
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list):
-        raise ValueError("Не вдалося отримати список контрактів BingX")
-    symbols = set()
+        raise ValueError(
+            "Не вдалося отримати список контрактів BingX"
+        )
+    out = {}
     for item in data:
         if isinstance(item, dict):
-            symbol = str(item.get("symbol", "")).strip().upper()
-            if symbol.endswith("-USDT"):
-                symbols.add(symbol)
-    return sorted(symbols)
+            sym = str(
+                item.get("symbol", "")
+            ).strip().upper()
+            if sym.endswith("-USDT"):
+                out[sym] = _disp_name(item, sym)
+    return out
 
 async def get_24h_quote_volumes(session):
     data = await bingx_get(
@@ -278,7 +292,9 @@ def detect_sweep(candles):
         return "Свіп: верхнього хай"
     return "Найближчого хай/лоу: немає"
 
-async def analyze_symbol(session, symbol, btc_candles):
+async def analyze_symbol(
+    session, symbol, disp_name, btc_candles
+):
     try:
         candles = await get_closed_1h_candles(session, symbol, limit=40)
         if len(candles) < SWING_MAX_BARS_AGO + 1:
@@ -292,13 +308,21 @@ async def analyze_symbol(session, symbol, btc_candles):
         correlation = calculate_btc_correlation(candles, btc_candles)
         corr_text = f"{correlation:.2f}" if correlation is not None else "н/д"
 
+        s_norm = symbol.replace("-", "").upper()
+        d_norm = disp_name.replace("-", "").upper()
+        if d_norm and d_norm != s_norm:
+            label = f"{disp_name} ({symbol})"
+        else:
+            label = symbol
+
         return (
             "Сплеск об'єму\n\n"
-            f"Монета: {symbol}\n\n"
+            f"Монета: {label}\n\n"
             f"Обсяг: ×{ratio:.1f}\n\n"
             f"{sweep_text}\n\n"
             f"Кореляція: {corr_text}"
         )
+
     except Exception as exc:
         logger.exception("[ANALYZE ERROR] %s", symbol)
         return {"__error__": f"{symbol}: {exc}"}
@@ -307,11 +331,20 @@ async def analyze_symbol(session, symbol, btc_candles):
 async def scan_market(session):
     logger.info("[SCAN START] %s", datetime.now(KYIV_TZ).isoformat())
     try:
-        symbols = await get_usdt_symbols(session)
+        sym_map = await get_usdt_symbols(session)
     except Exception as exc:
         logger.exception("[SYMBOLS ERROR]")
-        await notify_error(session, "Не вдалося отримати список BingX-пар", exc)
+        await notify_error(
+            session,
+            "Не вдалося отримати список BingX-пар",
+            exc,
+        )
         return
+
+    symbols = sorted(sym_map.keys())
+    logger.info(
+        "[SYMBOLS] Усього USDT-пар: %s", len(symbols)
+    )
 
     logger.info("[SYMBOLS] Усього USDT-пар: %s", len(symbols))
 
@@ -343,8 +376,13 @@ async def scan_market(session):
 
     symbols_to_scan = [s for s in symbols if s != "BTC-USDT"]
     results = await asyncio.gather(
-        *(analyze_symbol(session, s, btc_candles) for s in symbols_to_scan),
-        return_exceptions=True
+        *(
+            analyze_symbol(
+                session, s, sym_map.get(s, s), btc_candles
+            )
+            for s in symbols_to_scan
+        ),
+        return_exceptions=True,
     )
 
     sent, errors = 0, 0
