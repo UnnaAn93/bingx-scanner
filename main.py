@@ -280,19 +280,18 @@ def calculate_btc_correlation(coin_candles, btc_candles):
         btc_returns.append((bn / bp - 1) * 100)
     return pearson_correlation(coin_returns, btc_returns)
 
+
 def detect_sweep(candles):
     """
     Перевіряється тільки остання закрита свічка.
-    Рівні беруться зі свічок від 8 до 24 барів до неї.
+    Рівні беруться з 24 попередніх закритих свічок,
+    без сигнальної свічки.
     """
-    if len(candles) < SWING_MAX_BARS_AGO + 1:
+    if len(candles) < 25:
         return "Найближчого хай/лоу: немає"
 
     signal = candles[-1]
-    # Історичні бари -24 ... -8 включно; сигнальна свічка не входить.
-    reference = candles[-SWING_MAX_BARS_AGO:-(SWING_MIN_BARS_AGO - 1)]
-    if not reference:
-        return "Найближчого хай/лоу: немає"
+    reference = candles[-25:-1]
 
     lowest = min(c["low"] for c in reference)
     highest = max(c["high"] for c in reference)
@@ -306,7 +305,9 @@ def detect_sweep(candles):
         return "Свіп: нижнього лоу"
     if swept_high:
         return "Свіп: верхнього хай"
+
     return "Найближчого хай/лоу: немає"
+
 
 def calc_ema(values, period=20):
     if not values:
@@ -382,7 +383,14 @@ async def analyze_symbol(
         if ratio is None or ratio < VOLUME_SPIKE_MIN:
             return None
 
-        sweep_text = detect_sweep(candles)
+        if sweep_text == "Свіп: верхнього хай":
+            sweep_text = "🟢 " + sweep_text
+        elif sweep_text == "Свіп: нижнього лоу":
+            sweep_text = "🔴 " + sweep_text
+        elif sweep_text == "Свіп: верхнього хай та нижнього лоу":
+            sweep_text = "🟢🔴 " + sweep_text
+        else:
+            sweep_text = "⚪ " + sweep_text
         correlation = calculate_btc_correlation(candles, btc_candles)
         if correlation is not None and correlation > MAX_BTC_CORRELATION:
             return None
