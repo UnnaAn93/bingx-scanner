@@ -36,6 +36,13 @@ EMA20_MIN_BELOW_PCT = 0.1
 EMA20_MAX_BELOW_PCT = 2.5
 EMA20_MAX_RECENT_PUMP_PCT = 5.0
 MAX_BTC_CORRELATION = 0.7
+EXCLUDED_PREFIXES = ("NCF", "NCS", "NCC")
+BLACKLIST = set()
+
+def is_excluded_symbol(symbol: str) -> bool:
+    sym = symbol.upper().strip()
+    return sym in BLACKLIST or sym.startswith(EXCLUDED_PREFIXES)
+    
 RENDER_URL = os.getenv("RENDER_URL", "").strip()
 
 logging.basicConfig(
@@ -146,7 +153,7 @@ async def get_usdt_symbols(session):
             sym = str(
                 item.get("symbol", "")
             ).strip().upper()
-            if sym.endswith("-USDT"):
+            if sym.endswith("-USDT") and not is_excluded_symbol(sym):
                 out[sym] = _disp_name(item, sym)
     return out
 
@@ -170,7 +177,7 @@ async def get_24h_quote_volumes(session):
         symbol = str(item.get("symbol", "")).strip().upper()
         raw_volume = item.get("quoteVolume")
 
-        if not symbol.endswith("-USDT") or raw_volume is None:
+        if not symbol.endswith("-USDT") or is_excluded_symbol(symbol) or raw_volume is None:
             continue
 
         try:
@@ -456,7 +463,7 @@ async def scan_market(session, mode="spike"):
     before_filter = len(symbols)
     symbols = [
         symbol for symbol in symbols
-        if quote_volumes.get(symbol, 0) >= MIN_24H_QUOTE_VOLUME_USDT
+        if not is_excluded_symbol(symbol) and quote_volumes.get(symbol, 0) >= MIN_24H_QUOTE_VOLUME_USDT
     ]
 
     logger.info(
