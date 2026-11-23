@@ -35,6 +35,7 @@ EMA20_MAX_SPIKE_MULT = 2.0
 EMA20_MIN_BELOW_PCT = 0.1
 EMA20_MAX_BELOW_PCT = 2.5
 EMA20_MAX_RECENT_PUMP_PCT = 5.0
+MAX_BTC_CORRELATION = 0.7
 RENDER_URL = os.getenv("RENDER_URL", "").strip()
 
 logging.basicConfig(
@@ -376,6 +377,8 @@ async def analyze_symbol(
 
         sweep_text = detect_sweep(candles)
         correlation = calculate_btc_correlation(candles, btc_candles)
+        if correlation is not None and correlation > MAX_BTC_CORRELATION:
+            return None
         corr_text = f"{correlation:.2f}" if correlation is not None else "н/д"
 
         s_norm = symbol.replace("-", "").upper()
@@ -406,6 +409,8 @@ async def analyze_ema20_symbol(session, symbol, disp_name, btc_candles):
 
         sweep_text = detect_sweep(candles)
         correlation = calculate_btc_correlation(candles, btc_candles)
+        if correlation is not None and correlation > MAX_BTC_CORRELATION:
+            return None
         corr_text = f"{correlation:.2f}" if correlation is not None else "н/д"
 
         s_norm = symbol.replace("-", "").upper()
