@@ -425,8 +425,8 @@ async def analyze_ema20_symbol(session, symbol, disp_name, btc_candles):
         logger.exception("[EMA20 ANALYZE ERROR] %s", symbol)
         return {"__error__": f"{symbol}: {exc}"}
         
-async def scan_market(session):
-    logger.info("[SCAN START] %s", datetime.now(KYIV_TZ).isoformat())
+async def scan_market(session, mode="spike"):
+    logger.info("[SCAN START] mode=%s | %s", mode, datetime.now(KYIV_TZ).isoformat())
     try:
         sym_map = await get_usdt_symbols(session)
     except Exception as exc:
@@ -439,10 +439,6 @@ async def scan_market(session):
         return
 
     symbols = sorted(sym_map.keys())
-    logger.info(
-        "[SYMBOLS] Усього USDT-пар: %s", len(symbols)
-    )
-
     logger.info("[SYMBOLS] Усього USDT-пар: %s", len(symbols))
 
     try:
@@ -453,30 +449,30 @@ async def scan_market(session):
         return
 
     before_filter = len(symbols)
-
     symbols = [
         symbol for symbol in symbols
         if quote_volumes.get(symbol, 0) >= MIN_24H_QUOTE_VOLUME_USDT
     ]
 
     logger.info(
-        "[24H VOLUME FILTER] Мінімум: 300000 USDT | До фільтра: %s | Після фільтра: %s",
-        before_filter, len(symbols)
+        "[24H VOLUME FILTER] Мінімум %s USDT | До фільтра: %s | Після фільтра: %s",
+        MIN_24H_QUOTE_VOLUME_USDT,
+        before_filter,
+        len(symbols),
     )
 
     try:
-        btc_candles = await get_closed_1h_candles(session, "BTC-USDT", 40)
+        btc_candles = await get_closed_1h_candles(session, "BTC-USDT", limit=60)
     except Exception as exc:
         logger.exception("[BTC ERROR]")
         await notify_error(session, "Не вдалося отримати свічки BTC", exc)
         btc_candles = []
 
     symbols_to_scan = [s for s in symbols if s != "BTC-USDT"]
+    worker = analyze_ema20_symbol if mode == "ema20" else analyze_symbol
     results = await asyncio.gather(
         *(
-            analyze_symbol(
-                session, s, sym_map.get(s, s), btc_candles
-            )
+            worker(session, s, sym_map.get(s, s), btc_candles)
             for s in symbols_to_scan
         ),
         return_exceptions=True,
@@ -498,12 +494,16 @@ async def scan_market(session):
     if errors:
         await notify_error(session, "Помилки під час сканування", f"Кількість помилок: {errors}. Деталі дивись у логах Render.")
         
-def seconds_until_next_scan():
+def seconds_until_next_slot(slots=(1, EMA20_SCAN_MINUTE)):
     now = datetime.now(KYIV_TZ)
-    next_hour = now.replace(minute=1, second=0, microsecond=0)
-    if now >= next_hour:
-        next_hour += timedelta(hours=1)
-    return max(1.0, (next_hour - now).total_seconds())
+    candidates = []
+    for m in slots:
+        dt = now.replace(minute=m, second=0, microsecond=0)
+        if dt <= now:
+            dt += timedelta(hours=1)
+        candidates.append((dt, m))
+    next_dt, slot_minute = min(candidates, key=lambda x: x[0])
+    return max(1.0, (next_dt - now).total_seconds()), slot_minute
 
 async def main():
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
@@ -528,15 +528,22 @@ async def main():
 
         try:
             while True:
-                delay = seconds_until_next_scan()
+                delay, slot_minute = seconds_until_next_slot((1, EMA20_SCAN_MINUTE))
                 next_time = datetime.now(KYIV_TZ) + timedelta(seconds=delay)
-                logger.info("[WAIT] Наступне сканування: %s", next_time.strftime("%Y-%m-%d %H:%M:%S %Z"))
+                mode = "ema20" if slot_minute == EMA20_SCAN_MINUTE else "spike"
+                logger.info(
+                    "[WAIT] Наступне сканування (%s, :%02d): %s",
+                    mode,
+                    slot_minute,
+                    next_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                )
                 await asyncio.sleep(delay)
                 try:
-                    await scan_market(session)
+                    await scan_market(session, mode=mode)
                 except Exception as exc:
                     logger.exception("[SCAN FATAL ERROR]")
                     await notify_error(session, "Критична помилка циклу сканування", exc)
+
         finally:
             ping_task.cancel()
             await asyncio.gather(ping_task, return_exceptions=True)
