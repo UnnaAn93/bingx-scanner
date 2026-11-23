@@ -27,6 +27,14 @@ REQUEST_TIMEOUT_SECONDS = 15
 PORT = int(os.getenv("PORT", "10000"))
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 SELF_PING_INTERVAL_SECONDS = 240
+EMA20_SCAN_MINUTE = 5
+EMA20_VOL_LOOKBACK = 20
+EMA20_MIN_REL_VOL = 0.7
+EMA20_MAX_REL_VOL = 1.5
+EMA20_MAX_SPIKE_MULT = 2.0
+EMA20_MIN_BELOW_PCT = 0.1
+EMA20_MAX_BELOW_PCT = 2.5
+EMA20_MAX_RECENT_PUMP_PCT = 5.0
 RENDER_URL = os.getenv("RENDER_URL", "").strip()
 
 logging.basicConfig(
@@ -292,6 +300,68 @@ def detect_sweep(candles):
         return "Свіп: верхнього хай"
     return "Найближчого хай/лоу: немає"
 
+def calc_ema(values, period=20):
+    if not values:
+        return []
+    k = 2 / (period + 1)
+    ema = [values[0]]
+    for price in values[1:]:
+        ema.append(price * k + ema[-1] * (1 - k))
+    return ema
+
+
+def check_ema20_approach(candles):
+    need = max(30, EMA20_VOL_LOOKBACK + 5)
+    if len(candles) < need:
+        return None
+
+    closes = [c["close"] for c in candles]
+    lows = [c["low"] for c in candles]
+    vols = [c["volume"] for c in candles]
+
+    ema20 = calc_ema(closes, 20)
+    last_close = closes[-1]
+    last_ema20 = ema20[-1]
+    if last_ema20 <= 0 or last_close >= last_ema20:
+        return None
+
+    # 1. Ціна ще під EMA20 і підходить знизу
+    below_pct = ((last_ema20 - last_close) / last_ema20) * 100
+    if not (EMA20_MIN_BELOW_PCT <= below_pct <= EMA20_MAX_BELOW_PCT):
+        return None
+
+    prev_low_min = min(lows[-5:-3])
+    recent_low_min = min(lows[-3:])
+    if recent_low_min < prev_low_min * 0.992:
+        return None
+
+    # 2. Рівний відносний об'єм без різких спайків
+    avg_vol = sum(vols[-(EMA20_VOL_LOOKBACK + 1):-1]) / EMA20_VOL_LOOKBACK
+    if avg_vol <= 0:
+        return None
+
+    rel_vol = vols[-1] / avg_vol
+    max_recent_rel_vol = max(vols[-4:]) / avg_vol
+    if not (EMA20_MIN_REL_VOL <= rel_vol <= EMA20_MAX_REL_VOL):
+        return None
+    if max_recent_rel_vol > EMA20_MAX_SPIKE_MULT:
+        return None
+
+    # 3. Немає перегрітого стрибка за останні 4 закриті свічки
+    base_4 = closes[-5]
+    jump_4_pct = ((last_close - base_4) / base_4) * 100 if base_4 > 0 else 0
+    if jump_4_pct > EMA20_MAX_RECENT_PUMP_PCT:
+        return None
+
+    return {
+        "price": last_close,
+        "ema20": last_ema20,
+        "below_pct": below_pct,
+        "rel_vol": rel_vol,
+        "jump_4c_pct": jump_4_pct,
+    }
+    
+
 async def analyze_symbol(
     session, symbol, disp_name, btc_candles
 ):
@@ -327,7 +397,34 @@ async def analyze_symbol(
         logger.exception("[ANALYZE ERROR] %s", symbol)
         return {"__error__": f"{symbol}: {exc}"}
 
+async def analyze_ema20_symbol(session, symbol, disp_name, btc_candles):
+    try:
+        candles = await get_closed_1h_candles(session, symbol, limit=60)
+        setup = check_ema20_approach(candles)
+        if not setup:
+            return None
 
+        sweep_text = detect_sweep(candles)
+        correlation = calculate_btc_correlation(candles, btc_candles)
+        corr_text = f"{correlation:.2f}" if correlation is not None else "н/д"
+
+        s_norm = symbol.replace("-", "").upper()
+        d_norm = disp_name.replace("-", "").upper() if disp_name else s_norm
+        label = f"{disp_name} ({symbol})" if d_norm and d_norm != s_norm else symbol
+
+        return (
+            "Підтискання під EMA20 (1h)\n"
+            f"Монета: {label}\n"
+            f"Ціна: {setup['price']} | EMA20: {setup['ema20']:.6f}\n"
+            f"Нижче EMA20: {setup['below_pct']:.2f}% | RelVol: {setup['rel_vol']:.2f}\n"
+            f"Зміна за 4 свічки: {setup['jump_4c_pct']:+.2f}%\n"
+            f"{sweep_text}\n"
+            f"Кореляція: {corr_text}"
+        )
+    except Exception as exc:
+        logger.exception("[EMA20 ANALYZE ERROR] %s", symbol)
+        return {"__error__": f"{symbol}: {exc}"}
+        
 async def scan_market(session):
     logger.info("[SCAN START] %s", datetime.now(KYIV_TZ).isoformat())
     try:
