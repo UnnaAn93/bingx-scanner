@@ -382,7 +382,8 @@ async def analyze_symbol(
         ratio = volume_ratio(candles)
         if ratio is None or ratio < VOLUME_SPIKE_MIN:
             return None
-
+            
+        sweep_text = detect_sweep(candles)
         if sweep_text == "Свіп: верхнього хай":
             sweep_text = "🟢 " + sweep_text
         elif sweep_text == "Свіп: нижнього лоу":
