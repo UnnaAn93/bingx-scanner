@@ -678,6 +678,7 @@ async def main():
                 delay, slot_minute = seconds_until_next_slot((1, EMA20_SCAN_MINUTE))
                 next_time = datetime.now(KYIV_TZ) + timedelta(seconds=delay)
                 mode = "ema20" if slot_minute == EMA20_SCAN_MINUTE else "spike"
+
                 logger.info(
                     "[WAIT] Наступне сканування (%s, :%02d): %s",
                     mode,
@@ -687,14 +688,18 @@ async def main():
                 await asyncio.sleep(delay)
                 try:
                     await scan_market(session, mode=mode)
+
+                    if mode == "ema20":
+                        await scan_ema50_breakouts(session)
+
                 except Exception as exc:
                     logger.exception("[SCAN FATAL ERROR]")
                     await notify_error(session, "Критична помилка циклу сканування", exc)
 
         finally:
             ping_task.cancel()
+            
             await asyncio.gather(ping_task, return_exceptions=True)
-
 if __name__ == "__main__":
     threading.Thread(target=run_health_server, daemon=True).start()
     try:
