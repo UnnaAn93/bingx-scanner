@@ -36,6 +36,9 @@ EMA20_MIN_BELOW_PCT = 0.1
 EMA20_MAX_BELOW_PCT = 2.5
 EMA20_MAX_RECENT_PUMP_PCT = 5.0
 MAX_BTC_CORRELATION = 0.7
+EMA50_PERIOD = 50
+EMA50_CORRELATION_MIN = -0.50
+EMA50_CORRELATION_MAX = 0.50
 EXCLUDED_PREFIXES = ("NCF", "NCS", "NCC")
 BLACKLIST = set()
 
@@ -445,6 +448,129 @@ async def analyze_ema20_symbol(session, symbol, disp_name, btc_candles):
     except Exception as exc:
         logger.exception("[EMA20 ANALYZE ERROR] %s", symbol)
         return {"__error__": f"{symbol}: {exc}"}
+
+async def analyze_ema50_symbol(session, symbol, disp_name, btc_candles):
+    try:
+        candles = await get_closed_1h_candles(session, symbol, limit=100)
+
+        if len(candles) < EMA50_PERIOD + 1:
+            return None
+
+        closes = [c["close"] for c in candles]
+        ema50 = calc_ema(closes, EMA50_PERIOD)
+
+        # Дві останні ЗАКРИТІ свічки
+        prev_close = closes[-2]
+        last_close = closes[-1]
+
+        prev_ema50 = ema50[-2]
+        last_ema50 = ema50[-1]
+
+        signal = None
+
+        # LONG: ціна перетнула EMA50 знизу вгору
+        if prev_close < prev_ema50 and last_close > last_ema50:
+            signal = "long"
+
+        # SHORT: ціна перетнула EMA50 згори вниз
+        elif prev_close > prev_ema50 and last_close < last_ema50:
+            signal = "short"
+
+        if signal is None:
+            return None
+
+        # Перевірка кореляції з BTC
+        correlation = calculate_btc_correlation(candles, btc_candles)
+
+        if correlation is None:
+            return None
+
+        if not (EMA50_CORRELATION_MIN <= correlation <= EMA50_CORRELATION_MAX):
+            return None
+
+        s_norm = symbol.replace("-", "").upper()
+        d_norm = disp_name.replace("-", "").upper() if disp_name else s_norm
+        label = (
+            f"{disp_name} ({symbol})"
+            if d_norm and d_norm != s_norm
+            else symbol
+        )
+
+        if signal == "long":
+            direction = "🟢 ПРОБІЙ EMA50 ВГОРУ"
+        else:
+            direction = "🔴 ПРОБІЙ EMA50 ВНИЗ"
+
+        return (
+            f"{direction} (1H)\n"
+            f"Монета: {label}\n"
+            f"Ціна закриття: {last_close}\n"
+            f"EMA50: {last_ema50:.8f}\n"
+            f"Кореляція з BTC: {correlation:.2f}"
+        )
+
+    except Exception as exc:
+        logger.exception("[EMA50 ANALYZE ERROR] %s", symbol)
+        return {"__error__": f"{symbol}: {exc}"}
+
+async def scan_ema50_breakouts(session):
+    logger.info("[EMA50 SCAN START]")
+
+    try:
+        sym_map = await get_usdt_symbols(session)
+        symbols = [
+            s for s in sorted(sym_map.keys())
+            if s != "BTC-USDT" and not is_excluded_symbol(s)
+        ]
+
+        btc_candles = await get_closed_1h_candles(
+            session, "BTC-USDT", limit=100
+        )
+
+        if len(btc_candles) < CORRELATION_PERIOD + 1:
+            logger.error("[EMA50] Недостатньо свічок BTC для кореляції")
+            return
+
+    except Exception as exc:
+        logger.exception("[EMA50 SCAN INIT ERROR]")
+        await notify_error(session, "Помилка запуску сканера EMA50", exc)
+        return
+
+    results = await asyncio.gather(
+        *(
+            analyze_ema50_symbol(
+                session,
+                symbol,
+                sym_map.get(symbol, symbol),
+                btc_candles,
+            )
+            for symbol in symbols
+        ),
+        return_exceptions=True,
+    )
+
+    sent = 0
+    errors = 0
+
+    for result in results:
+        if isinstance(result, Exception):
+            errors += 1
+            logger.error("[EMA50 TASK ERROR] %s", result)
+
+        elif isinstance(result, dict) and "__error__" in result:
+            errors += 1
+            logger.error("[EMA50 SYMBOL ERROR] %s", result["__error__"])
+
+        elif result:
+            await send_telegram(session, result)
+            sent += 1
+
+    logger.info(
+        "[EMA50 SCAN FINISH] Перевірено: %s | Повідомлень: %s | Помилок: %s",
+        len(symbols),
+        sent,
+        errors,
+    )
         
 async def scan_market(session, mode="spike"):
     logger.info("[SCAN START] mode=%s | %s", mode, datetime.now(KYIV_TZ).isoformat())
