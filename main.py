@@ -571,6 +571,102 @@ async def scan_ema50_breakouts(session):
         sent,
         errors,
     )
+
+async def analyze_ema_cross_symbol(session, symbol, disp_name, btc_candles):
+    try:
+        candles = await get_closed_1h_candles(session, symbol, limit=100)
+
+        if len(candles) < 51:
+            return None
+
+        closes = [c["close"] for c in candles]
+        ema20 = calc_ema(closes, 20)
+        ema50 = calc_ema(closes, 50)
+
+        # Перевіряємо дві останні закриті свічки
+        if ema20[-2] < ema50[-2] and ema20[-1] > ema50[-1]:
+            signal = "🟢 ПЕРЕТИН EMA20/EMA50 ВГОРУ"
+        elif ema20[-2] > ema50[-2] and ema20[-1] < ema50[-1]:
+            signal = "🔴 ПЕРЕТИН EMA20/EMA50 ВНИЗ"
+        else:
+            return None
+
+        correlation = calculate_btc_correlation(candles, btc_candles)
+
+        if correlation is None:
+            return None
+
+        if not (-0.50 <= correlation <= 0.50):
+            return None
+
+        label = (
+            f"{disp_name} ({symbol})"
+            if disp_name and disp_name.replace("-", "").upper() != symbol.replace("-", "").upper()
+            else symbol
+        )
+
+        return (
+            f"{signal} (1H)\n"
+            f"Монета: {label}\n"
+            f"EMA20: {ema20[-1]:.8f}\n"
+            f"EMA50: {ema50[-1]:.8f}\n"
+            f"Кореляція з BTC: {correlation:.2f}"
+        )
+
+    except Exception as exc:
+        logger.exception("[EMA CROSS ERROR] %s", symbol)
+        return {"__error__": f"{symbol}: {exc}"}
+
+
+async def scan_ema_cross(session):
+    logger.info("[EMA CROSS SCAN START]")
+
+    try:
+        sym_map = await get_usdt_symbols(session)
+        symbols = sorted(sym_map.keys())
+
+        btc_candles = await get_closed_1h_candles(
+            session, "BTC-USDT", limit=100
+        )
+
+        if len(btc_candles) < CORRELATION_PERIOD + 1:
+            logger.error("[EMA CROSS] Недостатньо свічок BTC")
+            return
+
+    except Exception as exc:
+        logger.exception("[EMA CROSS SCAN INIT ERROR]")
+        await notify_error(session, "Помилка запуску сканера перетину EMA", exc)
+        return
+
+    results = await asyncio.gather(
+        *(
+            analyze_ema_cross_symbol(
+                session,
+                symbol,
+                sym_map.get(symbol, symbol),
+                btc_candles,
+            )
+            for symbol in symbols
+        ),
+        return_exceptions=True,
+    )
+
+    sent = 0
+
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error("[EMA CROSS TASK ERROR] %s", result)
+        elif isinstance(result, dict) and "__error__" in result:
+            logger.error("[EMA CROSS SYMBOL ERROR] %s", result["__error__"])
+        elif result:
+            if await send_telegram(session, result):
+                sent += 1
+
+    logger.info(
+        "[EMA CROSS SCAN FINISH] Перевірено: %s | Повідомлень: %s",
+        len(symbols),
+        sent,
+    )
         
 async def scan_market(session, mode="spike"):
     logger.info("[SCAN START] mode=%s | %s", mode, datetime.now(KYIV_TZ).isoformat())
@@ -691,6 +787,7 @@ async def main():
 
                     if mode == "ema20":
                         await scan_ema50_breakouts(session)
+                        await scan_ema_cross(session)
 
                 except Exception as exc:
                     logger.exception("[SCAN FATAL ERROR]")
