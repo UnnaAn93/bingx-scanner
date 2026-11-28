@@ -497,9 +497,9 @@ async def analyze_ema50_symbol(session, symbol, disp_name, btc_candles):
         )
 
         if signal == "long":
-            direction = "🟢 ПРОБІЙ EMA50 ВГОРУ"
+            direction = "🔼 ПРОБІЙ EMA50 ВГОРУ"
         else:
-            direction = "🔴 ПРОБІЙ EMA50 ВНИЗ"
+            direction = "🔽 ПРОБІЙ EMA50 ВНИЗ"
 
         return (
             f"{direction} (1H)\n"
